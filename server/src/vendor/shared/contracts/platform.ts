@@ -168,11 +168,8 @@ export const PrMeta = z.object({
   status: PrStatus,
   opened_at: z.string().nullish(),
   updated_at: z.string().nullish(),
-  // Latest-review rollup (list endpoint only; null/absent until reviewed).
+  // Latest-review score (list endpoint only; null/absent until reviewed).
   score: z.number().int().nullish(),
-  findings_critical: z.number().int().nullish(),
-  findings_warning: z.number().int().nullish(),
-  findings_suggestion: z.number().int().nullish(),
 });
 export type PrMeta = z.infer<typeof PrMeta>;
 

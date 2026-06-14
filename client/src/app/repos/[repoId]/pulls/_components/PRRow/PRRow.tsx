@@ -4,9 +4,9 @@
 import React from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { Icon, Avatar, Badge, CircularScore, SEV } from "@devdigest/ui";
+import { Icon, Avatar, Badge, CircularScore } from "@devdigest/ui";
 import type { PrMeta } from "@/lib/types";
-import { FINDINGS_FIELDS, SIZE_COLOR, STATUS_META } from "../../constants";
+import { SIZE_COLOR, STATUS_META } from "../../constants";
 import { relativeTime, sizeOf } from "../../helpers";
 import { s } from "../../styles";
 
@@ -17,8 +17,6 @@ export function PRRow({ pr, repoId }: { pr: PrMeta; repoId: string }) {
   const st = STATUS_META[pr.status] ?? STATUS_META.needs_review!;
   const { size, lines } = sizeOf(pr);
   const reviewed = pr.score != null; // null score ⇒ PR has never been reviewed
-  const totalFindings =
-    (pr.findings_critical ?? 0) + (pr.findings_warning ?? 0) + (pr.findings_suggestion ?? 0);
   return (
     <div
       onMouseEnter={() => setH(true)}
@@ -53,24 +51,6 @@ export function PRRow({ pr, repoId }: { pr: PrMeta; repoId: string }) {
           <CircularScore score={pr.score!} size={34} stroke={3} />
         ) : (
           <span style={s.muted}>—</span>
-        )}
-      </div>
-      <div style={s.findingsCell}>
-        {!reviewed || totalFindings === 0 ? (
-          <span style={s.muted}>—</span>
-        ) : (
-          FINDINGS_FIELDS.map(({ sev, field }) => {
-            const n = pr[field] ?? 0;
-            if (!n) return null;
-            const meta = SEV[sev];
-            const SIcon = Icon[meta.icon];
-            return (
-              <span key={sev} className="tnum" style={s.findingChip(meta.c)}>
-                <SIcon size={13} />
-                {n}
-              </span>
-            );
-          })
         )}
       </div>
       <div>

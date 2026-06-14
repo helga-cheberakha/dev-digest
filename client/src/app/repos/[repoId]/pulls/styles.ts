@@ -40,19 +40,6 @@ export const s = {
   } satisfies CSSProperties,
   sizeBadgeBorder: (color: string): CSSProperties => ({ border: `1px solid ${color}` }),
   scoreCell: { display: "flex", alignItems: "center" } satisfies CSSProperties,
-  findingsCell: {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    fontSize: 12.5,
-    color: "var(--text-secondary)",
-  } satisfies CSSProperties,
-  findingChip: (color: string): CSSProperties => ({
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 3,
-    color,
-  }),
   updatedCell: {
     fontSize: 12,
     color: "var(--text-muted)",
