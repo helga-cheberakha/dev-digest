@@ -120,7 +120,7 @@ export function FindingsPopup({
       style={{
         position: "fixed",
         top: anchorRect.bottom + 6,
-        left: anchorRect.left,
+        left: Math.min(anchorRect.left, window.innerWidth - 428),
         zIndex: 1000,
         width: 420,
         maxHeight: 420,

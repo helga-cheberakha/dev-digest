@@ -19,8 +19,8 @@ function FindingsCell({ pr }: { pr: PrMeta }) {
   const [rect, setRect] = React.useState<DOMRect | null>(null);
   const ref = React.useRef<HTMLDivElement>(null);
 
-  // Fetch reviews when popup is opened (lazy)
-  const { data: reviews, isLoading } = usePrReviews(open ? pr.id : undefined);
+  // Fetch reviews when popup is opened (lazy); stable key so cache survives close/reopen
+  const { data: reviews, isLoading } = usePrReviews(pr.id, { enabled: open });
 
   const findings = React.useMemo(() => {
     if (!reviews) return undefined;
@@ -29,6 +29,8 @@ function FindingsCell({ pr }: { pr: PrMeta }) {
       return (rank[b.severity] ?? 0) - (rank[a.severity] ?? 0);
     });
   }, [reviews]);
+
+  const handleClose = React.useCallback(() => setOpen(false), []);
 
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -40,6 +42,7 @@ function FindingsCell({ pr }: { pr: PrMeta }) {
   return (
     <div ref={ref} style={{ display: "inline-flex", alignItems: "center" }}>
       <button
+        onMouseDown={(e) => e.stopPropagation()}
         onClick={handleClick}
         style={{
           background: "none",
@@ -57,7 +60,7 @@ function FindingsCell({ pr }: { pr: PrMeta }) {
           findings={findings}
           loading={isLoading && !findings}
           anchorRect={rect}
-          onClose={() => setOpen(false)}
+          onClose={handleClose}
         />
       )}
     </div>

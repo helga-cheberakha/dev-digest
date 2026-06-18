@@ -105,6 +105,8 @@ function RunFindingsBadge({ review }: { review: ReviewRecord | undefined }) {
   const counts = review ? rollupClient(review.findings) : null;
   const hasFindings = (review?.findings.length ?? 0) > 0;
 
+  const handleClose = React.useCallback(() => setOpen(false), []);
+
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!hasFindings) return;
@@ -115,6 +117,7 @@ function RunFindingsBadge({ review }: { review: ReviewRecord | undefined }) {
   return (
     <div ref={ref} style={{ display: "inline-flex", alignItems: "center" }}>
       <button
+        onMouseDown={(e) => e.stopPropagation()}
         onClick={handleClick}
         style={{
           background: "none",
@@ -131,7 +134,7 @@ function RunFindingsBadge({ review }: { review: ReviewRecord | undefined }) {
         <FindingsPopup
           findings={review.findings}
           anchorRect={rect}
-          onClose={() => setOpen(false)}
+          onClose={handleClose}
         />
       )}
     </div>
