@@ -103,7 +103,7 @@ function RunFindingsBadge({ review }: { review: ReviewRecord | undefined }) {
   const [rect, setRect] = React.useState<DOMRect | null>(null);
   const ref = React.useRef<HTMLDivElement>(null);
   const counts = review ? rollupClient(review.findings) : null;
-  const hasFindings = (review?.findings.length ?? 0) > 0;
+  const hasFindings = counts !== null && (counts.critical > 0 || counts.warning > 0 || counts.suggestion > 0);
 
   const handleClose = React.useCallback(() => setOpen(false), []);
 

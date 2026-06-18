@@ -19,6 +19,8 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 - **2026-06-18** — PR list cost uses a 120-second batch window (not `SUM`): rows ordered newest-first, first priced run anchors the window, subsequent runs within 2 min accumulate — this groups "run all agents" clicks into one cost figure per PR. Evidence: `server/src/modules/pulls/routes.ts`.
 
+- **2026-06-18** — `findings_counts` in `PrMeta` (PR list column) aggregates across ALL reviews of a PR (minus dismissed), while `score` reflects only the latest review. A multi-review PR can therefore show a severity badge count that doesn't match any single run's per-run badge. The per-run badge in `RunHistory` uses `reviews.find(rv => rv.run_id === r.run_id)` which matches nothing on seed data (seeded `run_id` is null). Evidence: `server/src/modules/pulls/routes.ts` aggregation block.
+
 ## Tool & Library Notes
 
 - **2026-06-18** — Drizzle ORM: use `isNull(column)` (imported from `drizzle-orm`) to filter for null column values in WHERE clauses. `eq(column, null)` does not work. Evidence: `server/src/modules/pulls/routes.ts` findings aggregation block.
