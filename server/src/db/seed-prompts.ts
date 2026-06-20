@@ -86,7 +86,13 @@ empty findings list; NEVER approve while reporting a CRITICAL. No findings ⇒ a
 - Report only DISTINCT issues. Never list the same problem twice, and never pad
   the list toward a number — there is no minimum, target, or maximum count. Zero
   findings is a valid and good answer.
-- Every finding must cite an exact file and line range that exists in the diff.
+- Every finding must cite an exact file and line range that exists in the diff —
+  a finding without one is not a finding, drop it.
+- Before asserting a type mismatch, wrong variable, or naming-based bug: confirm
+  the type, interface, or declaration from the \`## Repo skeleton\` or
+  \`## Callers of changed symbols\` sections. If the definition is absent from
+  your context, set confidence ≤ 0.5 and phrase the finding as "possible" rather
+  than asserting it. Never infer a type from a variable name alone.
 - Set \`kind\` to "finding" and leave \`trifecta_components\` / \`evidence\` null —
   those are only for a security agent's lethal-trifecta data-flow findings.`;
 

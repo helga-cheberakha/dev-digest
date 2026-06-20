@@ -3,8 +3,10 @@
 import React from "react";
 import { useTranslations } from "next-intl";
 import { Badge, Icon, CircularScore, type IconName } from "@devdigest/ui";
-import type { RunSummary, PrCommit } from "@devdigest/shared";
+import type { RunSummary, PrCommit, ReviewRecord, FindingRecord } from "@devdigest/shared";
 import { RunCostBadge } from "@/components/RunCostBadge";
+import { FindingsBadge } from "@/components/FindingsBadge/FindingsBadge";
+import { FindingsPopup } from "@/components/FindingsPopup/FindingsPopup";
 
 /**
  * PR timeline — every agent run interleaved with the PR's commits, newest-first
@@ -34,6 +36,17 @@ function outcomeOf(run: RunSummary): Outcome {
   if ((run.findings_count ?? 0) > 0)
     return { key: "reviewed", color: "var(--warn)", bg: "var(--warn-bg)", icon: "MessageSquare" };
   return { key: "approved", color: "var(--ok)", bg: "var(--ok-bg)", icon: "CheckCircle" };
+}
+
+function rollupClient(findings: FindingRecord[]) {
+  const c = { critical: 0, warning: 0, suggestion: 0 };
+  for (const f of findings) {
+    if (f.dismissed_at) continue;
+    if (f.severity === "CRITICAL") c.critical++;
+    else if (f.severity === "WARNING") c.warning++;
+    else if (f.severity === "SUGGESTION") c.suggestion++;
+  }
+  return c;
 }
 
 const rowStyle: React.CSSProperties = {
@@ -85,15 +98,60 @@ function tsOf(s: string | null | undefined): number {
   return Number.isNaN(n) ? 0 : n;
 }
 
+function RunFindingsBadge({ review }: { review: ReviewRecord | undefined }) {
+  const [open, setOpen] = React.useState(false);
+  const [rect, setRect] = React.useState<DOMRect | null>(null);
+  const ref = React.useRef<HTMLDivElement>(null);
+  const counts = review ? rollupClient(review.findings) : null;
+  const hasFindings = counts !== null && (counts.critical > 0 || counts.warning > 0 || counts.suggestion > 0);
+
+  const handleClose = React.useCallback(() => setOpen(false), []);
+
+  const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!hasFindings) return;
+    setRect(ref.current?.getBoundingClientRect() ?? null);
+    setOpen((o) => !o);
+  };
+
+  return (
+    <div ref={ref} style={{ display: "inline-flex", alignItems: "center" }}>
+      <button
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={handleClick}
+        style={{
+          background: "none",
+          border: "none",
+          padding: 0,
+          cursor: hasFindings ? "pointer" : "default",
+          display: "inline-flex",
+          alignItems: "center",
+        }}
+      >
+        <FindingsBadge counts={counts} />
+      </button>
+      {open && rect && review && (
+        <FindingsPopup
+          findings={review.findings}
+          anchorRect={rect}
+          onClose={handleClose}
+        />
+      )}
+    </div>
+  );
+}
+
 export function RunHistory({
   runs,
   commits = [],
+  reviews = [],
   onOpenTrace,
   onGoToReview,
   onDelete,
 }: {
   runs: RunSummary[];
   commits?: PrCommit[];
+  reviews?: ReviewRecord[];
   /** Open the trace + log drawer for a run (the logs icon). */
   onOpenTrace: (runId: string) => void;
   /** Jump to this run's inline review accordion below (clicking the agent name). */
@@ -150,6 +208,7 @@ export function RunHistory({
         const r = item.run;
         const o = outcomeOf(r);
         const settled = r.status === "done";
+        const review = reviews.find((rv) => rv.run_id === r.run_id);
         return (
           <div key={`run:${r.run_id}`} style={rowStyle}>
             <Badge color={o.color} bg={o.bg} icon={o.icon}>
@@ -190,10 +249,7 @@ export function RunHistory({
                 </div>
               )}
               {settled && (
-                <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                  {t("runStatus.findings", { count: r.findings_count ?? 0 })}
-                  {(r.blockers ?? 0) > 0 ? t("runStatus.blockers", { count: r.blockers ?? 0 }) : ""}
-                </div>
+                <RunFindingsBadge review={review} />
               )}
             </div>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, fontSize: 11, color: "var(--text-muted)", flexShrink: 0 }}>
