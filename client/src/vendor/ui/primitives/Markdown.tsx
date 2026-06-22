@@ -14,20 +14,42 @@ export function Markdown({ children }: { children?: string | null }) {
           strong: ({ children }) => (
             <strong style={{ fontWeight: 650, color: "var(--text-primary)" }}>{children}</strong>
           ),
-          code: ({ children }) => (
-            <code
+          pre: ({ children }) => (
+            <pre
               className="mono"
               style={{
                 fontSize: "0.92em",
-                padding: "1px 6px",
+                padding: "8px 12px",
                 borderRadius: 4,
                 background: "var(--bg-hover)",
-                color: "var(--accent-text)",
+                overflowX: "auto",
+                whiteSpace: "pre",
+                margin: "0 0 10px",
               }}
             >
               {children}
-            </code>
+            </pre>
           ),
+          code: ({ children, className }) => {
+            // Block code (inside pre) has a language className or trailing newline
+            const isBlock =
+              !!className || (typeof children === "string" && children.endsWith("\n"));
+            if (isBlock) return <code className={`mono ${className ?? ""}`}>{children}</code>;
+            return (
+              <code
+                className="mono"
+                style={{
+                  fontSize: "0.92em",
+                  padding: "1px 6px",
+                  borderRadius: 4,
+                  background: "var(--bg-hover)",
+                  color: "var(--accent-text)",
+                }}
+              >
+                {children}
+              </code>
+            );
+          },
           a: ({ children, href }) => (
             <a href={href} style={{ color: "var(--accent-text)", textDecoration: "underline" }}>
               {children}
