@@ -15,6 +15,7 @@ export const skills = pgTable('skills', {
   }).notNull(),
   body: text('body').notNull(),
   enabled: boolean('enabled').notNull().default(true),
+  injectionDetected: boolean('injection_detected').notNull().default(false),
   version: integer('version').notNull().default(1),
   evidenceFiles: jsonb('evidence_files').$type<string[]>(),
   createdAt: now(),

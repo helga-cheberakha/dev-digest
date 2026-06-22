@@ -126,6 +126,7 @@ export const Skill = z.object({
   source: SkillSource,
   body: z.string(),
   enabled: z.boolean(),
+  injection_detected: z.boolean().default(false),
   version: z.number().int(),
   evidence_files: z.array(z.string()).nullish(),
 });
@@ -165,6 +166,7 @@ export const SkillImportPreview = z.object({
   source: SkillSource,
   body: z.string(),
   ignored_files: z.array(z.string()),
+  injection_detected: z.boolean(),
 });
 export type SkillImportPreview = z.infer<typeof SkillImportPreview>;
 

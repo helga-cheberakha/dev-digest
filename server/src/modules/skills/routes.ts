@@ -36,6 +36,10 @@ const ImportBody = z.object({
   content_base64: z.string().min(1),
 });
 
+const ImportUrlBody = z.object({
+  url: z.string().url(),
+});
+
 /**
  * A1 — skills module (owner A1).
  *   GET    /skills                  → list (workspace-scoped)
@@ -57,11 +61,16 @@ export default async function skillsRoutes(appBase: FastifyInstance) {
     return service.list(workspaceId);
   });
 
-  // POST /skills/import must be registered BEFORE /skills/:id to avoid
-  // "import" being treated as a uuid param.
+  // POST /skills/import* must be registered BEFORE /skills/:id to avoid
+  // literal segments being treated as uuid params.
   app.post('/skills/import', { schema: { body: ImportBody } }, async (req) => {
     await getContext(app.container, req);
     return service.importPreview(req.body.filename, req.body.content_base64);
+  });
+
+  app.post('/skills/import-url', { schema: { body: ImportUrlBody } }, async (req) => {
+    await getContext(app.container, req);
+    return service.importPreviewUrl(req.body.url);
   });
 
   app.get('/skills/:id', { schema: { params: IdParams } }, async (req) => {

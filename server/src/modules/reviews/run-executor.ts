@@ -187,7 +187,9 @@ export class ReviewRunExecutor {
       // Fetch enabled skills linked to this agent (in order). Their bodies are
       // injected into the prompt as "## Skills / rules" by assemblePrompt.
       const linked = await this.container.agentsRepo.linkedSkills(agent.id);
-      const skillBodies = linked.filter((l) => l.skill.enabled).map((l) => l.skill.body);
+      const skillBodies = linked
+        .filter((l) => l.skill.enabled && !l.skill.injectionDetected)
+        .map((l) => l.skill.body);
       if (skillBodies.length) runLog.info(`Skills: ${skillBodies.length} skill(s) attached to prompt`);
 
       // ---- Engine: assemble → single-pass → grounding -----------------------

@@ -9,12 +9,14 @@ import { AppShell } from "../../../../components/app-shell";
 import { useSkills, useUpdateSkill } from "../../../../lib/hooks/skills";
 import { SkillCard } from "../SkillCard";
 import { ImportDrawer } from "../ImportDrawer";
+import { ImportUrlDrawer } from "../ImportUrlDrawer";
 
 export function SkillsListView() {
   const router = useRouter();
   const { data: skills, isLoading, isError, refetch } = useSkills();
   const update = useUpdateSkill();
   const [importOpen, setImportOpen] = React.useState(false);
+  const [importUrlOpen, setImportUrlOpen] = React.useState(false);
   const [search, setSearch] = React.useState("");
 
   const list = (skills ?? []).filter(
@@ -27,6 +29,7 @@ export function SkillsListView() {
   return (
     <AppShell crumb={[{ label: "Skills Lab" }, { label: "Skills" }]}>
       {importOpen && <ImportDrawer onClose={() => setImportOpen(false)} />}
+      {importUrlOpen && <ImportUrlDrawer onClose={() => setImportUrlOpen(false)} />}
       <div style={{ padding: "24px 32px", maxWidth: 960, margin: "0 auto" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
           <h1 style={{ fontSize: 22, fontWeight: 700, flex: 1 }}>Skills</h1>
@@ -67,6 +70,7 @@ export function SkillsListView() {
             }
             items={[
               { label: "Import from file", icon: "Upload", onClick: () => setImportOpen(true) },
+              { label: "Import from URL",  icon: "Link",   onClick: () => setImportUrlOpen(true) },
             ]}
           />
         </div>

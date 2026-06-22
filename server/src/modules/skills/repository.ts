@@ -18,6 +18,7 @@ export interface InsertSkill {
   source: 'manual' | 'imported_url' | 'extracted' | 'community';
   body: string;
   enabled?: boolean;
+  injectionDetected?: boolean;
   evidenceFiles?: string[];
 }
 
@@ -28,6 +29,7 @@ export interface UpdateSkill {
   source?: 'manual' | 'imported_url' | 'extracted' | 'community';
   body?: string;
   enabled?: boolean;
+  injectionDetected?: boolean;
   evidenceFiles?: string[];
   /** Optional version message stored in skill_versions when body changes. */
   message?: string | null;
@@ -76,6 +78,7 @@ export class SkillsRepository {
         source: values.source,
         body: values.body,
         enabled: values.enabled ?? true,
+        injectionDetected: values.injectionDetected ?? false,
         version: 1,
         evidenceFiles: values.evidenceFiles ?? null,
       })
@@ -112,6 +115,7 @@ export class SkillsRepository {
         ...(patch.source !== undefined ? { source: patch.source } : {}),
         ...(patch.body !== undefined ? { body: patch.body } : {}),
         ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+        ...(patch.injectionDetected !== undefined ? { injectionDetected: patch.injectionDetected } : {}),
         ...(patch.evidenceFiles !== undefined ? { evidenceFiles: patch.evidenceFiles } : {}),
         ...(bodyChanged ? { version: nextVersion } : {}),
       })

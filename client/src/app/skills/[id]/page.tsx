@@ -9,6 +9,7 @@ import { AppShell } from "../../../components/app-shell";
 import { SkillCard } from "../_components/SkillCard";
 import { SkillEditor } from "./_components/SkillEditor";
 import { ImportDrawer } from "../_components/ImportDrawer";
+import { ImportUrlDrawer } from "../_components/ImportUrlDrawer";
 import { useSkills, useSkill, useUpdateSkill } from "../../../lib/hooks/skills";
 import { ApiError } from "../../../lib/api";
 
@@ -24,6 +25,7 @@ export default function SkillEditorPage() {
   const { data: skill, isLoading, isError, error, refetch } = useSkill(id);
   const update = useUpdateSkill();
   const [importOpen, setImportOpen] = React.useState(false);
+  const [importUrlOpen, setImportUrlOpen] = React.useState(false);
 
   const tab = VALID_TABS.includes(search.get("tab") ?? "") ? search.get("tab")! : "config";
   const setTab = (t: string) => {
@@ -54,6 +56,7 @@ export default function SkillEditorPage() {
   return (
     <AppShell crumb={crumb}>
       {importOpen && <ImportDrawer onClose={() => setImportOpen(false)} />}
+      {importUrlOpen && <ImportUrlDrawer onClose={() => setImportUrlOpen(false)} />}
       <div style={{ display: "flex", height: "calc(100vh - 52px)" }}>
         {/* left: skill list */}
         <div
@@ -79,6 +82,7 @@ export default function SkillEditorPage() {
                 }
                 items={[
                   { label: "Import from file", icon: "Upload", onClick: () => setImportOpen(true) },
+                  { label: "Import from URL",  icon: "Link",   onClick: () => setImportUrlOpen(true) },
                 ]}
               />
             </div>
@@ -132,6 +136,9 @@ export default function SkillEditorPage() {
                 v{skill.version}
               </Badge>
               {!skill.enabled && <Badge color="var(--text-muted)">disabled</Badge>}
+              {skill.injection_detected && (
+                <Badge color="var(--error-text)">injection detected</Badge>
+              )}
             </div>
             <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
               <SkillEditor skill={skill} tab={tab} onTab={setTab} />

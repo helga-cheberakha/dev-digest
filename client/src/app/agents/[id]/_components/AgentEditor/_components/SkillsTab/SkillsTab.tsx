@@ -109,10 +109,15 @@ export function SkillsTab({ agentId }: { agentId: string }) {
                 <input
                   type="checkbox"
                   checked={true}
-                  onChange={() => toggleLink(skillId)}
-                  style={{ cursor: "pointer", flexShrink: 0 }}
+                  disabled={sk.injection_detected}
+                  onChange={() => !sk.injection_detected && toggleLink(skillId)}
+                  title={sk.injection_detected ? "Injection detected — cannot be enabled" : undefined}
+                  style={{ cursor: sk.injection_detected ? "not-allowed" : "pointer", flexShrink: 0 }}
                 />
                 <span style={{ flex: 1, fontSize: 13, fontWeight: 500 }}>{sk.name}</span>
+                {sk.injection_detected && (
+                  <span style={{ fontSize: 10, color: "var(--error-text)" }}>injection detected</span>
+                )}
                 <Badge color="var(--text-secondary)" mono>{sk.type}</Badge>
               </div>
             );
@@ -136,10 +141,15 @@ export function SkillsTab({ agentId }: { agentId: string }) {
             <input
               type="checkbox"
               checked={false}
-              onChange={() => toggleLink(sk.id)}
-              style={{ cursor: "pointer", flexShrink: 0 }}
+              disabled={sk.injection_detected}
+              onChange={() => !sk.injection_detected && toggleLink(sk.id)}
+              title={sk.injection_detected ? "Injection detected — cannot be linked" : undefined}
+              style={{ cursor: sk.injection_detected ? "not-allowed" : "pointer", flexShrink: 0 }}
             />
             <span style={{ flex: 1, fontSize: 13 }}>{sk.name}</span>
+            {sk.injection_detected && (
+              <span style={{ fontSize: 10, color: "var(--error-text)" }}>injection detected</span>
+            )}
             <Badge color="var(--text-secondary)" mono>{sk.type}</Badge>
           </div>
         ))}

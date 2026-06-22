@@ -92,6 +92,13 @@
       "when": 1782000000000,
       "tag": "0012_conventions",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1782100000000,
+      "tag": "0013_skills_injection_detected",
+      "breakpoints": true
     }
   ]
 }
