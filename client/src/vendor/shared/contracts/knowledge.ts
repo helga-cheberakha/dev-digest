@@ -179,6 +179,33 @@ export const ConventionCandidate = z.object({
 });
 export type ConventionCandidate = z.infer<typeof ConventionCandidate>;
 
+export const ConventionStatus = z.enum(['pending', 'accepted', 'rejected']);
+export type ConventionStatus = z.infer<typeof ConventionStatus>;
+
+export const Convention = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  repo_id: z.string(),
+  category: z.string(),
+  rule: z.string(),
+  file_path: z.string(),
+  line_start: z.number().int(),
+  line_end: z.number().int(),
+  snippet: z.string(),
+  confidence: z.number().min(0).max(1),
+  status: ConventionStatus,
+  created_at: z.string(),
+});
+export type Convention = z.infer<typeof Convention>;
+
+export const ExtractConventionsResult = z.object({
+  conventions: z.array(Convention),
+  sample_count: z.number().int(),
+  scanned_at: z.string(),
+  error: z.string().optional(),
+});
+export type ExtractConventionsResult = z.infer<typeof ExtractConventionsResult>;
+
 // ---- Agents ----
 export const Provider = z.enum(['openai', 'anthropic', 'openrouter']);
 export type Provider = z.infer<typeof Provider>;

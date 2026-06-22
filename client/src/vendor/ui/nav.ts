@@ -30,6 +30,7 @@ export const NAV: NavGroup[] = [
     section: "SKILLS LAB",
     items: [
       { key: "skills", label: "Skills", icon: "Sparkles", href: "/skills", gKey: "s" },
+      { key: "conventions", label: "Conventions", icon: "ListChecks", href: "/repos/:repoId/conventions", gKey: "c" },
     ],
   },
 ];

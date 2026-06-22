@@ -188,7 +188,7 @@ export class ReviewRunExecutor {
       // injected into the prompt as "## Skills / rules" by assemblePrompt.
       const linked = await this.container.agentsRepo.linkedSkills(agent.id);
       const skillBodies = linked.filter((l) => l.skill.enabled).map((l) => l.skill.body);
-      if (skillBodies.length) runLog.info(`skills: ${skillBodies.length} enabled skill(s) attached`);
+      if (skillBodies.length) runLog.info(`Skills: ${skillBodies.length} skill(s) attached to prompt`);
 
       // ---- Engine: assemble → single-pass → grounding -----------------------
       // The pure review pipeline lives in @devdigest/reviewer-core (shared with
