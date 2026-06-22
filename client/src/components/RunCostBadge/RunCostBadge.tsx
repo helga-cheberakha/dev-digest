@@ -1,14 +1,14 @@
+import React from "react";
+import { formatCost } from "@/lib/cost";
+
 /**
  * Per-run generation cost, shown on the PR list (compact) and the Agent-runs
  * timeline (with token totals). Missing cost renders "—" (never "$0.00") so an
  * un-priced / failed / pre-tracking run reads differently from a genuine $0.
  *
- * - `compact`    → "$0.014"              (PR list COST column)
+ * - `compact`    → "$0.014"            (PR list COST column)
  * - `withTokens` → "9,119 tok · $0.0013" (timeline row, next to the timestamp)
  */
-import React from "react";
-import { formatCost } from "@/lib/cost";
-
 type Props =
   | { variant: "compact"; cost: number | null | undefined }
   | {

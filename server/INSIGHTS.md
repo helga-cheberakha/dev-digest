@@ -10,31 +10,32 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 ## Codebase Patterns
 
-- **2026-06-18** — `repository.ts` in `server/src/modules/reviews/` is a class wrapper around `run.repo.ts` functions and has its own mirrored method signatures — when changing a function's parameter shape in `run.repo.ts`, update the wrapper in `repository.ts` too or the server build breaks. Evidence: `server/src/modules/reviews/repository.ts:151`.
-- **2026-06-18** — PR list aggregation pattern is IN-query + JS-grouping, not SQL GROUP BY — query the child table with `inArray(parentId, prIds)`, collect rows, group in memory. Score, cost, and findings all follow this same pattern in `server/src/modules/pulls/routes.ts`. Consistent; avoids complex SQL.
+- **2026-06-18** — `POST /skills/import` must be registered BEFORE `GET /skills/:id` in Fastify routes, otherwise Fastify matches the literal segment `import` as a UUID param and returns 422. Fixed by registering the static path first. Evidence: `server/src/modules/skills/routes.ts:60`.
+- **2026-06-18** — Skills wiring in reviews: `run-executor.ts` fetches `agentsRepo.linkedSkills(agent.id)`, filters to `.skill.enabled`, and passes the bodies as `{ skills: skillBodies }` to `reviewPullRequest()`. `assemblePrompt` in reviewer-core renders `## Skills / rules` automatically when the array is non-empty — no reviewer-core changes needed. Evidence: `server/src/modules/reviews/run-executor.ts`.
 
-- **2026-06-18** — `rollupSeverities()` at `server/src/modules/pulls/status.ts:23` is a reusable helper that takes `{ severity: string }[]` and returns `{ critical, warning, suggestion }` counts. Use it for any new per-severity breakdown rather than writing inline tallying. Also exports the `SeverityCounts` interface.
-
-- **2026-06-18** — Seed `ReviewRecord.run_id` is `null` — seeded reviews have no `run_id`, so any run→review match via `reviews.find(rv => rv.run_id === r.run_id)` always misses on seed data. Real reviews created through the app set `run_id` at completion in `run-executor.ts`. Expected, not a bug.
-
-- **2026-06-18** — PR list cost uses a 120-second batch window (not `SUM`): rows ordered newest-first, first priced run anchors the window, subsequent runs within 2 min accumulate — this groups "run all agents" clicks into one cost figure per PR. Evidence: `server/src/modules/pulls/routes.ts`.
-
-- **2026-06-18** — `findings_counts` in `PrMeta` (PR list column) aggregates across ALL reviews of a PR (minus dismissed), while `score` reflects only the latest review. A multi-review PR can therefore show a severity badge count that doesn't match any single run's per-run badge. The per-run badge in `RunHistory` uses `reviews.find(rv => rv.run_id === r.run_id)` which matches nothing on seed data (seeded `run_id` is null). Evidence: `server/src/modules/pulls/routes.ts` aggregation block.
+- **2026-06-14** — Shared contracts (`@devdigest/shared`) are vendored as TWO hand-maintained copies — `server/src/vendor/shared/` and `client/src/vendor/shared/` — resolved by tsconfig path alias, NOT auto-synced. Adding a field means editing both in lock-step; the only diffs between copies are comments. Evidence: `server/src/vendor/shared/contracts/trace.ts`, `platform.ts`.
+- **2026-06-14** — PR-list per-PR aggregates (score, cost) are computed ON READ in `GET /repos/:id/pulls` via one `inArray` query + JS grouping, never denormalized onto `pull_requests`. "Latest review batch" cost has no batch id in the schema — approximated by summing `agent_runs.cost_usd` within a 120s window of the PR's newest priced run. Evidence: `server/src/modules/pulls/routes.ts`.
+- **2026-06-14** — `completeAgentRun`'s `values` shape is declared in TWO places that must match: the repo fn (`repository/run.repo.ts`) AND the interface wrapper (`repository.ts:151`). Adding a field (e.g. `costUsd`) needs both or typecheck fails.
+- **2026-06-17** — PR-list `GET /repos/:id/pulls` returns the latest batch's FINDINGS as full `Finding[]` records (not counts) under `PrMeta.findings`, mapped via `reviews/helpers.ts#findingRowToDto`; the client derives severity chips AND renders a hover popover from that one array (no second fetch, perfect chip↔popover consistency). The "latest review batch" here is a SEPARATE window from the cost block: cost windows over `agent_runs.ranAt`, findings windows over `reviews.createdAt` (both 120s). A pre-existing `rollupSeverities` helper in `modules/pulls/status.ts` (lowercase keys) was built for a counts-only variant — currently unused by the route. Evidence: `server/src/modules/pulls/routes.ts`.
 
 ## Tool & Library Notes
 
-- **2026-06-18** — Drizzle ORM: use `isNull(column)` (imported from `drizzle-orm`) to filter for null column values in WHERE clauses. `eq(column, null)` does not work. Evidence: `server/src/modules/pulls/routes.ts` findings aggregation block.
+- **2026-06-14** — New DB columns: edit `db/schema/*.ts`, then `npm run db:generate` (drizzle-kit) auto-generates `00NN_*.sql` (e.g. `0010_solid_baron_zemo.sql` = `ALTER TABLE … ADD COLUMN`). Never hand-write migration SQL; apply with `npm run db:migrate`.
 
 ## Recurring Errors & Fixes
+
+- **2026-06-14** — Adding a required field to a Zod contract (`RunStats.cost_usd`) breaks the inline fixture in `server/test/contracts.test.ts` (RunTrace parse). Update the `stats: {…}` fixture in the same change. Evidence: `server/test/contracts.test.ts:160`.
 
 ## Session Notes
 
 ### 2026-06-18
+- Built Skills feature (L02) end-to-end: server module (`modules/skills/` — routes/service/repository/helpers), schema migration 0011 (`message` column on `skill_versions`), `SkillVersion`/`SkillStats`/`SkillImportPreview` contracts (lock-step in both vendor copies), `fflate` for ZIP preview, skills wiring in `run-executor.ts`, seed catalog (8 skills + Test Quality Reviewer agent).
+- Decision: `POST /skills/import` registered before `/:id` route to prevent Fastify matching "import" as a UUID param.
 
-Lab 01 cost column: added `cost_usd double precision` back to `agent_runs` (dropped in migration 0009 as a course exercise). Wired `outcome.costUsd` through `run-executor.ts → completeAgentRun → listRunsForPull` and into `RunTrace.stats`. Added batch-window aggregation to the PR list query. Client: new `RunCostBadge` component (2 variants) and `formatCost` utility.
-
-### 2026-06-18
-
-Findings column feature: added `findings_counts: { critical, warning, suggestion }` to `PrMeta` (both vendor copies). Server: new findings aggregation block in `GET /repos/:id/pulls` using `inArray` + JS-grouping + `rollupSeverities()`, filtering out dismissed findings via `isNull(t.findings.dismissedAt)`.
+### 2026-06-14
+- Re-introduced per-run cost (USD) end-to-end (lesson reversing the earlier removal in `d45ab0d`/`58c6ac7`): `cost_usd` column on `agent_runs` (migration 0010), captured in `run-executor` (was discarding `outcome.costUsd`), surfaced in `RunSummary`/`RunStats`/`PrMeta`.
+- Decision: PR-list COST = sum of the latest review batch via a 120s window heuristic (no batch id in schema). Cost persisted (accurate `outcome.costUsd`), not recomputed; historical runs → null → "—".
 
 ## Open Questions
+
+- **2026-06-14** — PR-list "latest review batch" uses a 120s `ranAt` window as a proxy for a review session. If a real review-session / batch id is ever added to the schema, swap the window for exact grouping in `pulls/routes.ts`.

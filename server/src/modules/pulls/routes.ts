@@ -1,13 +1,14 @@
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { PrMeta, PrDetail, GitHubClient, PrReviewComment } from '@devdigest/shared';
 import { PrCommentInput } from '@devdigest/shared';
 import * as t from '../../db/schema.js';
 import { getContext } from '../_shared/context.js';
 import { IdParams } from '../_shared/schemas.js';
 import { AppError, NotFoundError } from '../../platform/errors.js';
-import { deriveReviewStatus, rollupSeverities, type SeverityCounts } from './status.js';
+import { deriveReviewStatus } from './status.js';
+import { findingRowToDto } from '../reviews/helpers.js';
 
 /**
  * F1 — pulls module. PR import via Octokit (list + per-PR detail).
@@ -111,25 +112,76 @@ export default async function pullsRoutes(appBase: FastifyInstance) {
       }
     }
 
-    // Latest-review SCORE per PR for the list's score ring. Computed on read
-    // from reviews (no FK denorm); the list is small, so one IN-query + JS
-    // grouping is cheap. (The per-severity FINDINGS breakdown is intentionally
-    // not surfaced on the list — findings live on the PR detail page.)
+    // A "Review all" fans out N agents within seconds; the score ring, the COST
+    // column, and the FINDINGS column all describe that latest batch. There's no
+    // batch id in the schema yet, so we approximate one with a time window around
+    // each PR's most recent run/review (swap for exact grouping if a review-
+    // session id is ever added). Used by both the findings block here and the
+    // cost block below.
+    const BATCH_WINDOW_MS = 120_000;
+
+    // Latest-review SCORE + per-severity FINDINGS per PR. Computed on read from
+    // reviews/findings (no FK denorm); the list is small, so a few IN-queries +
+    // JS grouping is cheap. Findings are scoped to the latest review batch so the
+    // chips stay consistent with the score ring and cost.
     const prIds = rows.map((r) => r.id);
     const latestReviewByPr = new Map<string, { score: number | null }>();
+    const findingsByPr = new Map<string, ReturnType<typeof findingRowToDto>[]>();
     if (prIds.length > 0) {
       const reviewRows = await container.db
-        .select({ prId: t.reviews.prId, score: t.reviews.score })
+        .select({
+          id: t.reviews.id,
+          prId: t.reviews.prId,
+          score: t.reviews.score,
+          createdAt: t.reviews.createdAt,
+        })
         .from(t.reviews)
         .where(and(inArray(t.reviews.prId, prIds), eq(t.reviews.kind, 'review')))
         .orderBy(desc(t.reviews.createdAt));
-      // Rows are newest-first → first seen per PR is the latest review.
+      // Rows newest-first → first seen per PR is the latest review (anchors the
+      // batch window's upper bound); later reviews within the window join it.
+      const batchEndByPr = new Map<string, number>();
+      const reviewIdToPr = new Map<string, string>();
+      const batchReviewIds: string[] = [];
       for (const rv of reviewRows) {
         if (!latestReviewByPr.has(rv.prId)) latestReviewByPr.set(rv.prId, { score: rv.score });
+        const ts = rv.createdAt ? rv.createdAt.getTime() : 0;
+        const end = batchEndByPr.get(rv.prId);
+        if (end === undefined) {
+          batchEndByPr.set(rv.prId, ts);
+          reviewIdToPr.set(rv.id, rv.prId);
+          batchReviewIds.push(rv.id);
+        } else if (ts >= end - BATCH_WINDOW_MS) {
+          reviewIdToPr.set(rv.id, rv.prId);
+          batchReviewIds.push(rv.id);
+        }
+      }
+
+      // One IN-query over the batch's findings, mapped to the wire DTO and
+      // grouped per PR. The list surfaces these directly: per-severity chips
+      // (counts derived client-side) + a hover popover of the findings.
+      if (batchReviewIds.length > 0) {
+        const findingRows = await container.db
+          .select()
+          .from(t.findings)
+          .where(inArray(t.findings.reviewId, batchReviewIds));
+        for (const row of findingRows) {
+          const prId = reviewIdToPr.get(row.reviewId);
+          if (!prId) continue;
+          let arr = findingsByPr.get(prId);
+          if (!arr) {
+            arr = [];
+            findingsByPr.set(prId, arr);
+          }
+          arr.push(findingRowToDto(row));
+        }
       }
     }
 
-    const BATCH_WINDOW_MS = 120_000;
+    // Latest-review-batch COST per PR for the list's COST column. We sum the cost
+    // of every completed, priced run that ran within BATCH_WINDOW_MS (defined
+    // above) of the PR's most recent priced run. Same on-read IN-query + JS
+    // grouping as the score/findings block above.
     const costByPr = new Map<string, number>();
     if (prIds.length > 0) {
       const runRows = await container.db
@@ -147,8 +199,8 @@ export default async function pullsRoutes(appBase: FastifyInstance) {
           ),
         )
         .orderBy(desc(t.agentRuns.ranAt));
-      // Rows newest-first. First priced run anchors the batch window; later
-      // runs within 2 min are grouped into the same batch (one "run all" click).
+      // Rows newest-first. The first priced run seen per PR anchors the batch
+      // window's upper bound; later runs add in while within the window of it.
       const batchEndByPr = new Map<string, number>();
       for (const r of runRows) {
         if (!r.prId || r.costUsd == null) continue;
@@ -160,31 +212,6 @@ export default async function pullsRoutes(appBase: FastifyInstance) {
         } else if (ts >= end - BATCH_WINDOW_MS) {
           costByPr.set(r.prId, (costByPr.get(r.prId) ?? 0) + r.costUsd);
         }
-      }
-    }
-
-    // Per-severity finding counts per PR across all reviews (excluding dismissed).
-    const findingsByPr = new Map<string, SeverityCounts>();
-    if (prIds.length > 0) {
-      const findingRows = await container.db
-        .select({ prId: t.reviews.prId, severity: t.findings.severity })
-        .from(t.findings)
-        .innerJoin(t.reviews, eq(t.findings.reviewId, t.reviews.id))
-        .where(
-          and(
-            inArray(t.reviews.prId, prIds),
-            eq(t.reviews.kind, 'review'),
-            isNull(t.findings.dismissedAt),
-          ),
-        );
-      const rowsByPr = new Map<string, { severity: string }[]>();
-      for (const row of findingRows) {
-        const arr = rowsByPr.get(row.prId) ?? [];
-        arr.push({ severity: row.severity });
-        rowsByPr.set(row.prId, arr);
-      }
-      for (const [prId, arr] of rowsByPr) {
-        findingsByPr.set(prId, rollupSeverities(arr));
       }
     }
 
@@ -213,7 +240,7 @@ export default async function pullsRoutes(appBase: FastifyInstance) {
         updated_at: r.updatedAt?.toISOString() ?? null,
         score: review ? review.score : null,
         cost_usd: costByPr.has(r.id) ? costByPr.get(r.id)! : null,
-        findings_counts: findingsByPr.get(r.id) ?? null,
+        findings: findingsByPr.get(r.id) ?? null,
       };
     });
   });

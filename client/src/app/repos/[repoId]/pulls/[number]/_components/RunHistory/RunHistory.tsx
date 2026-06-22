@@ -3,10 +3,11 @@
 import React from "react";
 import { useTranslations } from "next-intl";
 import { Badge, Icon, CircularScore, type IconName } from "@devdigest/ui";
-import type { RunSummary, PrCommit, ReviewRecord, FindingRecord } from "@devdigest/shared";
+import type { RunSummary, PrCommit, FindingRecord } from "@devdigest/shared";
 import { RunCostBadge } from "@/components/RunCostBadge";
-import { FindingsBadge } from "@/components/FindingsBadge/FindingsBadge";
-import { FindingsPopup } from "@/components/FindingsPopup/FindingsPopup";
+import { FindingsCountChips, countBySeverity, totalCount } from "@/components/FindingsCountChips";
+import { FindingsHoverCard } from "@/components/FindingsHoverCard";
+import { FindingPreview } from "@/components/FindingPreview";
 
 /**
  * PR timeline — every agent run interleaved with the PR's commits, newest-first
@@ -36,17 +37,6 @@ function outcomeOf(run: RunSummary): Outcome {
   if ((run.findings_count ?? 0) > 0)
     return { key: "reviewed", color: "var(--warn)", bg: "var(--warn-bg)", icon: "MessageSquare" };
   return { key: "approved", color: "var(--ok)", bg: "var(--ok-bg)", icon: "CheckCircle" };
-}
-
-function rollupClient(findings: FindingRecord[]) {
-  const c = { critical: 0, warning: 0, suggestion: 0 };
-  for (const f of findings) {
-    if (f.dismissed_at) continue;
-    if (f.severity === "CRITICAL") c.critical++;
-    else if (f.severity === "WARNING") c.warning++;
-    else if (f.severity === "SUGGESTION") c.suggestion++;
-  }
-  return c;
 }
 
 const rowStyle: React.CSSProperties = {
@@ -98,60 +88,29 @@ function tsOf(s: string | null | undefined): number {
   return Number.isNaN(n) ? 0 : n;
 }
 
-function RunFindingsBadge({ review }: { review: ReviewRecord | undefined }) {
-  const [open, setOpen] = React.useState(false);
-  const [rect, setRect] = React.useState<DOMRect | null>(null);
-  const ref = React.useRef<HTMLDivElement>(null);
-  const counts = review ? rollupClient(review.findings) : null;
-  const hasFindings = counts !== null && (counts.critical > 0 || counts.warning > 0 || counts.suggestion > 0);
-
-  const handleClose = React.useCallback(() => setOpen(false), []);
-
-  const handleClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!hasFindings) return;
-    setRect(ref.current?.getBoundingClientRect() ?? null);
-    setOpen((o) => !o);
-  };
-
-  return (
-    <div ref={ref} style={{ display: "inline-flex", alignItems: "center" }}>
-      <button
-        onMouseDown={(e) => e.stopPropagation()}
-        onClick={handleClick}
-        style={{
-          background: "none",
-          border: "none",
-          padding: 0,
-          cursor: hasFindings ? "pointer" : "default",
-          display: "inline-flex",
-          alignItems: "center",
-        }}
-      >
-        <FindingsBadge counts={counts} />
-      </button>
-      {open && rect && review && (
-        <FindingsPopup
-          findings={review.findings}
-          anchorRect={rect}
-          onClose={handleClose}
-        />
-      )}
-    </div>
-  );
-}
-
 export function RunHistory({
   runs,
   commits = [],
-  reviews = [],
+  findingsByRunId,
+  repoFullName,
+  headSha,
+  prNumber,
+  onSelectFinding,
   onOpenTrace,
   onGoToReview,
   onDelete,
 }: {
   runs: RunSummary[];
   commits?: PrCommit[];
-  reviews?: ReviewRecord[];
+  /** Per-run findings (keyed by run_id) for the count chips + hover popover. */
+  findingsByRunId?: Map<string, FindingRecord[]>;
+  /** owner/repo + head sha — deep-link a finding's file:line to GitHub. */
+  repoFullName?: string | null;
+  headSha?: string | null;
+  /** PR number — lets a finding's file link open the PR's Files changed tab. */
+  prNumber?: number;
+  /** Select a finding in a run's popover → focus it in the review below. */
+  onSelectFinding?: (findingId: string) => void;
   /** Open the trace + log drawer for a run (the logs icon). */
   onOpenTrace: (runId: string) => void;
   /** Jump to this run's inline review accordion below (clicking the agent name). */
@@ -208,7 +167,6 @@ export function RunHistory({
         const r = item.run;
         const o = outcomeOf(r);
         const settled = r.status === "done";
-        const review = reviews.find((rv) => rv.run_id === r.run_id);
         return (
           <div key={`run:${r.run_id}`} style={rowStyle}>
             <Badge color={o.color} bg={o.bg} icon={o.icon}>
@@ -248,19 +206,74 @@ export function RunHistory({
                   {r.error}
                 </div>
               )}
-              {settled && (
-                <RunFindingsBadge review={review} />
-              )}
+              {settled &&
+                (() => {
+                  const runFindings = findingsByRunId?.get(r.run_id) ?? [];
+                  const counts = countBySeverity(runFindings);
+                  const total = totalCount(counts);
+                  const blockers = r.blockers ?? 0;
+                  const blockerSuffix =
+                    blockers > 0 ? (
+                      <span style={{ color: "var(--text-muted)" }}>
+                        {t("runStatus.blockers", { count: blockers })}
+                      </span>
+                    ) : null;
+
+                  // Have the actual findings → chips + hover popover.
+                  if (total > 0) {
+                    return (
+                      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>
+                        <FindingsHoverCard
+                          align="left"
+                          anchor={<FindingsCountChips counts={counts} size={13} />}
+                          header={t("timeline.findingsInRun", { count: total })}
+                        >
+                          {runFindings.map((f) => (
+                            <FindingPreview
+                              key={f.id}
+                              f={f}
+                              repoFullName={repoFullName}
+                              headSha={headSha}
+                              prNumber={prNumber}
+                              onSelect={onSelectFinding}
+                            />
+                          ))}
+                        </FindingsHoverCard>
+                        {blockerSuffix}
+                      </div>
+                    );
+                  }
+
+                  // Findings not loaded but the run row says there were some →
+                  // neutral count, no popover (e.g. a summary-kind run).
+                  if ((r.findings_count ?? 0) > 0) {
+                    return (
+                      <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                        {t("runStatus.findings", { count: r.findings_count ?? 0 })}
+                        {blockers > 0 ? t("runStatus.blockers", { count: blockers }) : ""}
+                      </div>
+                    );
+                  }
+
+                  // Settled with zero findings.
+                  return (
+                    <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                      {t("runStatus.findings", { count: 0 })}
+                    </div>
+                  );
+                })()}
             </div>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, fontSize: 11, color: "var(--text-muted)", flexShrink: 0 }}>
               {r.ran_at && <span>{new Date(r.ran_at).toLocaleTimeString()}</span>}
               {settled && (
-                <RunCostBadge
-                  variant="withTokens"
-                  cost={r.cost_usd}
-                  tokensIn={r.tokens_in}
-                  tokensOut={r.tokens_out}
-                />
+                <span style={{ fontSize: 11 }}>
+                  <RunCostBadge
+                    variant="withTokens"
+                    tokensIn={r.tokens_in}
+                    tokensOut={r.tokens_out}
+                    cost={r.cost_usd}
+                  />
+                </span>
               )}
             </div>
             <button

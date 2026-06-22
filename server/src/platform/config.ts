@@ -30,12 +30,13 @@ const EnvSchema = z.object({
   WEB_PORT: z.coerce.number().int().default(3000),
   DEVDIGEST_CLONE_DIR: z.string().optional(),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  // `.env` (and .env.example) ship `LOG_LEVEL=` empty; an empty string is not a
-  // valid enum member, so coerce '' → undefined to fall through to the default.
-  LOG_LEVEL: z.preprocess(
-    (v) => (v === '' ? undefined : v),
-    z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).optional(),
-  ),
+  // Treat an empty string (e.g. `LOG_LEVEL=` in .env) as unset so the
+  // NODE_ENV-based fallback in loadConfig applies instead of failing validation.
+  LOG_LEVEL: z
+    .preprocess(
+      (v) => (v === '' ? undefined : v),
+      z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).optional(),
+    ),
 });
 
 export type AppConfig = {

@@ -6,44 +6,32 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 ## What Works
 
+- **2026-06-14** — `formatCost` (`src/lib/cost.ts`) distinguishes MISSING data (`null`/`undefined` → "—") from a genuine zero (`0` → "$0.00"), widens precision for sub-cent values (~2 sig figs), and trims trailing zeros to a 2dp floor ("$0.06" not "$0.060", "$0.0013" not "$0.00"). Reuse it for any per-run money display.
+
 ## What Doesn't Work
 
-- **2026-06-18** — `position: absolute` popups inside a container with `overflow: hidden` are silently clipped — `tableCard` in `client/src/app/repos/[repoId]/pulls/styles.ts` sets `overflow: hidden` for border-radius; any popup child that extends beyond the row is cut off. Fix: `position: fixed` anchored via `ref.current.getBoundingClientRect()` on the trigger so the popup escapes all ancestor clipping. Evidence: `client/src/components/FindingsPopup/FindingsPopup.tsx`.
-
-- **2026-06-18** — Hover-triggered popups (`onMouseEnter`/`onMouseLeave`) can't be scrolled or focused — moving the cursor into the popup fires `mouseLeave` on the trigger, closing the popup before the user interacts. Fix: click-to-open with `document.addEventListener("mousedown", handler)` for click-outside dismiss plus an Escape `keydown` listener. Evidence: `client/src/components/FindingsPopup/FindingsPopup.tsx`, `client/src/app/repos/[repoId]/pulls/_components/PRRow/PRRow.tsx`.
-
-- **2026-06-18** — Click-popup toggle race: when the popup is open, clicking the trigger fires the document `mousedown` listener (→ `onClose`) and then the button `onClick` (→ toggle), so the popup stays open instead of closing. Fix: add `onMouseDown={(e) => e.stopPropagation()}` to the trigger `<button>` so the document listener never sees the click. Evidence: `PRRow.tsx` `FindingsCell`, `RunHistory.tsx` `RunFindingsBadge`.
-
-- **2026-06-18** — `position: fixed` is re-anchored by any ancestor with `transform`, `filter`, or `will-change` (creates a new containing block). If animated/GPU-composited ancestors exist, use `createPortal(…, document.body)` instead. Complements the `overflow: hidden` clipping note above; the two are the main reasons a popup can escape or stay trapped in its container.
-
-- **2026-06-19** — Gating a click-trigger on raw `array.length > 0` when the rollup that drives the badge EXCLUDES dismissed items causes a mismatch: all-dismissed reviews show a clickable "—" badge that opens an empty popup. Always derive `hasFindings` from the rollup result, not from raw length: `const hasFindings = counts !== null && (counts.critical > 0 || counts.warning > 0 || counts.suggestion > 0)`. Evidence: `RunFindingsBadge` in `client/src/app/repos/[repoId]/pulls/[number]/_components/RunHistory/RunHistory.tsx:106`.
+- **2026-06-17** — The PR-list `tableCard` has `overflow: "hidden"` (`pulls/styles.ts`) which CLIPS absolutely-positioned hover popovers (`FindingsHoverCard`) opening downward from the bottom rows; upper rows render fine (matching the design). `FindingsHoverCard` is dependency-free (anchor wrapper + `position:absolute` panel) — to fully escape the card it would need a portal + `position:fixed` from the anchor's `getBoundingClientRect`. Deferred; not needed for the common case. Evidence: `client/src/components/FindingsHoverCard/`, `pulls/styles.ts:97`.
 
 ## Codebase Patterns
 
-- **2026-06-18** — Lazy React Query fetch via `enabled`: pass `enabled: !!open` to `useQuery` to defer a network call until user action (e.g., opening a popup). The query stays idle until the condition turns truthy, avoiding unnecessary requests on mount. Evidence: `FindingsCell` in `client/src/app/repos/[repoId]/pulls/_components/PRRow/PRRow.tsx`.
+- **2026-06-17** — `FindingsHoverCard` renders its panel in a `createPortal(document.body)` with `position:fixed` (coords measured from the anchor's `getBoundingClientRect` on open, recomputed on resize, closed on scroll). This is the fix for the earlier `overflow:hidden` clipping limitation — the panel escapes any clipping ancestor. Because the panel is outside the anchor's subtree, BOTH the anchor and the portal panel carry the open/close mouse handlers (shared 120ms timer) so the pointer can cross the gap. Evidence: `client/src/components/FindingsHoverCard/FindingsHoverCard.tsx`.
+- **2026-06-17** — Finding deep-linking: a findings popover navigates to `…/pulls/:number?tab=findings&finding=:id`. The PR-detail page reads `?finding`, forces the findings tab, and threads `focusFindingId` → `FindingsTab` (resolves finding→run, reuses the `targetRunId` open+scroll) → `ReviewRunAccordion` (opens if it owns the finding) → `FindingsPanel` (scrolls to `[data-finding-id]` + `defaultExpanded`). A finding's file:line link opens the PR's Files tab (`githubPrFilesUrl`), not the standalone blob. Evidence: `pulls/[number]/page.tsx`, `FindingsTab`, `ReviewRunAccordion`, `FindingsPanel`.
 
-- **2026-06-18** — Keep the React Query key stable and gate with `enabled`: `usePrReviews(id, { enabled: open })` keeps the key `["reviews", id]` constant so cached data survives popup close/reopen. The previous pattern `usePrReviews(open ? id : undefined)` changed the key to `["reviews", undefined]` on close, forcing a refetch on every reopen under default `staleTime: 0`. Evidence: `PRRow.tsx` `FindingsCell`, `client/src/lib/hooks/reviews.ts`.
+- **2026-06-18** — `BarChart2` and `GripVertical` do NOT exist in the `@devdigest/ui` icon registry. Use `BarChart` for charts and a unicode character (e.g. `⠿`) for drag handles. Always verify icon names against `client/src/vendor/ui/icons.tsx` before using them — a wrong name silently renders nothing because Icon is a proxy object.
+- **2026-06-18** — The `AgentEditor` tab system has TWO places to update: `TABS` constant in `AgentEditor/constants.ts` (controls the tab bar) and `VALID_TABS` array in `agents/[id]/page.tsx` (validates the `?tab=` URL param). Both must be kept in sync when adding a tab — missing VALID_TABS causes the new tab to silently redirect to `config`. Evidence: `client/src/app/agents/[id]/_components/AgentEditor/constants.ts`, `client/src/app/agents/[id]/page.tsx:15`.
 
-- **2026-06-19** — Server findings aggregation returns `null` (not `{critical:0,warning:0,suggestion:0}`) for PRs with zero active findings, because the query WHERE clause includes `isNull(dismissedAt)` — dismissed findings never enter the map. A PR whose only findings are all dismissed gets `findings_counts = null`, so `!pr.findings_counts` in `PRRow` correctly blocks the button. If you ever remove the WHERE filter, the zero-object would flow through and break the null guard. Evidence: `server/src/modules/pulls/routes.ts` findings aggregation block.
-
-- **2026-06-18** — `runs` vs `prRuns` naming in `FindingsTab` is counterintuitively inverted: `runs: ReviewRecord[]` and `prRuns: RunSummary[]`. Not a bug, but a reliable false-positive magnet for both human reviewers and LLM reviewers (prompted the "reviews={runs} type mismatch" false positive). Always read the prop interface before assuming from the name. Evidence: `client/src/app/repos/[repoId]/pulls/[number]/_components/FindingsTab/FindingsTab.tsx`.
-
-- **2026-06-18** — `@devdigest/shared` is vendored separately into both `server/src/vendor/shared/` and `client/src/vendor/shared/` — changes to shared contracts (Zod schemas) must be applied in both copies, or only one package will type-check. Evidence: `client/src/vendor/shared/contracts/trace.ts`, `server/src/vendor/shared/contracts/trace.ts`.
+- **2026-06-14** — Cross-route shared components live in `src/components/<Name>/` with an `index.ts` barrel, imported via `@/components/<Name>` (e.g. `RunCostBadge`, `diff-viewer`). Vendored UI primitives (`Badge`, `CircularScore`) live in `src/vendor/ui` under `@devdigest/ui` — different home. Evidence: `client/src/components/RunCostBadge/`.
+- **2026-06-14** — The PR-list table is driven by two parallel constants that MUST stay length-aligned: `COLUMN_KEYS` (header keys + order) and `GRID` (CSS grid-template tracks). Adding a column = add to both AND render a matching cell in `PRRow.tsx`, else header/cells misalign silently. Evidence: `client/src/app/repos/[repoId]/pulls/constants.ts`.
+- **2026-06-14** — i18n has only the `en` locale (`client/messages/en/`); new UI strings need a key under the right namespace file (e.g. `prReview.json`, `runs.json`) read via `useTranslations("<ns>")`. A missing key renders the raw key, not an error.
 
 ## Tool & Library Notes
 
 ## Recurring Errors & Fixes
 
-- **2026-06-18** — Adding a field to `RunSummary` only in the server vendor copy caused the client build to fail with "Property does not exist" — the client has its own `src/vendor/shared/` with identical files that must be updated independently.
-
 ## Session Notes
 
 ### 2026-06-18
-
-Findings column feature: added `findings_counts` to `PrMeta` (both vendor copies), new `FindingsBadge` and `FindingsPopup` components, findings aggregation in the PR list server route, Findings column in the PR list table with click-to-open popup (lazy-loaded via `usePrReviews`), and per-run severity badge + popup in `RunHistory` (linked via `run_id` to `ReviewRecord`).
-
-### 2026-06-18 — Reviewer harness experiment
-
-Ran the same `homework/01` diff through (a) base DevDigest agent, (b) bare Claude Code one-liner, and (c) enriched prompt (severity rubric + injected INSIGHTS + file:line rule). Enrichment surfaced the viewport-clip and removed the `.sort()` filler finding, but produced a confident false positive: "reviews={runs} type mismatch" — because `FindingsTabProps` wasn't in the diff and the reviewer inferred the type from the variable name alone. Lessons: (1) confidence ≠ correctness — validating a finding by pulling the type definition is mandatory; (2) the biggest reviewer-quality lever is feeding type/signature context via `repoMap`/`callers` (populated when the repo is indexed), not prompt wording; (3) narrowing focus can drop true positives (the stale-anchor-on-scroll finding was lost between runs); (4) `INJECTION_GUARD` in `reviewer-core/src/prompt.ts` correctly blocks "test fixture / not for production" severity downgrades.
+- Built Skills UI (L02): `lib/hooks/skills.ts`, `/skills` page + SkillsListView + SkillCard + ImportDrawer, `/skills/[id]` + SkillEditor with Config/Preview/Versions/Stats tabs, AgentEditor SkillsTab (HTML5 DnD reorder, checkbox link/unlink), nav SKILLS LAB section, i18n keys.
+- Skills tab added to AgentEditor — both `constants.ts` (TABS) and `page.tsx` (VALID_TABS) updated.
 
 ## Open Questions
