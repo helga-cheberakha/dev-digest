@@ -65,17 +65,17 @@ export class ConventionsService {
       };
     }
 
-    await this.repo.deleteStale(repoId);
-    const rows = await this.repo.insertBatch(
+    const rows = await this.repo.replaceAll(
+      repoId,
       result.candidates.map((c) => ({
         workspaceId,
         repoId,
-        category: c.category,
+        category: '',
         rule: c.rule,
-        filePath: c.evidence.file,
-        lineStart: c.evidence.lineStart,
-        lineEnd: c.evidence.lineEnd,
-        snippet: c.snippet,
+        filePath: c.evidence_path,
+        lineStart: 0,
+        lineEnd: 0,
+        snippet: c.evidence_snippet,
         confidence: c.confidence,
       })),
     );

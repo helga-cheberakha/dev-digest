@@ -128,4 +128,36 @@ export class ConventionsRepository {
         ),
       );
   }
+
+  /** Atomically replace all pending/rejected conventions with a new batch. Accepted are preserved. */
+  async replaceAll(repoId: string, values: InsertConvention[]): Promise<ConventionRow[]> {
+    return this.db.transaction(async (tx) => {
+      await tx
+        .delete(t.conventions)
+        .where(
+          and(
+            eq(t.conventions.repoId, repoId),
+            inArray(t.conventions.status, ['pending', 'rejected']),
+          ),
+        );
+      if (values.length === 0) return [];
+      return tx
+        .insert(t.conventions)
+        .values(
+          values.map((v) => ({
+            workspaceId: v.workspaceId,
+            repoId: v.repoId,
+            category: v.category,
+            rule: v.rule,
+            evidencePath: v.filePath,
+            lineStart: v.lineStart,
+            lineEnd: v.lineEnd,
+            evidenceSnippet: v.snippet,
+            confidence: v.confidence,
+            status: 'pending' as const,
+          })),
+        )
+        .returning();
+    });
+  }
 }

@@ -20,15 +20,10 @@ const MAX_FILE_CHARS = 3000;
 const MAX_TOTAL_CHARS = 24_000;
 
 const LlmCandidate = z.object({
-  category: z.string(),
   rule: z.string(),
-  evidence: z.object({
-    file: z.string(),
-    lineStart: z.number().int().positive(),
-    lineEnd: z.number().int().positive(),
-  }),
-  snippet: z.string(),
-  confidence: z.number().min(0).max(1),
+  evidence_path: z.string(),
+  evidence_snippet: z.string(),
+  confidence: z.number().transform((v) => Math.min(1, Math.max(0, v > 1 ? v / 100 : v))),
 });
 
 const LlmResponse = z.object({
@@ -100,25 +95,41 @@ export async function extractConventions(
       messages: [
         {
           role: 'system',
-          content: `You are a senior code reviewer. Analyze the following repository files and extract coding conventions — patterns that MUST be followed throughout this codebase.
+          content: `You are a code-convention analyst.
 
-Return JSON with a "candidates" array. Each candidate must have:
-- category: short category label (e.g. "async-style", "typing", "imports")
-- rule: a single directive sentence starting with a verb (e.g. "Always use async/await instead of .then() chains")
-- evidence: { file: relative path, lineStart: integer, lineEnd: integer }
-- snippet: exact code lines from the evidence location (copy verbatim)
-- confidence: float 0-1 (how strongly this pattern is enforced in the repo)
+Analyze the provided code samples and extract concrete coding conventions
+consistently followed in this repository.
 
-Rules:
-- Only report conventions you see evidence of in multiple places or in config files.
-- Confidence >0.8 = enforced everywhere. 0.5-0.8 = common but not universal. <0.5 = optional.
-- Cite only files present in the provided samples.
-- Line numbers must be accurate for the snippets shown.
-- Return 3-8 candidates maximum.`,
+Return ONLY conventions that:
+
+- have clear evidence in the provided files
+- can be formulated as a specific actionable rule
+  (start with Always, Never, or Use X instead of Y)
+- appear in at least 2 places or are configured explicitly
+- would be useful for a code reviewer to enforce
+
+Do NOT include:
+
+- generic best practices obvious to any TypeScript developer
+- conventions supported by only one example unless defined in a config file
+- framework defaults`,
         },
         {
           role: 'user',
-          content: `Repository: ${repoName}\n\nFiles:\n${context}`,
+          content: `Repository: ${repoName}
+
+Analyze these files and extract coding conventions:
+
+${context}
+
+Return JSON with candidates array:
+
+- rule (imperative form)
+- evidence_path (relative path)
+- evidence_snippet (2–5 lines of exact code)
+- confidence (0.0–1.0)
+
+Only include conventions with confidence > 0.6.`,
         },
       ],
       maxTokens: 2048,
@@ -136,21 +147,20 @@ Rules:
     };
   }
 
-  // 5. Validate evidence: file must exist and have enough lines.
-  //    Snippet text matching is intentionally skipped — LLMs often reformat
-  //    whitespace, causing false rejections of valid candidates.
+  // 5. Validate evidence: file must exist and the first line of evidence_snippet
+  //    must literally appear in that file to reject hallucinated references.
   const candidates: ConventionCandidate[] = [];
   for (const c of rawCandidates) {
     try {
-      const content = await fs.readFile(path.join(localPath, c.evidence.file), 'utf-8');
-      const lineCount = content.split('\n').length;
-      if (c.evidence.lineEnd > lineCount) {
-        console.warn(`[conventions] discarding "${c.rule}" — lineEnd ${c.evidence.lineEnd} > file length ${lineCount}`);
+      const content = await fs.readFile(path.join(localPath, c.evidence_path), 'utf-8');
+      const firstLine = (c.evidence_snippet.split('\n')[0] ?? '').trim();
+      if (firstLine && !content.includes(firstLine)) {
+        console.warn(`[conventions] discarding "${c.rule}" — first snippet line not found in ${c.evidence_path}`);
         continue;
       }
       candidates.push(c);
     } catch {
-      console.warn(`[conventions] discarding "${c.rule}" — file not found: ${c.evidence.file}`);
+      console.warn(`[conventions] discarding "${c.rule}" — file not found: ${c.evidence_path}`);
     }
   }
   console.info(`[conventions] ${candidates.length}/${rawCandidates.length} candidate(s) passed evidence validation`);
