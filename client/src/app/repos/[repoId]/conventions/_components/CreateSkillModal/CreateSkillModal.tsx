@@ -2,42 +2,30 @@
 
 import React from "react";
 import { useRouter } from "next/navigation";
-import { Modal, Button, FormField, TextInput, Textarea, Toggle, Icon } from "@devdigest/ui";
-import type { Convention } from "@devdigest/shared";
-import { useCreateSkill } from "../../../../../../lib/hooks/skills";
+import { Modal, Button, FormField, TextInput, Icon } from "@devdigest/ui";
+import { useCreateConventionSkill } from "../../../../../../lib/hooks/conventions";
 
 interface CreateSkillModalProps {
+  repoId: string;
   repoName: string;
   repoSlug: string;
-  accepted: Convention[];
+  acceptedCount: number;
   onClose: () => void;
 }
 
-function buildSkillBody(repoName: string, accepted: Convention[]): string {
-  const slug = repoName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  let body = `# ${slug}-conventions\n\nHouse conventions for \`${repoName}\`. Flag changes that violate any rule below and cite the offending \`file:line\`.\n`;
-  for (const c of accepted) {
-    const sectionSlug = c.category.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'general';
-    body += `\n## ${sectionSlug}\n${c.rule}\n\nDetected in \`${c.file_path}:${c.line_start}-${c.line_end}\`:\n\`\`\`\n${c.snippet}\n\`\`\`\n`;
-  }
-  return body;
-}
-
-export function CreateSkillModal({ repoName, repoSlug, accepted, onClose }: CreateSkillModalProps) {
+export function CreateSkillModal({ repoId, repoName, repoSlug, acceptedCount, onClose }: CreateSkillModalProps) {
   const router = useRouter();
-  const createSkill = useCreateSkill();
+  const createSkill = useCreateConventionSkill(repoId);
 
   const defaultName = `${repoSlug}-conventions`;
-  const defaultDescription = `${accepted.length} house convention${accepted.length === 1 ? '' : 's'} extracted from ${repoName}`;
+  const defaultDescription = `${acceptedCount} house convention${acceptedCount === 1 ? "" : "s"} extracted from ${repoName}`;
 
   const [name, setName] = React.useState(defaultName);
   const [description, setDescription] = React.useState(defaultDescription);
-  const [enabled, setEnabled] = React.useState(true);
-  const [body, setBody] = React.useState(() => buildSkillBody(repoName, accepted));
 
   const handleCreate = () => {
     createSkill.mutate(
-      { name, description, type: "convention", source: "extracted", body, enabled },
+      { name: name.trim(), description },
       {
         onSuccess: (skill) => {
           router.push(`/skills/${skill.id}?tab=config`);
@@ -49,7 +37,7 @@ export function CreateSkillModal({ repoName, repoSlug, accepted, onClose }: Crea
 
   return (
     <Modal
-      width={760}
+      width={560}
       title="Create skill from conventions"
       subtitle={defaultName}
       onClose={onClose}
@@ -68,7 +56,7 @@ export function CreateSkillModal({ repoName, repoSlug, accepted, onClose }: Crea
               size="sm"
               icon="Sparkles"
               onClick={handleCreate}
-              disabled={createSkill.isPending || !name.trim() || !body.trim()}
+              disabled={createSkill.isPending || !name.trim()}
             >
               {createSkill.isPending ? "Creating…" : "Create skill"}
             </Button>
@@ -77,7 +65,6 @@ export function CreateSkillModal({ repoName, repoSlug, accepted, onClose }: Crea
       }
     >
       <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 16 }}>
-        {/* info banner */}
         <div
           style={{
             background: "rgba(59,130,246,0.1)",
@@ -90,10 +77,10 @@ export function CreateSkillModal({ repoName, repoSlug, accepted, onClose }: Crea
             gap: 8,
           }}
         >
-          <Icon.Edit size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+          <Icon.Sparkles size={14} style={{ flexShrink: 0, marginTop: 1 }} />
           <span>
-            Merged from <strong>{accepted.length} accepted convention{accepted.length === 1 ? '' : 's'}</strong> in{" "}
-            <strong>{repoName}</strong>. Everything below is editable before you save.
+            Generates a skill body from <strong>{acceptedCount} accepted convention{acceptedCount === 1 ? "" : "s"}</strong> in{" "}
+            <strong>{repoName}</strong>. You can edit the body in the skill editor after creation.
           </span>
         </div>
 
@@ -103,80 +90,6 @@ export function CreateSkillModal({ repoName, repoSlug, accepted, onClose }: Crea
 
         <FormField label="Description">
           <TextInput value={description} onChange={setDescription} placeholder="What does this skill do?" />
-        </FormField>
-
-        <div style={{ display: "flex", gap: 16 }}>
-          {/* Type (fixed to convention) */}
-          <div style={{ flex: 1 }}>
-          <FormField label="Type">
-            <div
-              style={{
-                height: 36,
-                border: "1px solid var(--border)",
-                borderRadius: 6,
-                padding: "0 12px",
-                display: "flex",
-                alignItems: "center",
-                fontSize: 13,
-                color: "var(--text-secondary)",
-                background: "var(--bg-surface)",
-              }}
-            >
-              convention
-            </div>
-          </FormField>
-          </div>
-
-          {/* Enabled toggle */}
-          <FormField label="Enabled">
-            <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 6 }}>
-              <Toggle on={enabled} onChange={setEnabled} />
-              <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                Whether this block is added to agents' prompts.
-              </span>
-            </div>
-          </FormField>
-        </div>
-
-        <FormField label="Skill body" required>
-          <div
-            style={{
-              border: "1px solid var(--border)",
-              borderRadius: 6,
-              overflow: "hidden",
-            }}
-          >
-            {/* header bar */}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "6px 12px",
-                background: "var(--bg-surface)",
-                borderBottom: "1px solid var(--border)",
-                fontSize: 12,
-              }}
-            >
-              <Icon.FileText size={12} style={{ color: "var(--text-muted)" }} />
-              <span style={{ color: "var(--text-secondary)", fontFamily: "monospace" }}>
-                {name || defaultName}.md
-              </span>
-              <span
-                style={{
-                  marginLeft: 4,
-                  color: "var(--text-muted)",
-                  background: "var(--bg-input)",
-                  padding: "1px 6px",
-                  borderRadius: 3,
-                  fontSize: 11,
-                }}
-              >
-                unsaved
-              </span>
-            </div>
-            <Textarea value={body} onChange={setBody} rows={14} mono />
-          </div>
         </FormField>
       </div>
     </Modal>

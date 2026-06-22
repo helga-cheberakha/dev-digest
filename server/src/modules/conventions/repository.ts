@@ -1,4 +1,4 @@
-import { and, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
 import type { Db } from '../../db/client.js';
 import * as t from '../../db/schema.js';
 import type { Convention } from '@devdigest/shared';
@@ -43,12 +43,20 @@ export function toConventionDto(row: ConventionRow): Convention {
 export class ConventionsRepository {
   constructor(private db: Db) {}
 
-  /** All non-rejected conventions for a repo. */
-  async listForRepo(repoId: string): Promise<ConventionRow[]> {
+  /** All non-rejected conventions for a repo, accepted first then by confidence. */
+  async listForRepo(workspaceId: string, repoId: string): Promise<ConventionRow[]> {
     return this.db
       .select()
       .from(t.conventions)
-      .where(and(eq(t.conventions.repoId, repoId), ne(t.conventions.status, 'rejected')));
+      .where(
+        and(
+          eq(t.conventions.workspaceId, workspaceId),
+          eq(t.conventions.repoId, repoId),
+          ne(t.conventions.status, 'rejected'),
+        ),
+      )
+      // 'accepted' < 'pending' alphabetically, so asc puts accepted first
+      .orderBy(asc(t.conventions.status), desc(t.conventions.confidence));
   }
 
   /** Insert a batch of new convention candidates (all status='pending'). */
@@ -89,6 +97,21 @@ export class ConventionsRepository {
       .where(and(eq(t.conventions.workspaceId, workspaceId), eq(t.conventions.id, id)))
       .returning();
     return row;
+  }
+
+  /** Accepted conventions only, used for skill generation. */
+  async listAccepted(workspaceId: string, repoId: string): Promise<ConventionRow[]> {
+    return this.db
+      .select()
+      .from(t.conventions)
+      .where(
+        and(
+          eq(t.conventions.workspaceId, workspaceId),
+          eq(t.conventions.repoId, repoId),
+          eq(t.conventions.status, 'accepted'),
+        ),
+      )
+      .orderBy(desc(t.conventions.confidence));
   }
 
   /**

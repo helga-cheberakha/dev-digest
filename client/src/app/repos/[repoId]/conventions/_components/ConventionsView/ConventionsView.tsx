@@ -56,9 +56,10 @@ export function ConventionsView({ repoId }: { repoId: string }) {
     <AppShell crumb={[{ label: "Skills Lab" }, { label: "Conventions" }]}>
       {showModal && (
         <CreateSkillModal
+          repoId={repoId}
           repoName={repoName}
           repoSlug={repoSlug}
-          accepted={accepted}
+          acceptedCount={accepted.length}
           onClose={() => setShowModal(false)}
         />
       )}

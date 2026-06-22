@@ -2,7 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
-import type { Convention, ExtractConventionsResult } from "@devdigest/shared";
+import type { Convention, ExtractConventionsResult, Skill } from "@devdigest/shared";
 
 export function useConventions(repoId: string | null | undefined) {
   return useQuery({
@@ -31,7 +31,14 @@ export function useUpdateConvention(repoId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, patch }: { id: string; patch: UpdateConventionInput }) =>
-      api.put<Convention>(`/repos/${repoId}/conventions/${id}`, patch),
+      api.patch<Convention>(`/repos/${repoId}/conventions/${id}`, patch),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["conventions", repoId] }),
+  });
+}
+
+export function useCreateConventionSkill(repoId: string) {
+  return useMutation({
+    mutationFn: ({ name, description }: { name: string; description: string }) =>
+      api.post<Skill>(`/repos/${repoId}/conventions/skill`, { name, description }),
   });
 }
