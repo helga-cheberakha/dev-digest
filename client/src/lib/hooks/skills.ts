@@ -102,6 +102,13 @@ export function useImportSkillPreview() {
   });
 }
 
+export function useImportSkillPreviewUrl() {
+  return useMutation({
+    mutationFn: ({ url }: { url: string }) =>
+      api.post<SkillImportPreview>("/skills/import-url", { url }),
+  });
+}
+
 // Skills linked to an agent (for the AgentEditor SkillsTab)
 export function useAgentSkillLinks(agentId: string | null | undefined) {
   return useQuery({

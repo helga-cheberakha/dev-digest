@@ -5,6 +5,7 @@ import { SkillsRepository } from './repository.js';
 import type { SkillStats } from './repository.js';
 import { toSkillDto, toSkillVersionDto } from './helpers.js';
 import { ValidationError } from '../../platform/errors.js';
+import { detectInjection } from './injection-detector.js';
 
 export type { SkillStats };
 
@@ -34,6 +35,7 @@ export interface ImportPreviewResult {
   source: 'imported_url';
   body: string;
   ignored_files: string[];
+  injection_detected: boolean;
 }
 
 const MAX_IMPORT_SIZE = 5 * 1024 * 1024; // 5 MB
@@ -74,6 +76,7 @@ export class SkillsService {
       source: input.source ?? 'manual',
       body: input.body,
       enabled: input.enabled,
+      injectionDetected: detectInjection(input.body),
     });
     return toSkillDto(row);
   }
@@ -89,6 +92,7 @@ export class SkillsService {
       ...(patch.type !== undefined ? { type: patch.type } : {}),
       ...(patch.source !== undefined ? { source: patch.source } : {}),
       ...(patch.body !== undefined ? { body: patch.body } : {}),
+      ...(patch.body !== undefined ? { injectionDetected: detectInjection(patch.body) } : {}),
       ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
       ...(patch.version_message !== undefined ? { message: patch.version_message } : {}),
     });
@@ -156,6 +160,7 @@ export class SkillsService {
         source: 'imported_url',
         body: text,
         ignored_files: [],
+        injection_detected: detectInjection(text),
       };
     }
 
@@ -189,12 +194,145 @@ export class SkillsService {
         source: 'imported_url',
         body,
         ignored_files: ignoredFiles,
+        injection_detected: detectInjection(body),
       };
     }
 
     throw new ValidationError(
       `Unsupported file type: "${filename}". Only .md and .zip are supported.`,
     );
+  }
+
+  /**
+   * Fetch a remote URL and return a preview of the skill content — WITHOUT
+   * persisting anything. Supports plain text URLs, GitHub Gist pages, and
+   * GitHub blob viewer URLs. Max 100 KB. Blocks private addresses (SSRF guard).
+   */
+  async importPreviewUrl(url: string): Promise<ImportPreviewResult> {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new ValidationError('Invalid URL');
+    }
+
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new ValidationError('Only http/https URLs are allowed');
+    }
+
+    // SSRF guard — run on the original URL before any transformation.
+    const privateRange = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|0\.0\.0\.0|::1$)/;
+    if (privateRange.test(parsed.hostname)) {
+      throw new ValidationError('URL points to a private or internal address');
+    }
+
+    const { fetchUrl, isGistApi, fallbackName } = resolveGitHubUrl(url);
+
+    if (isGistApi) {
+      return this.importPreviewFromGistApi(fetchUrl, fallbackName);
+    }
+
+    // Standard text fetch (also handles raw.githubusercontent.com and transformed blob URLs).
+    let res: Response;
+    try {
+      res = await fetch(fetchUrl, { signal: AbortSignal.timeout(5000) });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Network error';
+      throw new ValidationError(`Could not fetch URL: ${msg}`);
+    }
+
+    if (!res.ok) {
+      throw new ValidationError(`Fetch failed with status ${res.status}`);
+    }
+
+    const contentType = res.headers.get('content-type') ?? '';
+    if (!contentType.startsWith('text/')) {
+      throw new ValidationError('URL must return a text document (text/*)');
+    }
+
+    const text = await res.text();
+    if (text.length > 100 * 1024) {
+      throw new ValidationError('Response exceeds the 100 KB limit');
+    }
+
+    const name =
+      extractMarkdownTitle(text) ??
+      fallbackName ??
+      stemFromFilename(new URL(fetchUrl).pathname) ??
+      'Imported skill';
+
+    return {
+      name,
+      description: '',
+      type: 'custom',
+      source: 'imported_url',
+      body: text,
+      ignored_files: [],
+      injection_detected: detectInjection(text),
+    };
+  }
+
+  private async importPreviewFromGistApi(
+    apiUrl: string,
+    fallbackName: string | undefined,
+  ): Promise<ImportPreviewResult> {
+    let res: Response;
+    try {
+      res = await fetch(apiUrl, {
+        headers: { Accept: 'application/vnd.github+json' },
+        signal: AbortSignal.timeout(5000),
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Network error';
+      throw new ValidationError(`Could not fetch Gist: ${msg}`);
+    }
+
+    if (!res.ok) {
+      throw new ValidationError(`GitHub API returned ${res.status}`);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data: any = await res.json();
+    const files: Array<{ filename: string; content: string; truncated: boolean; raw_url: string }> =
+      Object.values(data.files ?? {});
+
+    if (files.length === 0) {
+      throw new ValidationError('Gist contains no files');
+    }
+
+    // Prefer the first .md file; fall back to the first file overall.
+    const file =
+      files.find((f) => f.filename.toLowerCase().endsWith('.md')) ?? files[0]!;
+
+    let text: string;
+    if (file.truncated) {
+      // Content was too large for the API response; fetch the raw URL.
+      const rawRes = await fetch(file.raw_url, { signal: AbortSignal.timeout(5000) });
+      if (!rawRes.ok) throw new ValidationError(`Could not fetch Gist raw content: ${rawRes.status}`);
+      text = await rawRes.text();
+    } else {
+      text = file.content;
+    }
+
+    if (text.length > 100 * 1024) {
+      throw new ValidationError('Gist content exceeds the 100 KB limit');
+    }
+
+    const name =
+      extractMarkdownTitle(text) ??
+      stemFromFilename(file.filename) ??
+      fallbackName ??
+      'Imported skill';
+
+    return {
+      name,
+      description: '',
+      type: 'custom',
+      source: 'imported_url',
+      body: text,
+      ignored_files: files.filter((f) => f.filename !== file.filename).map((f) => f.filename),
+      injection_detected: detectInjection(text),
+    };
   }
 }
 
@@ -211,4 +349,43 @@ function stemFromFilename(filename: string): string {
   const base = filename.split('/').pop() ?? filename;
   const dot = base.lastIndexOf('.');
   return dot > 0 ? base.slice(0, dot) : base;
+}
+
+/**
+ * Transforms human-readable GitHub URLs into machine-fetchable equivalents.
+ *
+ * - gist.github.com/{user}/{id}  → GitHub Gist API (returns JSON)
+ * - github.com/{user}/{repo}/blob/{branch}/{path} → raw.githubusercontent.com
+ * - Everything else              → unchanged
+ */
+function resolveGitHubUrl(url: string): {
+  fetchUrl: string;
+  isGistApi: boolean;
+  fallbackName: string | undefined;
+} {
+  // GitHub Gist page (with optional query string / trailing slash)
+  const gistMatch = url.match(
+    /^https?:\/\/gist\.github\.com\/([^/?#]+)\/([0-9a-f]+)\/?(?:[?#].*)?$/i,
+  );
+  if (gistMatch) {
+    return {
+      fetchUrl: `https://api.github.com/gists/${gistMatch[2]}`,
+      isGistApi: true,
+      fallbackName: undefined,
+    };
+  }
+
+  // GitHub blob viewer: github.com/{user}/{repo}/blob/{branch}/{...path}
+  const blobMatch = url.match(/^https?:\/\/github\.com\/([^/]+\/[^/]+)\/blob\/(.+)$/);
+  if (blobMatch) {
+    const rawUrl = `https://raw.githubusercontent.com/${blobMatch[1]}/${blobMatch[2]}`;
+    const filename = blobMatch[2]!.split('/').pop();
+    return {
+      fetchUrl: rawUrl,
+      isGistApi: false,
+      fallbackName: filename ? stemFromFilename(filename) : undefined,
+    };
+  }
+
+  return { fetchUrl: url, isGistApi: false, fallbackName: undefined };
 }

@@ -63,12 +63,30 @@ export function ConfigTab({ skill }: { skill: Skill }) {
 
   return (
     <div style={{ maxWidth: 640, display: "flex", flexDirection: "column", gap: 16 }}>
+      {skill.injection_detected && (
+        <div
+          style={{
+            background: "var(--error-bg, rgba(239,68,68,0.08))",
+            border: "1px solid var(--error-border, rgba(239,68,68,0.3))",
+            borderRadius: 8,
+            padding: "10px 14px",
+            color: "var(--error-text)",
+            fontSize: 13,
+          }}
+        >
+          <strong>Injection patterns detected.</strong> This skill is permanently blocked from
+          being injected into AI review prompts. Edit the body to remove injection patterns and
+          save to re-evaluate.
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 4 }}>
         <h2 style={{ fontSize: 16, fontWeight: 700, flex: 1 }}>Configuration</h2>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-          Enabled
-          <Toggle on={enabled} onChange={setEnabled} size={16} />
-        </label>
+        {!skill.injection_detected && (
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+            Enabled
+            <Toggle on={enabled} onChange={setEnabled} size={16} />
+          </label>
+        )}
       </div>
       <FormField label="Name" required>
         <TextInput value={name} onChange={setName} />

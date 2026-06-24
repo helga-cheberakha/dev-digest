@@ -35,7 +35,7 @@ export function SkillCard({
         marginBottom: 4,
         background: active ? "var(--bg-active)" : "transparent",
         border: active ? "1px solid var(--border-active)" : "1px solid transparent",
-        opacity: skill.enabled ? 1 : 0.6,
+        opacity: skill.injection_detected ? 0.5 : skill.enabled ? 1 : 0.6,
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
@@ -52,7 +52,7 @@ export function SkillCard({
         >
           {skill.name}
         </span>
-        {onToggle && (
+        {onToggle && !skill.injection_detected && (
           <div onClick={(e) => e.stopPropagation()}>
             <Toggle on={skill.enabled} onChange={onToggle} size={14} />
           </div>
@@ -102,9 +102,14 @@ export function SkillCard({
         <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
           ✎ {SOURCE_LABEL[skill.source] ?? skill.source}
         </span>
-        {skill.source !== "manual" && (
+        {skill.source !== "manual" && !skill.injection_detected && (
           <Badge color="var(--warning-text)" icon="AlertTriangle" style={{ fontSize: 10 }}>
             needs vetting
+          </Badge>
+        )}
+        {skill.injection_detected && (
+          <Badge color="var(--error-text)" icon="Shield" style={{ fontSize: 10 }}>
+            injection detected
           </Badge>
         )}
       </div>

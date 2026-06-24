@@ -126,6 +126,7 @@ export const Skill = z.object({
   source: SkillSource,
   body: z.string(),
   enabled: z.boolean(),
+  injection_detected: z.boolean().default(false),
   version: z.number().int(),
   evidence_files: z.array(z.string()).nullish(),
 });
@@ -165,6 +166,7 @@ export const SkillImportPreview = z.object({
   source: SkillSource,
   body: z.string(),
   ignored_files: z.array(z.string()),
+  injection_detected: z.boolean(),
 });
 export type SkillImportPreview = z.infer<typeof SkillImportPreview>;
 
@@ -178,6 +180,33 @@ export const ConventionCandidate = z.object({
   accepted: z.boolean(),
 });
 export type ConventionCandidate = z.infer<typeof ConventionCandidate>;
+
+export const ConventionStatus = z.enum(['pending', 'accepted', 'rejected']);
+export type ConventionStatus = z.infer<typeof ConventionStatus>;
+
+export const Convention = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  repo_id: z.string(),
+  category: z.string(),
+  rule: z.string(),
+  file_path: z.string(),
+  line_start: z.number().int(),
+  line_end: z.number().int(),
+  snippet: z.string(),
+  confidence: z.number().min(0).max(1),
+  status: ConventionStatus,
+  created_at: z.string(),
+});
+export type Convention = z.infer<typeof Convention>;
+
+export const ExtractConventionsResult = z.object({
+  conventions: z.array(Convention),
+  sample_count: z.number().int(),
+  scanned_at: z.string(),
+  error: z.string().optional(),
+});
+export type ExtractConventionsResult = z.infer<typeof ExtractConventionsResult>;
 
 // ---- Agents ----
 export const Provider = z.enum(['openai', 'anthropic', 'openrouter']);

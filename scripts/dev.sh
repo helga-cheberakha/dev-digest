@@ -99,11 +99,24 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# Free any port held by a stale previous session (tsx/next that survived Ctrl-C).
+kill_port() {
+  local port="$1" pids
+  pids="$(lsof -ti :"$port" -sTCP:LISTEN 2>/dev/null || true)"
+  if [ -n "$pids" ]; then
+    warn "port $port in use (PID $pids) — stopping stale process"
+    echo "$pids" | xargs kill 2>/dev/null || true
+    sleep 1
+  fi
+}
+
 log "starting API on :3001 (server)"
+kill_port 3001
 (cd server && pnpm dev) &
 SERVER_PID=$!
 
 if [ "$RUN_CLIENT" -eq 1 ]; then
+  kill_port 3000
   log "starting web on :3000 (client) — Ctrl-C to stop both"
   (cd client && pnpm dev)
 else

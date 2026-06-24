@@ -15,6 +15,7 @@ export function toSkillDto(row: SkillRow): Skill {
     source: row.source as Skill['source'],
     body: row.body,
     enabled: row.enabled,
+    injection_detected: row.injectionDetected,
     version: row.version,
     evidence_files: row.evidenceFiles ?? null,
   };
