@@ -2,8 +2,9 @@
 
 import React from "react";
 import { Icon } from "@devdigest/ui";
-import type { SmartDiff, SmartDiffRole, SmartDiffFile } from "@devdigest/shared";
-import type { FindingRecord } from "@devdigest/shared";
+import type { SmartDiff, SmartDiffRole, SmartDiffFile, FindingRecord, PrFile } from "@devdigest/shared";
+import { parsePatch } from "@/components/diff-viewer/helpers";
+import { CodeLine } from "@/components/diff-viewer/CodeLine";
 
 // ---- Role metadata ---------------------------------------------------------
 
@@ -116,31 +117,149 @@ function FindingBadge({ findings, onNavigate }: FindingBadgeProps) {
 
 interface FileRowProps {
   file: SmartDiffFile;
+  prFile?: PrFile;
   findings: FindingRecord[];
   onNavigateToFinding: (id: string) => void;
 }
 
-function FileRow({ file, findings, onNavigateToFinding }: FileRowProps) {
+function severityBorderColor(severity: string): string {
+  const s = severity.toLowerCase();
+  if (s === "critical" || s === "high") return "var(--crit)";
+  if (s === "medium") return "var(--warn)";
+  return "var(--sugg)";
+}
+
+function LineFindingBadge({ severity }: { severity: string }) {
+  const sev = severity.toLowerCase();
+  const isCrit = sev === "critical" || sev === "high";
+  const isWarn = sev === "medium";
+
+  const badgeStyle: React.CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 3,
+    padding: "1px 6px",
+    borderRadius: 4,
+    fontSize: 11,
+    fontWeight: 600,
+    flexShrink: 0,
+    marginRight: 8,
+    ...(isCrit
+      ? { color: "var(--crit)", background: "var(--crit-bg)" }
+      : isWarn
+        ? { color: "var(--warn)", background: "var(--warn-bg)" }
+        : { color: "var(--sugg)", background: "var(--sugg-bg)" }),
+  };
+
+  if (isCrit) {
+    return (
+      <span style={badgeStyle}>
+        <Icon.XCircle size={10} />
+        blocker
+      </span>
+    );
+  }
+  if (isWarn) {
+    return (
+      <span style={badgeStyle}>
+        <Icon.AlertTriangle size={10} />
+        warning
+      </span>
+    );
+  }
+  return (
+    <span style={badgeStyle}>
+      <Icon.Lightbulb size={10} />
+      suggestion
+    </span>
+  );
+}
+
+function FileRow({ file, prFile, findings, onNavigateToFinding }: FileRowProps) {
   const parts = file.path.split("/");
   const filename = parts.pop() ?? file.path;
   const dir = parts.join("/");
+  const hasPatch = !!prFile?.patch;
+  const [open, setOpen] = React.useState(false);
+  const lines = React.useMemo(() => parsePatch(prFile?.patch), [prFile?.patch]);
+
+  const findingByLine = React.useMemo(() => {
+    const map = new Map<number, FindingRecord>();
+    for (const f of findings) {
+      for (let ln = f.start_line; ln <= f.end_line; ln++) {
+        if (!map.has(ln)) map.set(ln, f);
+      }
+    }
+    return map;
+  }, [findings]);
 
   return (
-    <div style={s.fileRow}>
-      <Icon.FileText size={13} style={s.fileIcon} />
-      <span style={s.filePath}>
-        {dir && <span style={s.fileDir}>{dir}/</span>}
-        <span style={s.fileName}>{filename}</span>
-      </span>
-      <FindingBadge findings={findings} onNavigate={onNavigateToFinding} />
-      <span style={s.diffStat}>
-        {file.additions > 0 && (
-          <span style={s.adds}>+{file.additions}</span>
+    <div style={s.fileCard}>
+      <div
+        style={{ ...s.fileRow, cursor: hasPatch ? "pointer" : "default" }}
+        onClick={hasPatch ? () => setOpen((v) => !v) : undefined}
+      >
+        {hasPatch ? (
+          <Icon.ChevronRight
+            size={13}
+            style={{
+              color: "var(--text-muted)",
+              flexShrink: 0,
+              transform: open ? "rotate(90deg)" : "none",
+              transition: "transform .12s",
+            }}
+          />
+        ) : (
+          <Icon.FileText size={13} style={s.fileIcon} />
         )}
-        {file.deletions > 0 && (
-          <span style={s.dels}>−{file.deletions}</span>
-        )}
-      </span>
+        {hasPatch && <Icon.FileText size={13} style={s.fileIcon} />}
+        <span style={s.filePath}>
+          {dir && <span style={s.fileDir}>{dir}/</span>}
+          <span style={s.fileName}>{filename}</span>
+        </span>
+        <FindingBadge findings={findings} onNavigate={onNavigateToFinding} />
+        <span style={s.diffStat}>
+          {file.additions > 0 && (
+            <span style={s.adds}>+{file.additions}</span>
+          )}
+          {file.deletions > 0 && (
+            <span style={s.dels}>−{file.deletions}</span>
+          )}
+        </span>
+      </div>
+      {open && hasPatch && (
+        <div style={s.diffBody}>
+          {lines.length === 0 ? (
+            <div style={s.noDiff}>No diff available</div>
+          ) : (
+            lines.map((ln, i) => {
+              const lineNo = ln.newNo ?? ln.oldNo;
+              const finding = lineNo !== undefined ? findingByLine.get(lineNo) : undefined;
+              return (
+                <div
+                  key={i}
+                  style={
+                    finding
+                      ? { borderLeft: `2px solid ${severityBorderColor(finding.severity)}` }
+                      : undefined
+                  }
+                >
+                  <CodeLine
+                    ln={ln}
+                    path={file.path}
+                    threads={[]}
+                    rightBadge={
+                      finding && ln.kind !== "hunk" ? (
+                        <LineFindingBadge severity={finding.severity} />
+                      ) : undefined
+                    }
+                  />
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -151,10 +270,11 @@ interface GroupSectionProps {
   role: SmartDiffRole;
   files: SmartDiffFile[];
   findingsByFile: Map<string, FindingRecord[]>;
+  filesByPath: Map<string, PrFile>;
   onNavigateToFinding: (id: string) => void;
 }
 
-function GroupSection({ role, files, findingsByFile, onNavigateToFinding }: GroupSectionProps) {
+function GroupSection({ role, files, findingsByFile, filesByPath, onNavigateToFinding }: GroupSectionProps) {
   const meta = ROLE_META[role];
   const [open, setOpen] = React.useState(meta.defaultOpen);
 
@@ -191,6 +311,7 @@ function GroupSection({ role, files, findingsByFile, onNavigateToFinding }: Grou
             <FileRow
               key={file.path}
               file={file}
+              prFile={filesByPath.get(file.path)}
               findings={findingsByFile.get(file.path) ?? []}
               onNavigateToFinding={onNavigateToFinding}
             />
@@ -207,6 +328,8 @@ interface SmartDiffViewerProps {
   smartDiff: SmartDiff;
   /** All findings from the latest review run — used to decorate files with badges. */
   allFindings: FindingRecord[];
+  /** PR files with patch data — enables per-file diff expansion. */
+  files?: PrFile[];
   /** Navigate to a specific finding (switches to Findings tab + scrolls). */
   onNavigateToFinding: (findingId: string) => void;
 }
@@ -214,6 +337,7 @@ interface SmartDiffViewerProps {
 export function SmartDiffViewer({
   smartDiff,
   allFindings,
+  files = [],
   onNavigateToFinding,
 }: SmartDiffViewerProps) {
   const findingsByFile = React.useMemo(() => {
@@ -228,6 +352,12 @@ export function SmartDiffViewer({
     }
     return map;
   }, [allFindings]);
+
+  const filesByPath = React.useMemo(() => {
+    const map = new Map<string, PrFile>();
+    for (const f of files) map.set(f.path, f);
+    return map;
+  }, [files]);
 
   const totalFiles = smartDiff.groups.reduce((s, g) => s + g.files.length, 0);
   const { too_big, total_lines } = smartDiff.split_suggestion;
@@ -252,6 +382,7 @@ export function SmartDiffViewer({
           role={group.role}
           files={group.files}
           findingsByFile={findingsByFile}
+          filesByPath={filesByPath}
           onNavigateToFinding={onNavigateToFinding}
         />
       ))}
@@ -347,13 +478,26 @@ const s = {
     display: "flex",
     flexDirection: "column" as const,
   },
+  fileCard: {
+    borderTop: "1px solid var(--border)",
+  },
   fileRow: {
     display: "flex",
     alignItems: "center",
     gap: 8,
     padding: "6px 14px",
-    borderTop: "1px solid var(--border)",
     fontSize: 13,
+  },
+  diffBody: {
+    borderTop: "1px solid var(--border)",
+    padding: "8px 0",
+    background: "var(--bg-surface)",
+  },
+  noDiff: {
+    padding: "14px 18px",
+    fontSize: 13,
+    color: "var(--text-muted)",
+    textAlign: "center" as const,
   },
   fileIcon: {
     color: "var(--text-muted)",

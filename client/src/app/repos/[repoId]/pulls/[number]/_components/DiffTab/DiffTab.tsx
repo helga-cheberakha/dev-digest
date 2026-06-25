@@ -114,6 +114,7 @@ export function DiffTab({
         <SmartDiffViewer
           smartDiff={smartDiff}
           allFindings={allFindings}
+          files={files}
           onNavigateToFinding={onNavigateToFinding ?? (() => {})}
         />
       ) : (
