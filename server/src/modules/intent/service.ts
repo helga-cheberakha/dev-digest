@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { Intent } from '@devdigest/shared';
+import { wrapUntrusted } from '../../platform/prompt.js';
 import { resolveFeatureModel } from '../settings/feature-models.js';
 import type { Container } from '../../platform/container.js';
 import type { IntentRepository, PrIntentRow } from './repository.js';
@@ -51,7 +52,7 @@ export class IntentService {
     });
 
     // 3. Linked issue — best-effort via GitHub (needs repo owner/name)
-    let linkedIssueSection = '';
+    let linkedIssueBody = '';
     try {
       const [repo] = await this.container.db
         .select({ owner: t.repos.owner, name: t.repos.name })
@@ -61,7 +62,7 @@ export class IntentService {
         const gh = await this.container.github();
         const detail = await gh.getPullRequest({ owner: repo.owner, name: repo.name }, pull.number);
         if (detail.linked_issue?.body) {
-          linkedIssueSection = `## Linked Issue\n${detail.linked_issue.body.slice(0, 2000)}`;
+          linkedIssueBody = detail.linked_issue.body.slice(0, 2000);
         }
       }
     } catch {
@@ -75,12 +76,20 @@ export class IntentService {
       'review_intent',
     );
 
-    // 5. Build user message
+    // 5. Build user message — wrap every user-supplied field to prevent prompt injection
     const sections: string[] = [
-      `## PR Title\n${pull.title}`,
-      ...(pull.body?.trim() ? [`## PR Body\n${pull.body.slice(0, 3000)}`] : []),
-      ...(linkedIssueSection ? [linkedIssueSection] : []),
-      `## Changed Files (hunk headers only)\n${fileHeaders.length > 0 ? fileHeaders.join('\n') : '(no files)'}`,
+      `## PR Title\n${wrapUntrusted('pr-title', pull.title)}`,
+      ...(pull.body?.trim()
+        ? [`## PR Body\n${wrapUntrusted('pr-body', pull.body.slice(0, 3000))}`]
+        : []),
+      ...(linkedIssueBody
+        ? [`## Linked Issue\n${wrapUntrusted('linked-issue', linkedIssueBody)}`]
+        : []),
+      `## Changed Files (hunk headers only)\n${
+        fileHeaders.length > 0
+          ? wrapUntrusted('file-headers', fileHeaders.join('\n'))
+          : '(no files)'
+      }`,
     ];
 
     // 6. Call LLM with structured output
@@ -95,11 +104,14 @@ export class IntentService {
       ],
     });
 
-    // 7. Log token savings
-    const tokensSaved = estimatedFullDiffTokens - result.tokensIn;
+    // 7. Log token savings (both estimates use chars/4 so the comparison is apples-to-apples)
+    const estimatedHunkTokens = Math.ceil(
+      fileHeaders.reduce((sum, h) => sum + h.length, 0) / 4,
+    );
+    const tokensSaved = estimatedFullDiffTokens - estimatedHunkTokens;
     console.info(
       `[intent] PR #${pull.number}: tokensIn=${result.tokensIn}, ` +
-        `estimatedFullDiffTokens=${estimatedFullDiffTokens}, saved≈${tokensSaved}`,
+        `diffEst=${estimatedFullDiffTokens}, hunkEst=${estimatedHunkTokens}, saved≈${tokensSaved}`,
     );
 
     // 8. Persist and return

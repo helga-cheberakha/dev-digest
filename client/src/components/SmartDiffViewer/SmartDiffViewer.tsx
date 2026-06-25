@@ -60,7 +60,6 @@ interface FindingBadgeProps {
 function FindingBadge({ findings, onNavigate }: FindingBadgeProps) {
   if (findings.length === 0) return null;
   const counts = countSeverities(findings);
-  const first = findings[0];
 
   const blockers = counts.critical + counts.high;
   const warnings = counts.medium;
@@ -72,6 +71,9 @@ function FindingBadge({ findings, onNavigate }: FindingBadgeProps) {
           style={{ ...s.badge, ...s.badgeCrit }}
           onClick={(e) => {
             e.stopPropagation();
+            const first = findings.find(
+              (f) => f.severity.toLowerCase() === "critical" || f.severity.toLowerCase() === "high",
+            );
             if (first) onNavigate(first.id);
           }}
           title={`${blockers} blocker${blockers !== 1 ? "s" : ""} — click to view`}
@@ -101,7 +103,7 @@ function FindingBadge({ findings, onNavigate }: FindingBadgeProps) {
           style={{ ...s.badge, ...s.badgeInfo }}
           onClick={(e) => {
             e.stopPropagation();
-            if (first) onNavigate(first.id);
+            if (findings[0]) onNavigate(findings[0].id);
           }}
           title={`${counts.low} note${counts.low !== 1 ? "s" : ""} — click to view`}
         >
