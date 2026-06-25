@@ -14,6 +14,9 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 ## Codebase Patterns
 
+- **2026-06-25** — `DiffTab`'s smart/original toggle uses a `useRef` flag (`defaultedRef.current`) to flip the view to `"smart"` exactly once when `smartDiff` data first arrives, without re-flipping if the user switches back to original. A plain `useEffect([smartDiff])` without the ref would re-apply the default on every remount or data refresh. Evidence: `client/src/app/repos/[repoId]/pulls/[number]/_components/DiffTab/DiffTab.tsx`.
+- **2026-06-25** — `navigateToFinding(findingId)` in `page.tsx` sets BOTH `tab=findings` AND `finding=<id>` in a single `router.replace` to avoid double navigation that calling `setParam` twice would cause. Evidence: `client/src/app/repos/[repoId]/pulls/[number]/page.tsx`.
+
 - **2026-06-17** — `FindingsHoverCard` renders its panel in a `createPortal(document.body)` with `position:fixed` (coords measured from the anchor's `getBoundingClientRect` on open, recomputed on resize, closed on scroll). This is the fix for the earlier `overflow:hidden` clipping limitation — the panel escapes any clipping ancestor. Because the panel is outside the anchor's subtree, BOTH the anchor and the portal panel carry the open/close mouse handlers (shared 120ms timer) so the pointer can cross the gap. Evidence: `client/src/components/FindingsHoverCard/FindingsHoverCard.tsx`.
 - **2026-06-17** — Finding deep-linking: a findings popover navigates to `…/pulls/:number?tab=findings&finding=:id`. The PR-detail page reads `?finding`, forces the findings tab, and threads `focusFindingId` → `FindingsTab` (resolves finding→run, reuses the `targetRunId` open+scroll) → `ReviewRunAccordion` (opens if it owns the finding) → `FindingsPanel` (scrolls to `[data-finding-id]` + `defaultExpanded`). A finding's file:line link opens the PR's Files tab (`githubPrFilesUrl`), not the standalone blob. Evidence: `pulls/[number]/page.tsx`, `FindingsTab`, `ReviewRunAccordion`, `FindingsPanel`.
 
@@ -26,9 +29,17 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 ## Tool & Library Notes
 
+- **2026-06-25** — Design system color tokens (defined in `vendor/ui/styles.css`): green = `--ok` / `--ok-bg`, red = `--crit` / `--crit-bg`, amber/warning = `--warn` / `--warn-bg`. There is NO `--green`, `--red`, or `--amber` — using them silently produces invalid CSS (no color). Spin animation is `ddspin`, not `spin` (`@keyframes ddspin` at line 225). Evidence: `client/src/vendor/ui/styles.css:25-35,225`.
+
 ## Recurring Errors & Fixes
 
 ## Session Notes
+
+### 2026-06-25 (Smart Diff)
+- Built Smart Diff UI (L03): `lib/hooks/smartDiff.ts` (`useSmartDiff`), `components/SmartDiffViewer/` (file-list viewer — NOT a code diff viewer — grouped by core/wiring/boilerplate with finding badges and role accordion), `DiffTab` updated with smart/original toggle, `page.tsx` wired `useSmartDiff` + `navigateToFinding`.
+
+### 2026-06-25
+- Built Intent Layer UI (L03): `lib/hooks/intent.ts` (usePrIntent + useClassifyIntent), `components/IntentCard/` (skeleton/empty/filled states, `--ok`/`--crit`/`--warn` color tokens, `ddspin` animation), `OverviewTab` updated to accept `prId` and render IntentCard above PR body.
 
 ### 2026-06-18
 - Built Skills UI (L02): `lib/hooks/skills.ts`, `/skills` page + SkillsListView + SkillCard + ImportDrawer, `/skills/[id]` + SkillEditor with Config/Preview/Versions/Stats tabs, AgentEditor SkillsTab (HTML5 DnD reorder, checkbox link/unlink), nav SKILLS LAB section, i18n keys.

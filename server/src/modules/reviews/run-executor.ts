@@ -1,5 +1,5 @@
 import type { Container } from '../../platform/container.js';
-import type { Provider, Review, RunTrace, UnifiedDiff } from '@devdigest/shared';
+import type { Intent, Provider, Review, RunTrace, UnifiedDiff } from '@devdigest/shared';
 import { reviewPullRequest, countBlockers } from '@devdigest/reviewer-core';
 import { RunLogger } from '../../platform/run-logger.js';
 import * as schema from '../../db/schema.js';
@@ -186,6 +186,26 @@ export class ReviewRunExecutor {
 
       // Fetch enabled skills linked to this agent (in order). Their bodies are
       // injected into the prompt as "## Skills / rules" by assemblePrompt.
+      // Fetch stored PR intent (best-effort). If missing or failed, the review
+      // proceeds without scope context — identical to the pre-intent behavior.
+      let intent: Intent | undefined;
+      try {
+        const intentRow = await this.container.intentRepo.findByPrId(pull.id);
+        if (intentRow) {
+          intent = {
+            summary: intentRow.summary,
+            in_scope: intentRow.inScope,
+            out_of_scope: intentRow.outOfScope,
+            risk_areas: intentRow.riskAreas ?? undefined,
+          };
+          runLog.info(`Intent loaded: "${intent.summary.slice(0, 80)}…"`);
+        } else {
+          runLog.info('No stored intent — proceeding without scope context');
+        }
+      } catch (err) {
+        runLog.info(`Intent fetch skipped: ${(err as Error).message}`);
+      }
+
       const linked = await this.container.agentsRepo.linkedSkills(agent.id);
       const skillBodies = linked
         .filter((l) => l.skill.enabled && !l.skill.injectionDetected)
@@ -212,6 +232,8 @@ export class ReviewRunExecutor {
         // PR author's description/body — untrusted; assemblePrompt wraps +
         // truncates it. Omitted when the PR has no body.
         ...(pull.body ? { prDescription: pull.body } : {}),
+        // Classified intent (optional): scopes the review to in-scope changes.
+        ...(intent ? { intent } : {}),
         task,
         ...(skillBodies.length ? { skills: skillBodies } : {}),
         sessionId: `${repo.owner}/${repo.name}#${pull.number}:${agent.name}`,
