@@ -10,6 +10,8 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 ## Codebase Patterns
 
+- **2026-06-25** — Smart Diff (`GET /pulls/:id/smart-diff`) is purely deterministic — zero LLM calls. `classifier.ts` runs RegExp patterns from `constants.ts` to assign `core|wiring|boilerplate`; `service.ts` fetches `prFiles` + the single most-recent `reviews` row (latest by `createdAt desc limit 1`) and joins its `findings` by `reviewId`. Pattern constants and `TOO_BIG_THRESHOLD` live in `constants.ts` so tuning never touches logic files. Evidence: `server/src/modules/smart-diff/`.
+
 - **2026-06-18** — `POST /skills/import` must be registered BEFORE `GET /skills/:id` in Fastify routes, otherwise Fastify matches the literal segment `import` as a UUID param and returns 422. Fixed by registering the static path first. Evidence: `server/src/modules/skills/routes.ts:60`.
 - **2026-06-18** — Skills wiring in reviews: `run-executor.ts` fetches `agentsRepo.linkedSkills(agent.id)`, filters to `.skill.enabled`, and passes the bodies as `{ skills: skillBodies }` to `reviewPullRequest()`. `assemblePrompt` in reviewer-core renders `## Skills / rules` automatically when the array is non-empty — no reviewer-core changes needed. Evidence: `server/src/modules/reviews/run-executor.ts`.
 
@@ -21,12 +23,22 @@ so the next agent/session doesn't relearn it. Append-only — see the
 ## Tool & Library Notes
 
 - **2026-06-14** — New DB columns: edit `db/schema/*.ts`, then `npm run db:generate` (drizzle-kit) auto-generates `00NN_*.sql` (e.g. `0010_solid_baron_zemo.sql` = `ALTER TABLE … ADD COLUMN`). Never hand-write migration SQL; apply with `npm run db:migrate`.
+- **2026-06-25** — **Supersedes above for column renames:** `drizzle-kit generate` opens an interactive TTY prompt when it detects a possible column rename — piping input doesn't work in non-TTY environments. For renames, write the migration SQL manually (use `ALTER TABLE … RENAME COLUMN old TO new`) and add a matching entry to `meta/_journal.json` with the next `idx`. Evidence: `server/src/db/migrations/0014_intent_layer.sql`, `server/src/db/migrations/meta/_journal.json`.
 
 ## Recurring Errors & Fixes
 
 - **2026-06-14** — Adding a required field to a Zod contract (`RunStats.cost_usd`) breaks the inline fixture in `server/test/contracts.test.ts` (RunTrace parse). Update the `stats: {…}` fixture in the same change. Evidence: `server/test/contracts.test.ts:160`.
+- **2026-06-25** — `reviews/repository/pull.repo.ts` contains hidden `upsertIntent`/`getIntent` helpers that mirror the `Intent` contract shape. When `Intent` fields are renamed (e.g. `intent` → `summary`), this file must be updated alongside the contract — it's easy to miss because it lives inside the `reviews` module, not in `modules/intent/`. Evidence: `server/src/modules/reviews/repository/pull.repo.ts:49-68`.
 
 ## Session Notes
+
+### 2026-06-25 (Smart Diff)
+- Built Smart Diff (L03): `modules/smart-diff/` (constants, classifier, service, routes), `GET /pulls/:id/smart-diff` registered in `modules/index.ts`. No DB migration needed — reads from existing `prFiles` and `findings` tables. Zero LLM calls.
+
+### 2026-06-25
+- Built Intent Layer (L03) end-to-end: DB schema migration 0014 (renamed `intent`→`summary`, added `risk_areas`/`model`/`tokens_saved`/timestamps to `pr_intent`), `modules/intent/` module (routes/service/repository), `resolveFeatureModel(…, 'review_intent')` for cheap model, token-savings logging, `container.intentRepo` getter, `run-executor` wired to fetch intent + pass to `reviewPullRequest`.
+- Decision: no `workspaceId` on `pr_intent` (follows `pr_brief` precedent — scoping via PR uuid FK is sufficient; workspace guard at route level).
+- Updated `reviews/repository/pull.repo.ts` intent helpers to new contract shape.
 
 ### 2026-06-18
 - Built Skills feature (L02) end-to-end: server module (`modules/skills/` — routes/service/repository/helpers), schema migration 0011 (`message` column on `skill_versions`), `SkillVersion`/`SkillStats`/`SkillImportPreview` contracts (lock-step in both vendor copies), `fflate` for ZIP preview, skills wiring in `run-executor.ts`, seed catalog (8 skills + Test Quality Reviewer agent).

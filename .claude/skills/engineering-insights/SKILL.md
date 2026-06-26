@@ -74,6 +74,12 @@ Copy this checklist and work through it:
 ```
 
 1. **Gate check.** Did the session produce something substantial — a problem solved, a decision made, a non-obvious discovery? If not → **write nothing** and stop.
+
+   **Timing gate:** Run this skill exactly **once per session**, after implementation is complete and tests pass. Do NOT run:
+   - before any code changes are made;
+   - during exploration or mid-implementation;
+   - before tests are green;
+   - a second time in the same session.
 2. **Read first.** Open the touched module's `INSIGHTS.md` before drafting anything.
 3. **Draft ≤5 candidates**, ranked by signal (user corrections and gotchas highest; nice-to-know patterns lowest). Each candidate = the exact proposed line + its target section + `file:line` evidence.
 4. **Dedup.** Drop any candidate already covered by an existing entry. If reality contradicts an old entry, add a new dated note that supersedes it — never edit the old one.

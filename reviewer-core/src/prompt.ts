@@ -1,4 +1,4 @@
-import type { ChatMessage, PromptAssembly } from '@devdigest/shared';
+import type { ChatMessage, Intent, PromptAssembly } from '@devdigest/shared';
 
 /**
  * Prompt assembly + prompt-injection hardening.
@@ -70,6 +70,12 @@ export interface PromptParts {
   diff: string;
   /** Optional task framing line, e.g. "Review PR #482 '…'". */
   task?: string;
+  /**
+   * Classified PR intent (optional). When present, adds a trusted scoping rule
+   * + the intent data (untrusted-wrapped) before the skills block, so the model
+   * knows what this PR is trying to do and focuses comments accordingly.
+   */
+  intent?: Intent;
 }
 
 export interface AssembledPrompt {
@@ -106,6 +112,21 @@ export function assemblePrompt(parts: PromptParts): AssembledPrompt {
   if (prDescription) {
     userSections.push(`## PR description\n${wrapUntrusted('pr-description', prDescription)}`);
   }
+  if (parts.intent) {
+    const { summary, in_scope, out_of_scope, risk_areas } = parts.intent;
+    const intentData = [
+      `Summary: ${summary}`,
+      `In scope: ${in_scope.join(', ')}`,
+      `Out of scope: ${out_of_scope.join(', ')}`,
+      ...(risk_areas?.length ? [`Risk areas: ${risk_areas.join(', ')}`] : []),
+    ].join('\n');
+    userSections.push(
+      `## Review scope\nSCOPING RULE: Focus your review on in-scope changes only. ` +
+        `If you find a serious problem outside the declared scope, produce exactly ONE ` +
+        `signal finding tagged [OUT OF SCOPE] — do not generate multiple out-of-scope findings.\n\n` +
+        wrapUntrusted('intent', intentData),
+    );
+  }
   if (skillsBlock) userSections.push(`## Skills / rules\n${skillsBlock}`);
   if (memoryBlock) userSections.push(`## Relevant memory\n${memoryBlock}`);
   if (parts.repoMap && parts.repoMap.trim().length > 0) {
@@ -134,6 +155,7 @@ export function assemblePrompt(parts: PromptParts): AssembledPrompt {
     callers: parts.callers ?? null,
     repo_map: parts.repoMap ?? null,
     pr_description: prDescription ?? null,
+    intent: parts.intent ? parts.intent.summary : null,
     user,
   };
 

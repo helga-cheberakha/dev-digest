@@ -14,11 +14,13 @@ export function CodeLine({
   path,
   threads,
   commenting,
+  rightBadge,
 }: {
   ln: Line;
   path: string;
   threads: CommentThread[];
   commenting?: DiffCommentApi;
+  rightBadge?: React.ReactNode;
 }) {
   const [hover, setHover] = React.useState(false);
   const [composing, setComposing] = React.useState(false);
@@ -62,6 +64,7 @@ export function CodeLine({
         <span className="mono" style={s.lineText}>
           {ln.text || " "}
         </span>
+        {rightBadge}
       </div>
 
       {commenting &&

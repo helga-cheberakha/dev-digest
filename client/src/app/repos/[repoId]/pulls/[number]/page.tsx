@@ -18,6 +18,7 @@ import RunTraceDrawer from "./_components/RunTraceDrawer";
 import { usePullDetail, usePulls } from "../../../../../lib/hooks";
 import { useQueryClient } from "@tanstack/react-query";
 import { usePrReviews, useCancelRun, usePrActiveRuns, usePrRuns, useDeleteRun } from "../../../../../lib/hooks/reviews";
+import { useSmartDiff } from "../../../../../lib/hooks/smartDiff";
 import { useActiveRepo, useRepoNotFound } from "../../../../../lib/repo-context";
 import { ApiError } from "../../../../../lib/api";
 import { githubPrUrl } from "../../../../../lib/github-urls";
@@ -38,6 +39,7 @@ export default function PRDetailPage() {
 
   const isLoading = pullsLoading || (prId != null && detailLoading);
   const { data: reviews, refetch: refetchReviews } = usePrReviews(prId);
+  const { data: smartDiff } = useSmartDiff(prId);
 
   // Live run tracking is SERVER-SOURCED (agent_runs status='running'): survives
   // navigation AND reload, and self-clears via polling when runs finish.
@@ -69,6 +71,12 @@ export default function PRDetailPage() {
     router.replace(`/repos/${repoId}/pulls/${number}${sp.toString() ? `?${sp.toString()}` : ""}`);
   };
   const setTab = (t: string) => setParam("tab", t);
+  const navigateToFinding = (findingId: string) => {
+    const sp = new URLSearchParams(search.toString());
+    sp.set("tab", "findings");
+    sp.set("finding", findingId);
+    router.replace(`/repos/${repoId}/pulls/${number}?${sp.toString()}`);
+  };
 
   // Reviews come newest-first; each is its own run (grouped into accordions).
   const runs = reviews ?? [];
@@ -137,7 +145,7 @@ export default function PRDetailPage() {
       />
 
       <div style={{ padding: "24px 32px 44px", display: "flex", flexDirection: "column", gap: 24, maxWidth: 1080, margin: "0 auto" }}>
-        {tab === "overview" && <OverviewTab prBody={pr.body} />}
+        {tab === "overview" && <OverviewTab prId={prId} prBody={pr.body} />}
 
         {tab === "findings" && (
           <FindingsTab
@@ -173,6 +181,9 @@ export default function PRDetailPage() {
             filesCount={pr.files_count}
             files={pr.files}
             canComment={pr.status === "open"}
+            smartDiff={smartDiff}
+            allFindings={allFindings}
+            onNavigateToFinding={navigateToFinding}
           />
         )}
       </div>

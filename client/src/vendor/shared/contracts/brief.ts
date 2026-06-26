@@ -7,9 +7,10 @@ import { z } from 'zod';
 
 // ---- Intent ----
 export const Intent = z.object({
-  intent: z.string(),
+  summary: z.string(),
   in_scope: z.array(z.string()),
   out_of_scope: z.array(z.string()),
+  risk_areas: z.array(z.string()).optional(),
 });
 export type Intent = z.infer<typeof Intent>;
 
