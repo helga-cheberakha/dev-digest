@@ -105,6 +105,24 @@ export class ReviewRunExecutor {
     }
     runLog.info(`Diff ready — ${diff.files.length} changed file(s); starting ${jobs.length} agent run(s)`);
 
+    let intent: Intent | undefined;
+    try {
+      const intentRow = await this.container.intentRepo.findByPrId(pull.id);
+      if (intentRow) {
+        intent = {
+          summary: intentRow.summary,
+          in_scope: intentRow.inScope,
+          out_of_scope: intentRow.outOfScope,
+          risk_areas: intentRow.riskAreas ?? undefined,
+        };
+        runLog.info(`Intent loaded: "${intent.summary.slice(0, 80)}…"`);
+      } else {
+        runLog.info('No stored intent — proceeding without scope context');
+      }
+    } catch (err) {
+      runLog.info(`Intent fetch skipped: ${(err as Error).message}`);
+    }
+
     for (const { agent, runId } of jobs) {
       const agentStart = Date.now();
       logger?.info(
@@ -112,7 +130,7 @@ export class ReviewRunExecutor {
         `review: agent "${agent.name}" started (${agent.provider}/${agent.model})`,
       );
       try {
-        const outcome = await this.runOneAgent(workspaceId, pull, repo, diff, agent, runId, runLog);
+        const outcome = await this.runOneAgent(workspaceId, pull, repo, diff, intent, agent, runId, runLog);
         logger?.info(
           {
             runId,
@@ -141,6 +159,7 @@ export class ReviewRunExecutor {
     pull: PullRow,
     repo: typeof schema.repos.$inferSelect,
     diff: UnifiedDiff,
+    intent: Intent | undefined,
     agent: AgentRow,
     runId: string,
     parentLog: RunLogger,
@@ -183,28 +202,6 @@ export class ReviewRunExecutor {
       const rankNote = repoIntelOn ? await this.buildRankNote(pull.repoId, diff, runLog) : '';
 
       const task = taskLine(pull) + rankNote;
-
-      // Fetch enabled skills linked to this agent (in order). Their bodies are
-      // injected into the prompt as "## Skills / rules" by assemblePrompt.
-      // Fetch stored PR intent (best-effort). If missing or failed, the review
-      // proceeds without scope context — identical to the pre-intent behavior.
-      let intent: Intent | undefined;
-      try {
-        const intentRow = await this.container.intentRepo.findByPrId(pull.id);
-        if (intentRow) {
-          intent = {
-            summary: intentRow.summary,
-            in_scope: intentRow.inScope,
-            out_of_scope: intentRow.outOfScope,
-            risk_areas: intentRow.riskAreas ?? undefined,
-          };
-          runLog.info(`Intent loaded: "${intent.summary.slice(0, 80)}…"`);
-        } else {
-          runLog.info('No stored intent — proceeding without scope context');
-        }
-      } catch (err) {
-        runLog.info(`Intent fetch skipped: ${(err as Error).message}`);
-      }
 
       const linked = await this.container.agentsRepo.linkedSkills(agent.id);
       const skillBodies = linked

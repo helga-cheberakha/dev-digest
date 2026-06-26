@@ -34,19 +34,18 @@ const ROLE_META: Record<
 
 // ---- Severity badge counts --------------------------------------------------
 
-type SeverityCounts = { critical: number; high: number; medium: number; low: number };
+type SeverityCounts = { critical: number; warning: number; suggestion: number };
 
 function countSeverities(findings: FindingRecord[]): SeverityCounts {
   return findings.reduce<SeverityCounts>(
     (acc, f) => {
       const s = f.severity.toLowerCase();
       if (s === "critical") acc.critical++;
-      else if (s === "high") acc.high++;
-      else if (s === "medium") acc.medium++;
-      else acc.low++;
+      else if (s === "warning") acc.warning++;
+      else acc.suggestion++;
       return acc;
     },
-    { critical: 0, high: 0, medium: 0, low: 0 },
+    { critical: 0, warning: 0, suggestion: 0 },
   );
 }
 
@@ -61,8 +60,8 @@ function FindingBadge({ findings, onNavigate }: FindingBadgeProps) {
   if (findings.length === 0) return null;
   const counts = countSeverities(findings);
 
-  const blockers = counts.critical + counts.high;
-  const warnings = counts.medium;
+  const blockers = counts.critical;
+  const warnings = counts.warning;
 
   return (
     <span style={s.badgeRow}>
@@ -72,7 +71,7 @@ function FindingBadge({ findings, onNavigate }: FindingBadgeProps) {
           onClick={(e) => {
             e.stopPropagation();
             const first = findings.find(
-              (f) => f.severity.toLowerCase() === "critical" || f.severity.toLowerCase() === "high",
+              (f) => f.severity.toLowerCase() === "critical",
             );
             if (first) onNavigate(first.id);
           }}
@@ -88,7 +87,7 @@ function FindingBadge({ findings, onNavigate }: FindingBadgeProps) {
           onClick={(e) => {
             e.stopPropagation();
             const first_warn = findings.find(
-              (f) => f.severity.toLowerCase() === "medium",
+              (f) => f.severity.toLowerCase() === "warning",
             );
             if (first_warn) onNavigate(first_warn.id);
           }}
@@ -98,17 +97,17 @@ function FindingBadge({ findings, onNavigate }: FindingBadgeProps) {
           {warnings} {warnings === 1 ? "warning" : "warnings"}
         </button>
       )}
-      {counts.low > 0 && blockers === 0 && warnings === 0 && (
+      {counts.suggestion > 0 && blockers === 0 && warnings === 0 && (
         <button
           style={{ ...s.badge, ...s.badgeInfo }}
           onClick={(e) => {
             e.stopPropagation();
             if (findings[0]) onNavigate(findings[0].id);
           }}
-          title={`${counts.low} note${counts.low !== 1 ? "s" : ""} — click to view`}
+          title={`${counts.suggestion} note${counts.suggestion !== 1 ? "s" : ""} — click to view`}
         >
           <Icon.Info size={11} />
-          {counts.low}
+          {counts.suggestion}
         </button>
       )}
     </span>
@@ -122,19 +121,27 @@ interface FileRowProps {
   prFile?: PrFile;
   findings: FindingRecord[];
   onNavigateToFinding: (id: string) => void;
+  defaultOpen?: boolean;
 }
 
 function severityBorderColor(severity: string): string {
   const s = severity.toLowerCase();
-  if (s === "critical" || s === "high") return "var(--crit)";
-  if (s === "medium") return "var(--warn)";
+  if (s === "critical") return "var(--crit)";
+  if (s === "warning") return "var(--warn)";
   return "var(--sugg)";
+}
+
+function severityBgColor(severity: string): string {
+  const s = severity.toLowerCase();
+  if (s === "critical") return "var(--crit-bg)";
+  if (s === "warning") return "var(--warn-bg)";
+  return "var(--sugg-bg)";
 }
 
 function LineFindingBadge({ severity }: { severity: string }) {
   const sev = severity.toLowerCase();
-  const isCrit = sev === "critical" || sev === "high";
-  const isWarn = sev === "medium";
+  const isCrit = sev === "critical";
+  const isWarn = sev === "warning";
 
   const badgeStyle: React.CSSProperties = {
     display: "inline-flex",
@@ -177,12 +184,12 @@ function LineFindingBadge({ severity }: { severity: string }) {
   );
 }
 
-function FileRow({ file, prFile, findings, onNavigateToFinding }: FileRowProps) {
+function FileRow({ file, prFile, findings, onNavigateToFinding, defaultOpen = false }: FileRowProps) {
   const parts = file.path.split("/");
   const filename = parts.pop() ?? file.path;
   const dir = parts.join("/");
   const hasPatch = !!prFile?.patch;
-  const [open, setOpen] = React.useState(false);
+  const [open, setOpen] = React.useState(defaultOpen && hasPatch);
   const lines = React.useMemo(() => parsePatch(prFile?.patch), [prFile?.patch]);
 
   const findingByLine = React.useMemo(() => {
@@ -191,6 +198,15 @@ function FileRow({ file, prFile, findings, onNavigateToFinding }: FileRowProps) 
       for (let ln = f.start_line; ln <= f.end_line; ln++) {
         if (!map.has(ln)) map.set(ln, f);
       }
+    }
+    return map;
+  }, [findings]);
+
+  // One badge per finding, anchored at its start_line only.
+  const findingBadgeByLine = React.useMemo(() => {
+    const map = new Map<number, FindingRecord>();
+    for (const f of findings) {
+      if (!map.has(f.start_line)) map.set(f.start_line, f);
     }
     return map;
   }, [findings]);
@@ -237,12 +253,15 @@ function FileRow({ file, prFile, findings, onNavigateToFinding }: FileRowProps) 
             lines.map((ln, i) => {
               const lineNo = ln.newNo ?? ln.oldNo;
               const finding = lineNo !== undefined ? findingByLine.get(lineNo) : undefined;
+              const badgeFinding = lineNo !== undefined ? findingBadgeByLine.get(lineNo) : undefined;
+              // Badge finding takes priority: border + background colour must match the visible badge.
+              const activeFinding = badgeFinding ?? finding;
               return (
                 <div
                   key={i}
                   style={
-                    finding
-                      ? { borderLeft: `2px solid ${severityBorderColor(finding.severity)}` }
+                    activeFinding
+                      ? { borderLeft: `2px solid ${severityBorderColor(activeFinding.severity)}` }
                       : undefined
                   }
                 >
@@ -250,9 +269,10 @@ function FileRow({ file, prFile, findings, onNavigateToFinding }: FileRowProps) 
                     ln={ln}
                     path={file.path}
                     threads={[]}
+                    rowBackground={activeFinding ? severityBgColor(activeFinding.severity) : undefined}
                     rightBadge={
-                      finding && ln.kind !== "hunk" ? (
-                        <LineFindingBadge severity={finding.severity} />
+                      badgeFinding && ln.kind !== "hunk" ? (
+                        <LineFindingBadge severity={badgeFinding.severity} />
                       ) : undefined
                     }
                   />
@@ -279,6 +299,7 @@ interface GroupSectionProps {
 function GroupSection({ role, files, findingsByFile, filesByPath, onNavigateToFinding }: GroupSectionProps) {
   const meta = ROLE_META[role];
   const [open, setOpen] = React.useState(meta.defaultOpen);
+  const fileDefaultOpen = role !== 'boilerplate';
 
   const totalFindings = files.reduce(
     (sum, f) => sum + (findingsByFile.get(f.path)?.length ?? 0),
@@ -316,6 +337,7 @@ function GroupSection({ role, files, findingsByFile, filesByPath, onNavigateToFi
               prFile={filesByPath.get(file.path)}
               findings={findingsByFile.get(file.path) ?? []}
               onNavigateToFinding={onNavigateToFinding}
+              defaultOpen={fileDefaultOpen}
             />
           ))}
         </div>
