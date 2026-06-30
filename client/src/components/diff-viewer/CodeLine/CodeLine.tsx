@@ -15,12 +15,14 @@ export function CodeLine({
   threads,
   commenting,
   rightBadge,
+  rowBackground,
 }: {
   ln: Line;
   path: string;
   threads: CommentThread[];
   commenting?: DiffCommentApi;
   rightBadge?: React.ReactNode;
+  rowBackground?: string;
 }) {
   const [hover, setHover] = React.useState(false);
   const [composing, setComposing] = React.useState(false);
@@ -43,7 +45,7 @@ export function CodeLine({
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
-      <div style={lineRowFor(ln.kind)}>
+      <div style={rowBackground ? { ...lineRowFor(ln.kind), background: rowBackground } : lineRowFor(ln.kind)}>
         <span className="mono tnum" style={{ ...s.lineNo, position: "relative" }}>
           {showAdd && target && (
             <button
