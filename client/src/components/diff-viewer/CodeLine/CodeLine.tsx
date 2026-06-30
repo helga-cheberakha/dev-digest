@@ -1,29 +1,24 @@
-/* CodeLine — one rendered diff line: gutter number, +/- sign, text, plus the
-   hover "+" affordance, any anchored comment threads, and an inline composer. */
 "use client";
 
 import React from "react";
-import { commentTargetFor, type CommentThread, type DiffCommentApi, cs } from "../comments";
-import { type Line } from "../helpers";
+import type { Line } from "../helpers";
+import type { CommentThread, DiffCommentApi } from "../comments";
+import { commentTargetFor, cs } from "../comments";
+import { CommentThreadView, InlineComposer } from "../DiffComments";
 import { s, lineRowFor, lineSignFor } from "../styles";
-import { CommentThreadView } from "../CommentThreadView";
-import { InlineComposer } from "../InlineComposer";
 
-export function CodeLine({
-  ln,
-  path,
-  threads,
-  commenting,
-  rightBadge,
-  rowBackground,
-}: {
+export interface CodeLineProps {
   ln: Line;
   path: string;
   threads: CommentThread[];
   commenting?: DiffCommentApi;
-  rightBadge?: React.ReactNode;
+  /** Override row background (used by SmartDiffViewer to highlight finding lines). */
   rowBackground?: string;
-}) {
+  /** Element rendered at the end of the line (e.g. a finding badge). */
+  rightBadge?: React.ReactNode;
+}
+
+export function CodeLine({ ln, path, threads, commenting, rowBackground, rightBadge }: CodeLineProps) {
   const [hover, setHover] = React.useState(false);
   const [composing, setComposing] = React.useState(false);
 
@@ -38,6 +33,7 @@ export function CodeLine({
   const sign = ln.kind === "add" ? "+" : ln.kind === "del" ? "−" : "";
   const target = commenting?.canComment ? commentTargetFor(ln) : null;
   const showAdd = hover && !!target && !composing;
+  const rowStyle = { ...lineRowFor(ln.kind), ...(rowBackground ? { background: rowBackground } : {}) };
 
   return (
     <div
@@ -45,7 +41,7 @@ export function CodeLine({
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
-      <div style={rowBackground ? { ...lineRowFor(ln.kind), background: rowBackground } : lineRowFor(ln.kind)}>
+      <div style={rowStyle}>
         <span className="mono tnum" style={{ ...s.lineNo, position: "relative" }}>
           {showAdd && target && (
             <button
@@ -54,9 +50,7 @@ export function CodeLine({
               aria-label="Add a comment on this line"
               onClick={() => setComposing(true)}
               style={cs.addBtn}
-            >
-              +
-            </button>
+            />
           )}
           {ln.newNo ?? ln.oldNo ?? ""}
         </span>

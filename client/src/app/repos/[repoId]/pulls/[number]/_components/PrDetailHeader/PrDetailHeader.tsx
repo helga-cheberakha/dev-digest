@@ -14,6 +14,7 @@ interface PrDetailHeaderProps {
   /** github.com PR URL; null when the repo's full_name isn't known yet. */
   githubUrl?: string | null;
   onSetTab: (tab: string) => void;
+  onComposeOpen: () => void;
   onRunStart: () => void;
   onRunsStarted: () => void;
 }
@@ -25,9 +26,14 @@ export function PrDetailHeader({
   findingsCount,
   githubUrl,
   onSetTab,
+  onComposeOpen,
   onRunStart,
   onRunsStarted,
 }: PrDetailHeaderProps) {
+  const handleComposeClick = useCallback(() => {
+    onComposeOpen();
+  }, [onComposeOpen]);
+
   const handleRunStart = useCallback(() => {
     onRunStart();
   }, [onRunStart]);
@@ -90,6 +96,11 @@ export function PrDetailHeader({
             View on GitHub
           </Button>
           {prId && (
+            <Button kind="ghost" size="sm" icon="MessageSquare" onClick={handleComposeClick}>
+              Compose Review
+            </Button>
+          )}
+          {prId && (
             <RunReviewDropdown
               prId={prId}
               warnMerged={pr.status === "merged" || pr.status === "closed"}
@@ -116,6 +127,7 @@ export function PrDetailHeader({
           { key: "overview", label: "Overview", icon: "FileText" },
           { key: "findings", label: "Agent runs", icon: "AlertOctagon", count: findingsCount || undefined },
           { key: "diff", label: "Files changed", icon: "Code", count: pr.files_count },
+          { key: "conformance", label: "Conformance", icon: "ListChecks" },
         ]}
       />
     </div>
