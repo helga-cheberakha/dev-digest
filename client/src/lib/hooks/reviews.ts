@@ -214,3 +214,7 @@ export function useRunEvents(runIds: string[]) {
 
   return { events, running };
 }
+
+// Re-export feature hooks so page.tsx can import everything from one place
+export { usePrIntent, useClassifyIntent } from './intent';
+export { useSmartDiff } from './smartDiff';

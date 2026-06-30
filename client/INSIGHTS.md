@@ -10,6 +10,9 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 ## What Doesn't Work
 
+- **2026-06-30** — `reviews.ts` does NOT re-export `usePrIntent` or `useSmartDiff` by default — those hooks live in `intent.ts` and `smartDiff.ts` respectively. `page.tsx` imports both from `reviews.ts` and silently fails at runtime if not bridged. Fix: add `export { usePrIntent, useClassifyIntent } from './intent.js'` and `export { useSmartDiff } from './smartDiff.js'` to `reviews.ts`. Evidence: `client/src/lib/hooks/reviews.ts`.
+- **2026-06-30** — Two SmartDiffViewer implementations exist simultaneously: the reference version at `_components/SmartDiffViewer/` (props: `smartDiff, files, commenting?`) and the enhanced version at `src/components/SmartDiffViewer/` (props: `smartDiff, allFindings, files?, onNavigateToFinding`). `DiffTab` must import from `@/components/SmartDiffViewer` (the enhanced one); using the relative `../SmartDiffViewer` path would silently miss the enhanced API or fail if `_components/SmartDiffViewer/` is absent. Evidence: `_components/DiffTab/DiffTab.tsx`.
+- **2026-06-30** — `PrBrief.intent` schema diverged from the reference build: current codebase uses `summary: string`; the reference uses `intent: string`. Copying `PrBriefCard` from the reference causes a TS error at `intent.intent` — replace with `intent.summary`. The mismatch also breaks test fixtures. Evidence: `_components/PrBriefCard/PrBriefCard.tsx:42`, `client/src/vendor/shared/contracts/brief.ts:10`.
 - **2026-06-17** — The PR-list `tableCard` has `overflow: "hidden"` (`pulls/styles.ts`) which CLIPS absolutely-positioned hover popovers (`FindingsHoverCard`) opening downward from the bottom rows; upper rows render fine (matching the design). `FindingsHoverCard` is dependency-free (anchor wrapper + `position:absolute` panel) — to fully escape the card it would need a portal + `position:fixed` from the anchor's `getBoundingClientRect`. Deferred; not needed for the common case. Evidence: `client/src/components/FindingsHoverCard/`, `pulls/styles.ts:97`.
 
 ## Codebase Patterns
@@ -27,6 +30,8 @@ so the next agent/session doesn't relearn it. Append-only — see the
 - **2026-06-14** — The PR-list table is driven by two parallel constants that MUST stay length-aligned: `COLUMN_KEYS` (header keys + order) and `GRID` (CSS grid-template tracks). Adding a column = add to both AND render a matching cell in `PRRow.tsx`, else header/cells misalign silently. Evidence: `client/src/app/repos/[repoId]/pulls/constants.ts`.
 - **2026-06-14** — i18n has only the `en` locale (`client/messages/en/`); new UI strings need a key under the right namespace file (e.g. `prReview.json`, `runs.json`) read via `useTranslations("<ns>")`. A missing key renders the raw key, not an error.
 
+- **2026-06-30** — `CodeLine` was a private unexported function inside `DiffViewer.tsx`. To reuse it with per-line finding highlights in SmartDiffViewer, extract it to `diff-viewer/CodeLine/CodeLine.tsx` with two extra props: `rowBackground?: string` (overrides line-kind color) and `rightBadge?: React.ReactNode` (appended after line text). Import via `@/components/diff-viewer/CodeLine`. Evidence: `client/src/components/diff-viewer/CodeLine/CodeLine.tsx`.
+
 ## Tool & Library Notes
 
 - **2026-06-25** — Design system color tokens (defined in `vendor/ui/styles.css`): green = `--ok` / `--ok-bg`, red = `--crit` / `--crit-bg`, amber/warning = `--warn` / `--warn-bg`. There is NO `--green`, `--red`, or `--amber` — using them silently produces invalid CSS (no color). Spin animation is `ddspin`, not `spin` (`@keyframes ddspin` at line 225). Evidence: `client/src/vendor/ui/styles.css:25-35,225`.
@@ -34,6 +39,12 @@ so the next agent/session doesn't relearn it. Append-only — see the
 ## Recurring Errors & Fixes
 
 ## Session Notes
+
+### 2026-06-30
+- Analyzed reference build vs lesson/04 branch; copied missing `_components` (ComposeReviewDrawer, WhyTimelineDrawer, ConformanceTab, PrBriefCard, BlastRadius, SmartDiffViewer) and missing hooks (brief.ts, compose.ts, conformance.ts).
+- Used user's enhanced SmartDiffViewer (`allFindings` + `onNavigateToFinding`) over reference's simpler version; updated DiffTab to import from `@/components/SmartDiffViewer` and pass the new props; page.tsx wired `allFindings` + `onNavigateToFinding` → DiffTab.
+- Wired `IntentCard` into `OverviewTab` (component existed but was never rendered). Fixed `PrDetailHeader` to add `onComposeOpen` + Conformance tab. Extracted `CodeLine` from `DiffViewer.tsx` into `diff-viewer/CodeLine/`.
+- All 22 client tests + 145 server tests pass; TypeScript clean.
 
 ### 2026-06-25 (Smart Diff)
 - Built Smart Diff UI (L03): `lib/hooks/smartDiff.ts` (`useSmartDiff`), `components/SmartDiffViewer/` (file-list viewer — NOT a code diff viewer — grouped by core/wiring/boilerplate with finding badges and role accordion), `DiffTab` updated with smart/original toggle, `page.tsx` wired `useSmartDiff` + `navigateToFinding`.
