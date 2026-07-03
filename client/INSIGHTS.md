@@ -38,6 +38,8 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 ## Recurring Errors & Fixes
 
+- **2026-06-30** — React warns when `borderColor` (shorthand) and `borderLeftColor` (longhand) appear in the same style object — both affect the same CSS property and React detects the conflict on re-render. Fix: replace `borderColor` with three explicit longhands (`borderTopColor`, `borderRightColor`, `borderBottomColor`) and keep `borderLeftColor` unchanged. Evidence: `client/src/app/repos/[repoId]/pulls/[number]/_components/FindingCard/styles.ts:12-15`.
+
 ## Session Notes
 
 ### 2026-06-30

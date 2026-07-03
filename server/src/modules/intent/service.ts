@@ -114,13 +114,18 @@ export class IntentService {
         `diffEst=${estimatedFullDiffTokens}, hunkEst=${estimatedHunkTokens}, saved≈${tokensSaved}`,
     );
 
-    // 8. Persist and return
+    // 8. Re-validate through the Intent schema before persisting: the stored intent
+    //    is later injected into review prompts as a trusted scoping rule, and it was
+    //    derived from untrusted PR text — so it must pass an integrity check that is
+    //    independent of the LLM adapter's own validation.
+    const intent = Intent.parse(result.data);
+
     return this.repo.upsert({
       prId,
-      summary: result.data.summary,
-      inScope: result.data.in_scope,
-      outOfScope: result.data.out_of_scope,
-      riskAreas: result.data.risk_areas ?? null,
+      summary: intent.summary,
+      inScope: intent.in_scope,
+      outOfScope: intent.out_of_scope,
+      riskAreas: intent.risk_areas ?? null,
       model: `${provider}/${model}`,
       tokensSaved,
     });

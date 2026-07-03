@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash(git push*)",
         "hooks": [
           {
             "type": "command",
@@ -11,5 +11,8 @@
         ]
       }
     ]
+  },
+  "env": {
+    "ENABLE_TOOL_SEARCH": "true"
   }
 }

@@ -10,6 +10,8 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 ## Codebase Patterns
 
+- **2026-07-03** — LLM-structured output that gets persisted and later re-injected into another LLM prompt as trusted context (`pr_intent` → review prompt scoping in `run-executor.ts`) must be re-validated with the contract Zod schema right before persist (`Intent.parse(result.data)`) — `completeStructured`'s internal validation is adapter-specific, not an independent integrity check at the trust boundary. Flagged by the Security Reviewer agent on PR #6. Evidence: `server/src/modules/intent/service.ts:117`.
+
 - **2026-06-25** — Smart Diff (`GET /pulls/:id/smart-diff`) is purely deterministic — zero LLM calls. `classifier.ts` runs RegExp patterns from `constants.ts` to assign `core|wiring|boilerplate`; `service.ts` fetches `prFiles` + the single most-recent `reviews` row (latest by `createdAt desc limit 1`) and joins its `findings` by `reviewId`. Pattern constants and `TOO_BIG_THRESHOLD` live in `constants.ts` so tuning never touches logic files. Evidence: `server/src/modules/smart-diff/`.
 
 - **2026-06-18** — `POST /skills/import` must be registered BEFORE `GET /skills/:id` in Fastify routes, otherwise Fastify matches the literal segment `import` as a UUID param and returns 422. Fixed by registering the static path first. Evidence: `server/src/modules/skills/routes.ts:60`.
