@@ -7,6 +7,7 @@ import type {
   ReviewRecord,
   RunTrace,
   ConventionCandidate,
+  BlastRadius,
 } from '@devdigest/shared';
 
 import { config } from '../config.js';
@@ -57,5 +58,6 @@ export function createClient(apiUrl?: string) {
     getTrace: (runId: string) => g<RunTrace>(`/runs/${runId}/trace`),
     listConventions: (repoId: string) =>
       g<ConventionCandidate[]>(`/repos/${repoId}/conventions`),
+    getBlast: (pullId: string) => g<BlastRadius>(`/pulls/${pullId}/blast`),
   };
 }

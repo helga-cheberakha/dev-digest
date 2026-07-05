@@ -17,7 +17,7 @@ registerListAgents(server, client);
 registerRunAgentOnPr(server, client);
 registerGetFindings(server, client);
 registerGetConventions(server, client);
-registerGetBlastRadius(server);
+registerGetBlastRadius(server, client);
 
 const transport = new StdioServerTransport();
 

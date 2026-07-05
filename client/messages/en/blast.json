@@ -14,5 +14,11 @@
   "graph": {
     "empty": "No downstream callers to graph.",
     "ariaLabel": "Blast radius graph"
+  },
+  "tab": {
+    "loading": "Calculating blast radius…",
+    "error": "Could not load blast radius.",
+    "degraded": "Index degraded — results may be incomplete.",
+    "degradedReason": "Reason: {reason}"
   }
 }

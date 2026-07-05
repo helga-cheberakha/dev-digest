@@ -19,6 +19,8 @@ function buildDegradedService(opts: {
   flag: boolean;
   basics?: RepoBasics | null;
   indexStateRow?: IndexState | null;
+  edges?: Array<{ fromFile: string; toFile: string }>;
+  fileFacts?: Array<{ filePath: string; endpoints: string[]; crons: string[] }>;
 }): RepoIntelService {
   const container = {
     config: { repoIntelEnabled: opts.flag },
@@ -36,6 +38,8 @@ function buildDegradedService(opts: {
     getCachedSymbols: async () => [],
     getCachedSymbolsForFiles: async () => [],
     getCachedReferencesTo: async () => [],
+    getEdges: async () => opts.edges ?? [],
+    getFileFacts: async () => opts.fileFacts ?? [],
   };
   return svc;
 }
@@ -121,5 +125,39 @@ describe('RepoIntel facade — degraded contract (flag on, but no data)', () => 
   it('getCallerSignatures with empty changedFiles → []', async () => {
     const svc = buildDegradedService({ flag: true, basics: { id: 'r1', owner: 'a', name: 'b', clonePath: '/tmp' } });
     await expect(svc.getCallerSignatures('r1', [])).resolves.toEqual([]);
+  });
+});
+
+describe('RepoIntel facade — getReachableEndpoints', () => {
+  it('getReachableEndpoints → {} when repoIntelEnabled=false', async () => {
+    const svc = buildDegradedService({ flag: false });
+    await expect(svc.getReachableEndpoints('r1', ['a.ts'])).resolves.toEqual({});
+  });
+
+  it('getReachableEndpoints → {} when edges list is empty', async () => {
+    const svc = buildDegradedService({ flag: true, edges: [] });
+    await expect(svc.getReachableEndpoints('r1', ['a.ts'])).resolves.toEqual({});
+  });
+
+  it('getReachableEndpoints → correct hop-1 and hop-2 results with 3-file graph', async () => {
+    // Graph: b.ts imports a.ts; c.ts imports b.ts
+    // Reverse adjacency: a.ts → {b.ts}, b.ts → {c.ts}
+    // Seed = a.ts, depth=2: hop-1 = b.ts (endpoint GET /api/b), hop-2 = c.ts (endpoint POST /api/c)
+    const svc = buildDegradedService({
+      flag: true,
+      edges: [
+        { fromFile: 'b.ts', toFile: 'a.ts' },
+        { fromFile: 'c.ts', toFile: 'b.ts' },
+      ],
+      fileFacts: [
+        { filePath: 'b.ts', endpoints: ['GET /api/b'], crons: [] },
+        { filePath: 'c.ts', endpoints: ['POST /api/c'], crons: [] },
+      ],
+    });
+    const result = await svc.getReachableEndpoints('r1', ['a.ts'], 2);
+    expect(result['a.ts']).toBeDefined();
+    expect(result['a.ts']).toHaveLength(2);
+    expect(result['a.ts']).toContain('GET /api/b');
+    expect(result['a.ts']).toContain('POST /api/c');
   });
 });

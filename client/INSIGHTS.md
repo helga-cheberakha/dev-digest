@@ -38,9 +38,14 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 ## Recurring Errors & Fixes
 
+- **2026-07-05** — Relative import depth from `pulls/[number]/_components/<Tab>/` to `src/lib/` is SEVEN levels up (`../../../../../../../lib/hooks/brief`), not five — plan docs and intuition routinely undercount because of the `repos/[repoId]/pulls/[number]` nesting. Fix: grep a neighboring component's imports (e.g. `ComposeReviewDrawer`) and copy the depth instead of counting. Evidence: `client/src/app/repos/[repoId]/pulls/[number]/_components/BlastTab/BlastTab.tsx`.
+
 - **2026-06-30** — React warns when `borderColor` (shorthand) and `borderLeftColor` (longhand) appear in the same style object — both affect the same CSS property and React detects the conflict on re-render. Fix: replace `borderColor` with three explicit longhands (`borderTopColor`, `borderRightColor`, `borderBottomColor`) and keep `borderLeftColor` unchanged. Evidence: `client/src/app/repos/[repoId]/pulls/[number]/_components/FindingCard/styles.ts:12-15`.
 
 ## Session Notes
+
+### 2026-07-05 (Blast Radius)
+- Built Blast Radius UI (L04): `BlastTab` component (Skeleton/ErrorState/degraded Badge with `--warn` tokens, reuses existing `BlastRadiusView` with `onWhy` repurposed to open `githubBlobUrl` in a new tab), `Zap` tab entry in `PrDetailHeader`, `tab === "blast"` branch in `page.tsx`, `tab.*` i18n keys in `blast.json`. PR detail tabs need only two touch points (header tabs array + page branch) — no VALID_TABS gate, unlike AgentEditor. 58 client tests green (4 new).
 
 ### 2026-06-30
 - Analyzed reference build vs lesson/04 branch; copied missing `_components` (ComposeReviewDrawer, WhyTimelineDrawer, ConformanceTab, PrBriefCard, BlastRadius, SmartDiffViewer) and missing hooks (brief.ts, compose.ts, conformance.ts).

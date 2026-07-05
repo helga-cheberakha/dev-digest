@@ -6,6 +6,8 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 ## What Works
 
+- **2026-07-05** — No-DB route smoke tests: pass a minimal mock `db` object to `buildApp` (`opts.db`) plus a full `RepoIntel` mock via `ContainerOverrides` — postgres-js connects lazily so no real Postgres is needed, auth is bypassed by `MockAuthProvider`, and `reapStaleRuns` is try/catch-wrapped so the mock db's missing `.update()` throwing is non-fatal. The mock must implement ALL `RepoIntel` interface methods or tsc fails. Evidence: `server/test/blast-route.test.ts`.
+
 ## What Doesn't Work
 
 ## Codebase Patterns
@@ -33,6 +35,10 @@ so the next agent/session doesn't relearn it. Append-only — see the
 - **2026-06-25** — `reviews/repository/pull.repo.ts` contains hidden `upsertIntent`/`getIntent` helpers that mirror the `Intent` contract shape. When `Intent` fields are renamed (e.g. `intent` → `summary`), this file must be updated alongside the contract — it's easy to miss because it lives inside the `reviews` module, not in `modules/intent/`. Evidence: `server/src/modules/reviews/repository/pull.repo.ts:49-68`.
 
 ## Session Notes
+
+### 2026-07-05 (Blast Radius)
+- Built Blast Radius (L04) server side: fixed `tryPersistentBlast` caller cap to be per-`viaSymbol` (was global), added `getReachableEndpoints` (reverse-adjacency BFS ≤ depth 2 over `file_edges`, `{}` on any degraded path, never throws) to the `RepoIntel` port + facade, new `modules/blast/` (`GET /pulls/:id/blast`, pure `mapBlast` + `buildBlast` orchestrator). Zero LLM calls; no migrations. 156 server tests green.
+- MCP: `devdigest_get_blast_radius` stub replaced with real `resolvePullId` → `client.getBlast` flow.
 
 ### 2026-06-25 (Smart Diff)
 - Built Smart Diff (L03): `modules/smart-diff/` (constants, classifier, service, routes), `GET /pulls/:id/smart-diff` registered in `modules/index.ts`. No DB migration needed — reads from existing `prFiles` and `findings` tables. Zero LLM calls.

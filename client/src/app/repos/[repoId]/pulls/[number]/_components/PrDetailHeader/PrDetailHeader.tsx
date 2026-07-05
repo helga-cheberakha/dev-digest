@@ -128,6 +128,7 @@ export function PrDetailHeader({
           { key: "findings", label: "Agent runs", icon: "AlertOctagon", count: findingsCount || undefined },
           { key: "diff", label: "Files changed", icon: "Code", count: pr.files_count },
           { key: "conformance", label: "Conformance", icon: "ListChecks" },
+          { key: "blast", label: "Blast", icon: "Zap" },
         ]}
       />
     </div>

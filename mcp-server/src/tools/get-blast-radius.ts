@@ -1,18 +1,32 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { toolOk } from '../format.js';
+import type { Client } from '../http/client.js';
+import { ApiError } from '../http/client.js';
+import { toolOk, toolError } from '../format.js';
+import { resolvePullId } from '../core/resolve.js';
+import { config } from '../config.js';
 
-export function registerGetBlastRadius(server: McpServer): void {
+export function registerGetBlastRadius(server: McpServer, client: Client): void {
   server.tool(
     'devdigest_get_blast_radius',
-    "STUB — not yet implemented. Intended to map which files and symbols a PR's changes affect. Returns a placeholder, not real data. Do not rely on its output and do not block your report on it — note the limitation and continue.",
+    'Get the blast radius of a pull request: which symbols changed, who calls them, and which HTTP endpoints are reachable through the import graph. Returns changed_symbols, downstream callers, and endpoints_affected.',
     {
-      repo: z.string().optional().describe("(Accepted but ignored — stub.) Repository as 'owner/name'."),
-      pr:   z.number().int().optional().describe('(Accepted but ignored — stub.) Pull request number.'),
+      repo: z.string().min(1).describe("Repository as 'owner/name' (e.g. 'octocat/hello')."),
+      pr:   z.number().int().positive().describe('Pull request number (e.g. 42).'),
     },
-    async () => toolOk({
-      status: 'not_implemented',
-      message: 'Blast radius not yet available — proceed without it, note the limitation.',
-    }),
+    async ({ repo, pr }) => {
+      try {
+        const pullResult = await resolvePullId(client, repo, pr);
+        if ('error' in pullResult) return toolError(pullResult.error);
+
+        const blast = await client.getBlast(pullResult.pullId);
+        return toolOk(blast);
+      } catch (e) {
+        if (e instanceof ApiError) {
+          return toolError(`DevDigest API unreachable at ${config.apiUrl} — start it with ./scripts/dev.sh.`);
+        }
+        return toolError(e instanceof Error ? e.message : String(e));
+      }
+    },
   );
 }

@@ -381,9 +381,12 @@ export class RepoIntelService implements RepoIntel {
       for (const e of f.endpoints) endpoints.add(e);
     }
 
+    // Cap at MAX_CALLERS_PER_SYMBOL per viaSymbol group (callers already rank-sorted).
+    const cappedCallers = capCallersPerSymbol(callers, MAX_CALLERS_PER_SYMBOL);
+
     return {
       changedSymbols,
-      callers: callers.slice(0, MAX_CALLERS_PER_SYMBOL),
+      callers: cappedCallers,
       impactedEndpoints: [...endpoints],
       factsByFile,
       degraded: false,
@@ -700,6 +703,90 @@ export class RepoIntelService implements RepoIntel {
     }
     return paths;
   }
+
+  /**
+   * BFS over the REVERSE import graph (toFile → importers) up to `depth` hops.
+   * Returns Record<seedFile, deduped endpoints[]> for all reachable files.
+   * Returns `{}` on any degraded/unavailable path — NEVER throws.
+   */
+  async getReachableEndpoints(
+    repoId: string,
+    seedFiles: string[],
+    depth: number = 2,
+  ): Promise<Record<string, string[]>> {
+    try {
+      if (!this.container.config.repoIntelEnabled) return {};
+      if (seedFiles.length === 0) return {};
+
+      const edges = await this.repo.getEdges(repoId);
+      if (edges.length === 0) return {};
+
+      // Build reverse adjacency: toFile → Set<fromFile> ("who imports me").
+      const reverseAdj = new Map<string, Set<string>>();
+      for (const e of edges) {
+        let set = reverseAdj.get(e.toFile);
+        if (!set) {
+          set = new Set<string>();
+          reverseAdj.set(e.toFile, set);
+        }
+        set.add(e.fromFile);
+      }
+
+      // Per-seed BFS: collect files reachable via reverse adjacency, up to `depth` hops.
+      const reachablePerSeed = new Map<string, Set<string>>();
+      const allReachable = new Set<string>();
+
+      for (const seedFile of seedFiles) {
+        const visited = new Set<string>();
+        const queue: Array<{ file: string; hop: number }> = [{ file: seedFile, hop: 0 }];
+        const inQueue = new Set<string>([seedFile]);
+
+        while (queue.length > 0) {
+          const item = queue.shift()!;
+          if (item.hop >= depth) continue;
+          const importers = reverseAdj.get(item.file);
+          if (!importers) continue;
+          for (const importer of importers) {
+            if (!inQueue.has(importer)) {
+              inQueue.add(importer);
+              visited.add(importer);
+              queue.push({ file: importer, hop: item.hop + 1 });
+            }
+          }
+        }
+
+        reachablePerSeed.set(seedFile, visited);
+        for (const f of visited) allReachable.add(f);
+      }
+
+      // Single batched DB call for all reachable files across all seeds.
+      const factsRows =
+        allReachable.size > 0
+          ? await this.repo.getFileFacts(repoId, [...allReachable])
+          : [];
+      const endpointsByFile = new Map<string, string[]>();
+      for (const f of factsRows) {
+        endpointsByFile.set(f.filePath, f.endpoints);
+      }
+
+      // Build result: per-seed deduped union of endpoints from reachable files.
+      const result: Record<string, string[]> = {};
+      for (const seedFile of seedFiles) {
+        const reachable = reachablePerSeed.get(seedFile) ?? new Set<string>();
+        const eps = new Set<string>();
+        for (const file of reachable) {
+          for (const ep of endpointsByFile.get(file) ?? []) {
+            eps.add(ep);
+          }
+        }
+        result[seedFile] = [...eps];
+      }
+
+      return result;
+    } catch {
+      return {};
+    }
+  }
 }
 
 /** How many top-ranked files seed `getCriticalPaths` dependency chains. */
@@ -730,6 +817,28 @@ const JUNK_PATH_PATTERNS = [
 function isJunkPath(path: string): boolean {
   const lower = path.toLowerCase();
   return JUNK_PATH_PATTERNS.some((p) => lower.includes(p));
+}
+
+/**
+ * Cap callers at `maxPerSymbol` per `viaSymbol` group.
+ * The input array MUST already be sorted by rank DESC so the highest-ranked
+ * entries within each group are kept.
+ */
+function capCallersPerSymbol(
+  callers: BlastCallerRow[],
+  maxPerSymbol: number,
+): BlastCallerRow[] {
+  const grouped = new Map<string, BlastCallerRow[]>();
+  for (const c of callers) {
+    const arr = grouped.get(c.viaSymbol);
+    if (arr) arr.push(c);
+    else grouped.set(c.viaSymbol, [c]);
+  }
+  const result: BlastCallerRow[] = [];
+  for (const group of grouped.values()) {
+    result.push(...group.slice(0, maxPerSymbol));
+  }
+  return result;
 }
 
 /** Enclosing top-level (bare-name) symbol for a line, from persistent rows. */
