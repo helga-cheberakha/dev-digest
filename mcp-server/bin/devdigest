@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# devdigest — CLI entrypoint.
+#
+# Resolves its own location so tsx and the tsconfig are found regardless of
+# the caller's CWD (tsx resolves @devdigest/* path aliases from the tsconfig
+# it is given, and users invoke `devdigest` from the repo they are reviewing).
+set -euo pipefail
+
+# Resolve symlinks (npm link installs this script as a symlink in the global
+# bin dir) so paths stay relative to the real file inside mcp-server/.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+
+exec "$SCRIPT_DIR/../node_modules/.bin/tsx" \
+  --tsconfig "$SCRIPT_DIR/../tsconfig.json" \
+  "$SCRIPT_DIR/../src/cli/index.ts" \
+  "$@"
