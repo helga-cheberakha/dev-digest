@@ -1,6 +1,7 @@
-import type { BlastRadius, BlastCaller, DownstreamImpact } from '@devdigest/shared';
+import type { BlastRadius, BlastCaller, DownstreamImpact, PriorPr } from '@devdigest/shared';
 import type { BlastResult } from '../repo-intel/types.js';
 import type { Container } from '../../platform/container.js';
+import { NotFoundError } from '../../platform/errors.js';
 
 /** Safety-net cap per symbol (ripgrep/degraded path has no rank-based cap). */
 const MAX_CALLERS_SAFETY = 20;
@@ -63,7 +64,9 @@ export function mapBlast(
     summary = 'No top-level symbols changed.';
   } else {
     const totalCallers = downstream.reduce((sum, d) => sum + d.callers.length, 0);
-    const totalEndpoints = downstream.reduce((sum, d) => sum + d.endpoints_affected.length, 0);
+    // Deduplicate endpoints across all symbols for the summary count (consistent
+    // with the client's blastCounts helper which uses Set dedup).
+    const totalEndpoints = new Set(downstream.flatMap((d) => d.endpoints_affected)).size;
     summary = `${result.changedSymbols.length} symbol(s) changed · ${totalCallers} caller(s) · ${totalEndpoints} endpoint(s) affected.`;
   }
 
@@ -81,17 +84,50 @@ export function mapBlast(
 /**
  * Async orchestrator — calls the repo-intel facade and maps the result.
  * Never called directly from tests (use `mapBlast` for unit tests).
+ *
+ * @param log - Optional logger. TODO: replace with `container.log` if a
+ *   container-level logger is ever added to Container.
  */
 export async function buildBlast(
   container: Container,
-  repoId: string,
-  changedFiles: string[],
+  workspaceId: string,
+  prId: string,
+  log?: { warn: (obj: unknown, msg?: string) => void },
 ): Promise<BlastRadius> {
+  const pr = await container.blastRepo.findPrByWorkspace(workspaceId, prId);
+  if (!pr) throw new NotFoundError('Pull request not found');
+
+  const changedFiles = await container.blastRepo.getChangedFiles(pr.id);
+
   const [result, endpointsBySeed] = await Promise.all([
-    container.repoIntel.getBlastRadius(repoId, changedFiles),
+    container.repoIntel.getBlastRadius(pr.repoId, changedFiles),
     container.repoIntel
-      .getReachableEndpoints(repoId, changedFiles, 2)
+      .getReachableEndpoints(pr.repoId, changedFiles, 2)
       .catch(() => ({} as Record<string, string[]>)),
   ]);
-  return mapBlast(result, endpointsBySeed);
+
+  let priorPrs: PriorPr[] = [];
+  try {
+    const rows = await container.blastRepo.findPriorPrsTouchingSameFiles(
+      workspaceId,
+      pr.repoId,
+      prId,
+      changedFiles,
+      5,
+      50,
+    );
+    priorPrs = rows.map((r) => ({
+      id: r.id,
+      number: r.number,
+      title: r.title,
+      opened_at: r.openedAt?.toISOString() ?? null,
+      status: r.status,
+    }));
+  } catch (e: unknown) {
+    log?.warn({ err: e }, 'blast: prior-PR discovery failed — continuing without');
+    priorPrs = [];
+  }
+
+  const blast = mapBlast(result, endpointsBySeed);
+  return { ...blast, prior_prs: priorPrs };
 }

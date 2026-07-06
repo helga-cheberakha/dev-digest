@@ -24,6 +24,7 @@ import { estimateCost } from '../adapters/llm/pricing.js';
 import { PriceBook } from './price-book.js';
 import { ConfigError } from './errors.js';
 import { AgentsRepository } from '../modules/agents/repository.js';
+import { BlastRepository } from '../modules/blast/repository.js';
 import { SkillsRepository } from '../modules/skills/repository.js';
 import { ReviewRepository } from '../modules/reviews/repository.js';
 import { ConventionsRepository } from '../modules/conventions/repository.js';
@@ -54,6 +55,7 @@ export interface ContainerOverrides {
   /** repo-intel T3 adapters — only the indexer pipeline reads these. */
   depgraph?: DepGraph;
   tokenizer?: Tokenizer;
+  blastRepo?: BlastRepository;
 }
 
 export class Container {
@@ -74,6 +76,7 @@ export class Container {
   // runs). Constructed here, in the composition root, so consuming modules use
   // `container.agentsRepo` instead of reaching into another module's folder.
   private _agentsRepo?: AgentsRepository;
+  private _blastRepo?: BlastRepository;
   private _reviewRepo?: ReviewRepository;
   private _skillsRepo?: SkillsRepository;
   private _conventionsRepo?: ConventionsRepository;
@@ -100,6 +103,11 @@ export class Container {
 
   get agentsRepo(): AgentsRepository {
     return (this._agentsRepo ??= new AgentsRepository(this.db));
+  }
+
+  get blastRepo(): BlastRepository {
+    if (this.overrides.blastRepo) return this.overrides.blastRepo;
+    return (this._blastRepo ??= new BlastRepository(this.db));
   }
 
   get skillsRepo(): SkillsRepository {

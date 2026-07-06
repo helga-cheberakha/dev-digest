@@ -169,6 +169,7 @@ export default function PRDetailPage() {
             prId={prId}
             prBody={pr.body}
             onWhy={(file, line) => setParam("why", `${file}:${line}`)}
+            onGoToBlast={() => setTab("blast")}
           />
         )}
 

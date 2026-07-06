@@ -92,48 +92,100 @@ function DownstreamNode({
   );
 }
 
-/** Hierarchical node-link SVG drill-in for the first downstream symbol. */
+/** Node-link SVG over ALL downstream symbols with per-symbol attribution:
+    each symbol links only to its own callers and endpoints. Symbols with
+    nothing downstream are omitted so the graph stays readable. */
 function BlastGraph({ blast }: { blast: BlastRadius }) {
   const t = useTranslations("blast");
-  const d = blast.downstream[0];
-  if (!d || d.callers.length === 0) {
+
+  const symNodes: { id: string; label: string }[] = [];
+  const callerNodes: { id: string; label: string }[] = [];
+  const epNodes: { id: string; label: string }[] = [];
+  const edges: { from: string; to: string; color: string }[] = [];
+  const seen = new Set<string>();
+
+  for (const d of blast.downstream) {
+    if (d.callers.length === 0 && d.endpoints_affected.length === 0) continue;
+    const symId = `sym:${d.symbol}`;
+    if (!seen.has(symId)) {
+      seen.add(symId);
+      symNodes.push({ id: symId, label: `${d.symbol}()` });
+    }
+    for (const c of d.callers) {
+      const callerId = `caller:${c.file}:${c.line}`;
+      if (!seen.has(callerId)) {
+        seen.add(callerId);
+        callerNodes.push({ id: callerId, label: c.name });
+      }
+      edges.push({ from: symId, to: callerId, color: "var(--accent)" });
+    }
+    for (const e of d.endpoints_affected) {
+      const epId = `ep:${e}`;
+      if (!seen.has(epId)) {
+        seen.add(epId);
+        epNodes.push({ id: epId, label: e });
+      }
+      edges.push({ from: symId, to: epId, color: "var(--border-strong)" });
+    }
+  }
+
+  if (edges.length === 0) {
     return <div style={s.graphEmpty}>{t("graph.empty")}</div>;
   }
-  const H = Math.max(GRAPH.minHeight, 60 + d.callers.length * GRAPH.rowGap);
-  const root = { x: GRAPH.rootX, y: H / 2, label: `${d.symbol}()` };
-  const denom = Math.max(1, d.callers.length - 1);
-  const callerNodes = d.callers.map((c, i) => ({
-    x: GRAPH.callerX,
-    y: 38 + i * ((H - 70) / denom),
-    label: c.name,
-  }));
-  const epNodes = d.endpoints_affected.map((e, i) => ({ x: GRAPH.endpointX, y: 50 + i * 48, label: e }));
 
-  const edge = (a: { x: number; y: number }, b: { x: number; y: number }, key: string, color?: string) => (
-    <path
-      key={key}
-      d={`M${a.x + 4},${a.y} C${(a.x + b.x) / 2},${a.y} ${(a.x + b.x) / 2},${b.y} ${b.x - 4},${b.y}`}
-      fill="none"
-      stroke={color ?? "var(--border-strong)"}
-      strokeWidth={1.5}
-    />
+  const rows = Math.max(symNodes.length, callerNodes.length, epNodes.length);
+  const H = Math.max(GRAPH.minHeight, 60 + rows * GRAPH.rowGap);
+  const ySpread = (i: number, count: number) => (count <= 1 ? H / 2 : 35 + (i * (H - 70)) / (count - 1));
+
+  type NodePos = { x: number; y: number; w: number; color: string; label: string };
+  const pos = new Map<string, NodePos>();
+  symNodes.forEach((n, i) =>
+    pos.set(n.id, { x: GRAPH.rootX, y: ySpread(i, symNodes.length), w: GRAPH.nodeWidth, color: "var(--accent)", label: n.label }),
   );
-  const node = (n: { x: number; y: number; label: string }, color: string, w: number = GRAPH.nodeWidth) => (
-    <g key={n.label} transform={`translate(${n.x - w / 2},${n.y - 13})`}>
-      <rect width={w} height={26} rx={6} fill="var(--bg-elevated)" stroke={color} strokeWidth={1.25} />
-      <text x={w / 2} y={17} textAnchor="middle" fontSize={11} fill="var(--text-primary)" className="mono">
-        {n.label}
-      </text>
-    </g>
+  callerNodes.forEach((n, i) =>
+    pos.set(n.id, { x: GRAPH.callerX, y: ySpread(i, callerNodes.length), w: GRAPH.nodeWidth, color: "var(--border-strong)", label: n.label }),
   );
+  epNodes.forEach((n, i) =>
+    pos.set(n.id, { x: GRAPH.endpointX, y: ySpread(i, epNodes.length), w: GRAPH.endpointNodeWidth, color: "var(--warn)", label: n.label }),
+  );
+
+  const trunc = (label: string) => (label.length > GRAPH.maxLabelChars ? label.slice(0, GRAPH.maxLabelChars) + "…" : label);
+
+  const renderEdge = ({ from, to, color }: (typeof edges)[number], key: string) => {
+    const a = pos.get(from);
+    const b = pos.get(to);
+    if (!a || !b) return null;
+    const x1 = a.x + a.w / 2;
+    const x2 = b.x - b.w / 2;
+    const mx = (x1 + x2) / 2;
+    return (
+      <path
+        key={key}
+        d={`M${x1},${a.y} C${mx},${a.y} ${mx},${b.y} ${x2},${b.y}`}
+        fill="none"
+        stroke={color}
+        strokeWidth={1.5}
+        opacity={0.7}
+      />
+    );
+  };
+  const renderNode = (id: string) => {
+    const n = pos.get(id);
+    if (!n) return null;
+    return (
+      <g key={id} transform={`translate(${n.x - n.w / 2},${n.y - 13})`}>
+        <rect width={n.w} height={26} rx={6} fill="var(--bg-elevated)" stroke={n.color} strokeWidth={1.25} />
+        <text x={n.w / 2} y={17} textAnchor="middle" fontSize={11} fill="var(--text-primary)" className="mono">
+          {trunc(n.label)}
+        </text>
+      </g>
+    );
+  };
 
   return (
     <svg width={GRAPH.width} height={H} style={s.graphSvg} role="img" aria-label={t("graph.ariaLabel")}>
-      {callerNodes.map((c, i) => edge(root, c, `r-${i}`, "var(--accent)"))}
-      {epNodes.map((e, i) => edge(callerNodes[Math.min(i, callerNodes.length - 1)]!, e, `e-${i}`))}
-      {node(root, "var(--accent)")}
-      {callerNodes.map((c) => node(c, "var(--border-strong)"))}
-      {epNodes.map((e) => node(e, "var(--warn)", GRAPH.endpointNodeWidth))}
+      {edges.map((e, i) => renderEdge(e, `e-${i}`))}
+      {[...pos.keys()].map(renderNode)}
     </svg>
   );
 }

@@ -24,4 +24,5 @@ export const GRAPH = {
   rowGap: 42,
   nodeWidth: 110,
   endpointNodeWidth: 120,
+  maxLabelChars: 18,
 } as const;

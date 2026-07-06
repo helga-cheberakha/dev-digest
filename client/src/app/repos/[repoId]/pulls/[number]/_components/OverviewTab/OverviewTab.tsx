@@ -4,15 +4,17 @@ import React, { useCallback } from "react";
 import { SectionLabel } from "@devdigest/ui";
 import PrBriefCard from "../PrBriefCard";
 import { IntentCard } from "@/components/IntentCard";
+import { BlastRadiusSection } from "./BlastRadiusSection";
 import { s } from "./styles";
 
 interface OverviewTabProps {
   prId: string | null;
   prBody: string | null | undefined;
   onWhy: (file: string, line: number) => void;
+  onGoToBlast: () => void;
 }
 
-export function OverviewTab({ prId, prBody, onWhy }: OverviewTabProps) {
+export function OverviewTab({ prId, prBody, onWhy, onGoToBlast }: OverviewTabProps) {
   const handleWhy = useCallback(
     (file: string, line: number) => {
       onWhy(file, line);
@@ -33,6 +35,7 @@ export function OverviewTab({ prId, prBody, onWhy }: OverviewTabProps) {
           <div style={s.descriptionBox}>{prBody}</div>
         </section>
       )}
+      <BlastRadiusSection prId={prId} onGoToBlast={onGoToBlast} />
     </>
   );
 }

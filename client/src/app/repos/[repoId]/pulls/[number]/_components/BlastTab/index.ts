@@ -1,1 +1,1 @@
-export { BlastTab } from "./BlastTab.js";
+export { BlastTab, BlastTab as default } from "./BlastTab";

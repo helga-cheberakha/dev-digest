@@ -43,6 +43,34 @@ describe("A3 BlastRadiusView (smoke)", () => {
     expect(screen.getByLabelText("Blast radius graph")).toBeInTheDocument();
   });
 
+  it("graphs later symbols when the first downstream entry has no callers", () => {
+    const blast: BlastRadius = {
+      changed_symbols: [
+        { name: "orphan", file: "src/a.ts", kind: "function" },
+        { name: "rateLimit", file: "src/mw/ratelimit.ts", kind: "function" },
+      ],
+      downstream: [
+        { symbol: "orphan", callers: [], endpoints_affected: [], crons_affected: [] },
+        {
+          symbol: "rateLimit",
+          callers: [{ name: "handler", file: "src/api/public.ts", line: 23 }],
+          endpoints_affected: ["GET /public/data"],
+          crons_affected: [],
+        },
+      ],
+      summary: "2 symbol(s) changed · 1 caller(s) · 1 endpoint(s) affected.",
+    };
+    renderWithIntl(<BlastRadiusView blast={blast} />);
+    fireEvent.click(screen.getByText("graph"));
+    expect(screen.getByLabelText("Blast radius graph")).toBeInTheDocument();
+    expect(screen.getByText("rateLimit()")).toBeInTheDocument();
+    expect(screen.getByText("handler")).toBeInTheDocument();
+    expect(screen.getByText("GET /public/data")).toBeInTheDocument();
+    // symbol with nothing downstream is omitted; empty state must not show
+    expect(screen.queryByText("orphan()")).not.toBeInTheDocument();
+    expect(screen.queryByText("No downstream impact to graph.")).not.toBeInTheDocument();
+  });
+
   it("renders the empty summary when nothing changed", () => {
     renderWithIntl(
       <BlastRadiusView
