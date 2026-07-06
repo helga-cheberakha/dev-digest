@@ -145,6 +145,17 @@ export interface RepoIntel {
 
   // --- Reads --------------------------------------------------------------
   getBlastRadius(repoId: string, changedFiles: string[]): Promise<BlastResult>;
+  /**
+   * BFS over the reverse import graph up to `depth` hops (default 2).
+   * Returns Record<seedFile, deduped "METHOD /path" endpoints[]> for all files
+   * that transitively import each seed file.
+   * Returns `{}` on any degraded/unavailable path — NEVER throws.
+   */
+  getReachableEndpoints(
+    repoId: string,
+    seedFiles: string[],
+    depth?: number,
+  ): Promise<Record<string, string[]>>;
   getRepoMap(repoId: string, tokenBudget?: number): Promise<RepoMapResult>;
   getFileRank(repoId: string, paths: string[]): Promise<FileRankRow[]>;
   getSymbolsInFiles(repoId: string, paths: string[]): Promise<SymbolRow[]>;

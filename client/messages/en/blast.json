@@ -12,7 +12,24 @@
   "callerCount": "{count} callers",
   "noDownstream": "{count} changed symbol(s), no downstream callers found.",
   "graph": {
-    "empty": "No downstream callers to graph.",
+    "empty": "No downstream impact to graph.",
     "ariaLabel": "Blast radius graph"
+  },
+  "tab": {
+    "loading": "Calculating blast radius…",
+    "error": "Could not load blast radius.",
+    "degraded": "Index degraded — results may be incomplete.",
+    "degradedReason": "Reason: {reason}"
+  },
+  "priorPrs": {
+    "label": "Prior PRs touching these files",
+    "count": "{count} PR(s)",
+    "empty": "No prior PRs found."
+  },
+  "graphBtn": "Graph",
+  "graphTitle": "Blast Radius Graph",
+  "closeGraph": "Close graph",
+  "summary": {
+    "goToTab": "View full Blast Radius"
   }
 }

@@ -4,6 +4,7 @@ import {
   Finding,
   Intent,
   BlastRadius,
+  PriorPr,
   Risks,
   PrHistory,
   SmartDiff,
@@ -101,6 +102,34 @@ describe('AI contracts parse fixtures', () => {
           },
         ],
       }),
+    ).not.toThrow();
+  });
+
+  it('BlastRadius prior_prs round-trip (with and without)', () => {
+    const baseBlast = {
+      changed_symbols: [{ name: 'rateLimit', file: 'a.ts', kind: 'function' }],
+      downstream: [
+        {
+          symbol: 'rateLimit',
+          callers: [{ name: 'publicRouter', file: 'b.ts', line: 23 }],
+          endpoints_affected: ['GET /x'],
+          crons_affected: [],
+        },
+      ],
+      summary: 's',
+    };
+    // WITH prior_prs
+    expect(() =>
+      BlastRadius.parse({
+        ...baseBlast,
+        prior_prs: [{ id: 'x', number: 1, title: 't', opened_at: null, status: 'open' }],
+      }),
+    ).not.toThrow();
+    // WITHOUT prior_prs (optional field — must also parse cleanly)
+    expect(() => BlastRadius.parse(baseBlast)).not.toThrow();
+    // PriorPr schema itself parses the same fixture
+    expect(() =>
+      PriorPr.parse({ id: 'x', number: 1, title: 't', opened_at: null, status: 'open' }),
     ).not.toThrow();
   });
 

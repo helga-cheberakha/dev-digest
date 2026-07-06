@@ -20,6 +20,7 @@ import { OverviewTab } from "./_components/OverviewTab";
 import { FindingsTab } from "./_components/FindingsTab";
 import { DiffTab } from "./_components/DiffTab";
 import { ConformanceTab } from "./_components/ConformanceTab";
+import { BlastTab } from "./_components/BlastTab";
 import { usePullDetail, usePulls } from "../../../../../lib/hooks";
 import { useQueryClient } from "@tanstack/react-query";
 import { usePrReviews, usePrIntent, useSmartDiff, useCancelRun, usePrActiveRuns, usePrRuns, useDeleteRun } from "../../../../../lib/hooks/reviews";
@@ -168,6 +169,7 @@ export default function PRDetailPage() {
             prId={prId}
             prBody={pr.body}
             onWhy={(file, line) => setParam("why", `${file}:${line}`)}
+            onGoToBlast={() => setTab("blast")}
           />
         )}
 
@@ -212,6 +214,15 @@ export default function PRDetailPage() {
 
         {tab === "conformance" && (
           <ConformanceTab prId={prId} prNumber={pr.number} />
+        )}
+
+        {tab === "blast" && (
+          <BlastTab
+            prId={prId}
+            repoId={repoId}
+            repoFullName={repoFullName}
+            headSha={pr.head_sha}
+          />
         )}
       </div>
 
