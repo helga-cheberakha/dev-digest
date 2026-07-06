@@ -26,6 +26,7 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 ## Tool & Library Notes
 
+- **2026-07-06** — Drizzle's `selectDistinct()` is a separate method from `select()` — the no-DB mock in `blast-route.test.ts` stubs only `select()`, so any test that reaches `BlastRepository.findPriorPrsTouchingSameFiles` on a mock db throws. The route survives because the PR lookup 404s before the repository is called; a future happy-path smoke test with a mock db must also stub `selectDistinct` (and `innerJoin` chaining). Evidence: `server/src/modules/blast/repository.ts`, `server/test/blast-route.test.ts`.
 - **2026-06-14** — New DB columns: edit `db/schema/*.ts`, then `npm run db:generate` (drizzle-kit) auto-generates `00NN_*.sql` (e.g. `0010_solid_baron_zemo.sql` = `ALTER TABLE … ADD COLUMN`). Never hand-write migration SQL; apply with `npm run db:migrate`.
 - **2026-06-25** — **Supersedes above for column renames:** `drizzle-kit generate` opens an interactive TTY prompt when it detects a possible column rename — piping input doesn't work in non-TTY environments. For renames, write the migration SQL manually (use `ALTER TABLE … RENAME COLUMN old TO new`) and add a matching entry to `meta/_journal.json` with the next `idx`. Evidence: `server/src/db/migrations/0014_intent_layer.sql`, `server/src/db/migrations/meta/_journal.json`.
 
@@ -35,6 +36,13 @@ so the next agent/session doesn't relearn it. Append-only — see the
 - **2026-06-25** — `reviews/repository/pull.repo.ts` contains hidden `upsertIntent`/`getIntent` helpers that mirror the `Intent` contract shape. When `Intent` fields are renamed (e.g. `intent` → `summary`), this file must be updated alongside the contract — it's easy to miss because it lives inside the `reviews` module, not in `modules/intent/`. Evidence: `server/src/modules/reviews/repository/pull.repo.ts:49-68`.
 
 ## Session Notes
+
+### 2026-07-06 (Blast architecture remediation)
+- Blast module cleaned to onion layering: `routes.ts` stripped to HTTP wiring only (PR lookup + changed-files retrieval moved into new `BlastRepository.findPrByWorkspace` / `getChangedFiles`; `buildBlast` signature is now `(container, workspaceId, prId, log?)` and throws `NotFoundError` itself). `blastRepo` wired as a `Container` lazy getter (agentsRepo pattern) — no more `new BlastRepository(container.db)` in the service. `findPriorPrsTouchingSameFiles` gained a `workspaceId` WHERE guard and a `maxPaths = 50` slice before `inArray`; the prior-PR catch now `log?.warn`s instead of swallowing silently. Repository happy-path tests added for all three methods. 162 server tests green.
+
+### 2026-07-06 (Blast Radius v2)
+- Added prior-PR discovery to blast (HW04): new `modules/blast/repository.ts` (`findPriorPrsTouchingSameFiles` — `selectDistinct` join `pull_requests`×`pr_files` on changed paths, excludes current PR, `openedAt desc limit 5`, early-exits `[]` on empty paths with no DB call), `buildBlast` gained a `prId` param and attaches `prior_prs` (snake_case per contract, try/catch → `[]` so blast never throws), route passes `pr.id`. `PriorPr` contract added lockstep to both vendor copies. Zero LLM calls, no migrations. 158 server tests green.
+- MCP: `devdigest_get_blast_radius` gained optional `pr_id` UUID param that skips `resolvePullId` (inspector demo shortcut); exactly-one-of validation returns `toolError` otherwise.
 
 ### 2026-07-05 (Blast Radius)
 - Built Blast Radius (L04) server side: fixed `tryPersistentBlast` caller cap to be per-`viaSymbol` (was global), added `getReachableEndpoints` (reverse-adjacency BFS ≤ depth 2 over `file_edges`, `{}` on any degraded path, never throws) to the `RepoIntel` port + facade, new `modules/blast/` (`GET /pulls/:id/blast`, pure `mapBlast` + `buildBlast` orchestrator). Zero LLM calls; no migrations. 156 server tests green.
@@ -58,4 +66,6 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 ## Open Questions
 
+- **2026-07-06** — Blast summary counts endpoints per-symbol WITHOUT cross-symbol dedupe (`downstream.reduce(sum + d.endpoints_affected.length)`), while the client stat row dedupes via `Set` — PR #7 shows "100 endpoint(s) affected" in the summary text vs "10 endpoints" in the stat chips for the same payload (10 symbols each carry the same 10 seed-level endpoints from `endpointsBySeed`). Should the summary dedupe, or is per-symbol multiplicity intentional signal? Evidence: `server/src/modules/blast/service.ts:67`, `client/.../BlastRadius/helpers.ts:15`.
+- **2026-07-06 (later)** — RESOLVED (supersedes the endpoint-dedup question above): `mapBlast` summary now dedupes endpoints across symbols via `new Set(downstream.flatMap((d) => d.endpoints_affected)).size`, matching the client's `blastCounts` Set dedup — summary text and stat chips agree. Evidence: `server/src/modules/blast/service.ts`.
 - **2026-06-14** — PR-list "latest review batch" uses a 120s `ranAt` window as a proxy for a review session. If a real review-session / batch id is ever added to the schema, swap the window for exact grouping in `pulls/routes.ts`.
