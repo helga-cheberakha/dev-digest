@@ -1,0 +1,15 @@
+{
+  "name": "Brief Review Focus file_ref click switches to Files changed and highlights the file",
+  "description": "AC-14: from PR #482's Overview tab, the seeded Why+Risk Brief (cache HIT — head_sha matches the seeded PR, so no LLM call fires) renders a Review Focus item pointing at the seeded changed file src/config.ts. Clicking its file_ref button switches to the Files changed tab (?tab=diff) and scrolls to/highlights that file's row (client/src/app/repos/[repoId]/pulls/[number]/_components/DiffTab/scrollToFocusedFile.ts). Read-only seeded data (no model call). Assumes a freshly-seeded DB where acme/payments-api (PR #482) is the first repo — guaranteed by e2e-web.yml; run locally via the hermetic stack (see e2e/README.md).",
+  "steps": [
+    { "cmd": ["open", "{BASE}/"], "label": "load the app root" },
+    { "cmd": ["wait", "--url", "/pulls"], "label": "land on the PR list" },
+    { "cmd": ["find", "text", "Add rate limiting to public API endpoints", "click"], "label": "open the PR row" },
+    { "cmd": ["wait", "--url", "/pulls/482"], "label": "navigate to the PR detail route" },
+    { "cmd": ["wait", "--load", "networkidle"], "label": "PR detail data settles" },
+    { "cmd": ["wait", "--text", "Confirm the new rate-limit window default is safe for existing callers"], "label": "seeded Brief's Review Focus item renders (cache hit, no LLM call)" },
+    { "cmd": ["find", "text", "src/config.ts", "click"], "label": "click the Review Focus file_ref" },
+    { "cmd": ["wait", "--url", "tab=diff"], "label": "switches to the Files changed tab" },
+    { "cmd": ["wait", "--text", "src/config.ts"], "label": "the target file is visible in the diff viewer (scrolled to + highlighted)" }
+  ]
+}

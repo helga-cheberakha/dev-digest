@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { createDb, type Db } from './client.js';
 import * as t from './schema.js';
 import { eq, and } from 'drizzle-orm';
+import type { Brief } from '@devdigest/shared';
 import {
   GENERAL_REVIEWER_PROMPT,
   SECURITY_REVIEWER_PROMPT,
@@ -174,6 +175,33 @@ export async function seed(db: Db): Promise<{ workspaceId: string; userId: strin
         confidence: 0.86,
       },
     ]);
+  }
+
+  // ---- pr_brief seed (Why+Risk Brief cache HIT for PR #482) ----
+  // Additive, idempotent: upserts a fixed Brief keyed to the PR's seeded
+  // `head_sha` ('a1b2c3d4e5f6') so `usePrBrief`'s POST /pulls/:id/brief
+  // (force: false) is a cache hit — no LLM call fires. `review_focus[0]`
+  // points at the seeded changed file `src/config.ts` (also asserted by e2e
+  // flow 05-pr-diff), which e2e flow 08-brief-review-focus-click clicks
+  // through to exercise AC-14 (Files-changed tab switch + scroll/highlight).
+  const [existingBrief] = await db.select().from(t.prBrief).where(eq(t.prBrief.prId, pr!.id));
+  if (!existingBrief) {
+    const seededBrief: Brief = {
+      what: 'Adds a token-bucket rate limiter to public API endpoints and a new config knob for its window size.',
+      why: 'Public endpoints currently have no abuse protection — a single unauthenticated client can hammer /webhooks or /users without limit.',
+      risk_level: 'medium',
+      risks: [],
+      review_focus: [
+        {
+          label: 'Confirm the new rate-limit window default is safe for existing callers',
+          file_refs: ['src/config.ts'],
+        },
+      ],
+    };
+    await db
+      .insert(t.prBrief)
+      .values({ prId: pr!.id, json: seededBrief, headSha: 'a1b2c3d4e5f6' })
+      .onConflictDoNothing();
   }
 
   // ---- built-in agents (the three starter presets) ----
