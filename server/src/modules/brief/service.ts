@@ -7,18 +7,31 @@
  *     current `head_sha` returns immediately with ZERO LLM calls and without
  *     opening a transaction, so an ordinary page-load POST never queues
  *     behind an in-flight generation for the same PR.
- *  2. On a miss (or `force`), take the PR-scoped advisory lock
- *     (`BriefRepository.withPrLock`) and re-read the cache INSIDE the lock —
- *     a genuine waiter (a second request that arrived while another was
- *     generating) sees the winner's just-committed row and also makes ZERO
- *     LLM calls (AC-17).
- *  3. Otherwise gather facts (intent, blast radius, smart diff, linked
- *     issue, Context-Folder specs) — every source is best-effort and never
- *     throws; a failed/unavailable source is simply omitted from the
- *     assembled payload.
+ *  2. On a miss (or `force`), gather facts (intent, blast radius, smart
+ *     diff, linked issue, Context-Folder specs) and resolve the feature
+ *     model — ALL of this happens BEFORE the advisory lock is taken. None of
+ *     it needs the lock or makes an LLM call, and fact gathering in
+ *     particular (blast/smart-diff/GitHub/doc reads) is the slow part
+ *     (network + DB reads across other modules); doing it outside the lock
+ *     keeps the pooled transaction connection from being pinned for that
+ *     duration (HIGH-2 architecture-review fix — with a small pool,
+ *     concurrent cache misses across different PRs would otherwise starve
+ *     every other route for up to the full LLM timeout). Tradeoff: a
+ *     genuine waiter (a second request that arrives while another is
+ *     generating) gathers facts needlessly once before discovering the
+ *     winner's cache hit inside the lock — acceptable, since it's cheap
+ *     relative to an LLM call and never happens more than once per waiter.
+ *  3. Take the PR-scoped advisory lock (`BriefRepository.withPrLock`) and
+ *     re-read the cache INSIDE the lock — a genuine waiter sees the
+ *     winner's just-committed row and also makes ZERO LLM calls (AC-17).
+ *     Only what genuinely needs the lock/transaction lives inside it: the
+ *     in-lock cache re-read, the single bounded LLM call, grounding,
+ *     `Brief.parse()`, the head_sha read used for the upsert, and the
+ *     upsert itself.
  *  4. Make exactly ONE structured LLM call, bounded by `BRIEF_LLM_TIMEOUT_MS`
  *     so a hung provider can never hold the locked transaction (and its
- *     pooled connection) open indefinitely.
+ *     pooled connection) open indefinitely — now roughly the entire
+ *     connection-hold window.
  *  5. Ground the raw result against the known-path set (T4), re-validate
  *     with `Brief.parse()` (mandatory trust boundary for untrusted-derived
  *     LLM output — mirrors `intent/service.ts`), then cache it against the
@@ -101,7 +114,24 @@ export class BriefService {
       if (cached) return cached;
     }
 
-    // 3. Miss (or force) — serialize on the PR-scoped advisory lock.
+    // 3. Miss (or force) — gather facts + resolve the feature model BEFORE
+    //    taking the lock (HIGH-2 fix, see class docstring). Nothing here
+    //    needs the transaction and none of it calls the LLM, so it never
+    //    pins a pooled connection.
+    const facts = await this.gatherFacts(workspaceId, pull);
+    const knownPaths = buildKnownPathSet(facts.blast, facts.smartDiff);
+    const { userMessage } = assembleBriefPayload(facts);
+    const { provider, model } = await resolveFeatureModel(
+      this.container,
+      workspaceId,
+      'risk_brief',
+    );
+    const llm = await this.container.llm(provider);
+
+    // 4. Serialize on the PR-scoped advisory lock. Only the cache re-read,
+    //    the single bounded LLM call, grounding, re-validation, and the
+    //    upsert live inside — the connection-hold window is now roughly the
+    //    LLM call itself.
     return this.repo.withPrLock(prId, async (tx) => {
       // A repository bound to THIS transaction's connection — the only way
       // to see the winner's just-committed row while still holding the lock
@@ -109,29 +139,15 @@ export class BriefService {
       // pool, not this transaction).
       const txRepo = new BriefRepository(tx);
 
-      // 2b. Re-read the cache inside the lock — a genuine waiter sees the
+      // 4a. Re-read the cache inside the lock — a genuine waiter sees the
       //     winner's committed row and also makes zero LLM calls (AC-17).
       if (!force) {
         const cached = await this.cachedIfFresh(txRepo, prId);
         if (cached) return cached;
       }
 
-      // 4. Gather facts — deterministic, best-effort; never throws.
-      const facts = await this.gatherFacts(workspaceId, pull);
-
-      // 5. Known-path set (grounding input) + the single assembled payload.
-      const knownPaths = buildKnownPathSet(facts.blast, facts.smartDiff);
-      const { userMessage } = assembleBriefPayload(facts);
-
-      // 6. Resolve the feature model and make EXACTLY ONE structured LLM
-      //    call, bounded by BRIEF_LLM_TIMEOUT_MS (M3).
-      const { provider, model } = await resolveFeatureModel(
-        this.container,
-        workspaceId,
-        'risk_brief',
-      );
-      const llm = await this.container.llm(provider);
-
+      // 4b. Make EXACTLY ONE structured LLM call, bounded by
+      //     BRIEF_LLM_TIMEOUT_MS (M3).
       let raw: Brief;
       try {
         const result = await Promise.race([
@@ -159,12 +175,12 @@ export class BriefService {
         });
       }
 
-      // 7. Grounding gate (AC-4/AC-5) — mechanical path-set check.
+      // 4c. Grounding gate (AC-4/AC-5) — mechanical path-set check.
       const { brief: groundedRaw } = groundBrief(raw, knownPaths);
 
-      // 8. Mandatory re-validation before caching — the trust boundary for
-      //    untrusted-derived LLM output (mirrors intent/service.ts:117). A
-      //    parse failure is treated exactly like an LLM failure.
+      // 4d. Mandatory re-validation before caching — the trust boundary for
+      //     untrusted-derived LLM output (mirrors intent/service.ts:117). A
+      //     parse failure is treated exactly like an LLM failure.
       let brief: Brief;
       try {
         brief = Brief.parse(groundedRaw);
@@ -174,9 +190,9 @@ export class BriefService {
         });
       }
 
-      // 9. Cache against the head read INSIDE the lock (not the one read in
-      //    step 1) so a push that lands mid-generation can't cache a stale
-      //    head.
+      // 4e. Cache against the head read INSIDE the lock (not the one read in
+      //     step 1) so a push that lands mid-generation can't cache a stale
+      //     head.
       const headForCache = await txRepo.currentHead(prId);
       if (!headForCache) throw new NotFoundError('Pull request not found');
       await txRepo.upsert(prId, brief, headForCache);
