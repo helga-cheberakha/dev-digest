@@ -201,6 +201,70 @@ export class ProjectContextService {
   }
 
   // ---------------------------------------------------------------------------
+  // readAttachedDocs — Why+Risk Brief fact source (brief/service.ts)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Read the Context-Folder documents attached to the repo's active review
+   * agent, for injection into the Why+Risk Brief prompt (`brief/service.ts`).
+   *
+   * "Active review agent" has no dedicated flag in the schema — agents are
+   * workspace-scoped, not repo-scoped, so this resolves the oldest ENABLED
+   * agent in the workspace (`ORDER BY created_at ASC LIMIT 1`), the same
+   * heap-order-nondeterminism fix already applied to repo resolution
+   * elsewhere in this service (server/INSIGHTS.md 2026-07-07).
+   *
+   * Best-effort throughout, per the spec's fact-source contract: returns `[]`
+   * (never throws) when the repo isn't found, there is no enabled agent, the
+   * agent has no attached documents, or every attached path fails to read.
+   * A single unreadable/guard-rejected document is skipped, not fatal to the
+   * rest.
+   */
+  async readAttachedDocs(workspaceId: string, repoId: string): Promise<DocumentPreview[]> {
+    // 1. Resolve the repo (workspace-scoped tenancy guard).
+    const [repo] = await this.container.db
+      .select({ owner: t.repos.owner, name: t.repos.name })
+      .from(t.repos)
+      .where(and(eq(t.repos.workspaceId, workspaceId), eq(t.repos.id, repoId)));
+    if (!repo) return [];
+
+    // 2. Resolve the workspace's active review agent (deterministic fallback).
+    const [agent] = await this.container.db
+      .select({ id: t.agents.id })
+      .from(t.agents)
+      .where(and(eq(t.agents.workspaceId, workspaceId), eq(t.agents.enabled, true)))
+      .orderBy(asc(t.agents.createdAt))
+      .limit(1);
+    if (!agent) return [];
+
+    // 3. The agent's attached document paths, in attachment order.
+    let paths: string[];
+    try {
+      paths = await this.container.agentsRepo.documentsForAgent(agent.id);
+    } catch {
+      return [];
+    }
+    if (paths.length === 0) return [];
+
+    const repoRef = { owner: repo.owner, name: repo.name };
+    const clonePath = this.container.git.clonePathFor(repoRef);
+
+    // 4. Confine + read each path; skip individual failures (never fatal).
+    const docs: DocumentPreview[] = [];
+    for (const path of paths) {
+      const guard = await guardPath(path, clonePath);
+      if (!guard.ok) continue;
+      try {
+        const content = await this.container.git.readFile(repoRef, guard.path);
+        docs.push({ path: guard.path, content });
+      } catch {
+        // per-doc read failure — skip, best-effort
+      }
+    }
+    return docs;
+  }
+
+  // ---------------------------------------------------------------------------
   // saveDocument — AC-30, AC-31, AC-32
   // ---------------------------------------------------------------------------
 
