@@ -27,6 +27,7 @@ import type {
   CriticalPathEntry,
   HowToRunStep,
   ReadingPathEntry,
+  FirstTaskEntry,
 } from '@devdigest/shared';
 
 // ---- Constants ----
@@ -85,6 +86,15 @@ export interface SkeletonInput {
    * seeds when the indexer cannot provide ranked files.
    */
   readingSeeds: string[];
+  /**
+   * Genuinely-detected first tasks from detectGaps() / buildFirstTasks().
+   * Only populated on the narrativeUnavailable (LLM-failure) path, where gap
+   * detection ran against a real index before the LLM call failed.
+   * Left absent (undefined) on the degraded path — no index means no genuine
+   * detection is possible, so fabricating tasks is forbidden (AC-13).
+   * Must already satisfy schema .max(3) — buildFirstTasks caps at 3.
+   */
+  firstTasks?: FirstTaskEntry[];
 }
 
 // ---- Helpers ----
@@ -217,9 +227,11 @@ export function buildSkeleton(input: SkeletonInput): OnboardingArtifact {
       criticalPaths: resolvedCriticalPaths,
       howToRun,
       readingPath: resolvedReadingPath,
-      // firstTasks is omitted on the skeleton path — no genuine gap detection
-      // has been performed, so we must not fabricate tasks (AC-13).
-      firstTasks: undefined,
+      // firstTasks: supplied by the caller when genuine gap detection was
+      // performed before the LLM failure (narrativeUnavailable path).
+      // Absent (undefined) on the degraded path — no index = no genuine
+      // detection = must not fabricate tasks (AC-13).
+      firstTasks: input.firstTasks,
     },
   };
 

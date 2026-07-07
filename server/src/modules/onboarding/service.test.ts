@@ -487,6 +487,77 @@ describe('AC-9: LLM failure returns skeleton + narrativeUnavailable; prior cache
   });
 });
 
+// ─── AC-9c/d: firstTasks threading on narrativeUnavailable vs degraded paths ─
+
+describe('AC-9c/d: firstTasks threading on LLM-failure vs degraded paths', () => {
+  it(
+    'AC-9c: LLM error with genuine gaps → skeleton has narrativeUnavailable: true AND non-empty firstTasks',
+    async () => {
+      // Finding fix: genuinely-detected firstTasks must NOT be discarded on the
+      // narrativeUnavailable (LLM-error) path.
+      //
+      // Setup:
+      //   – topFiles contains a .ts source file with no test counterpart (no real
+      //     clone on disk → existingTestFiles is empty) → detectGaps finds a
+      //     missing_test gap → buildFirstTasks returns { kind: 'tasks', tasks }.
+      //   – The LLM mock throws (broken fixture fails schema validation inside
+      //     MockLLMProvider) → service catches and builds the skeleton.
+      //
+      // Expected: skeleton carries narrativeUnavailable: true AND non-empty
+      // sections.firstTasks (the pre-LLM detection result is preserved).
+      const throwingLLM = new MockLLMProvider('openai', {
+        structured: { broken: 'fixture-that-fails-schema' },
+      });
+
+      const { service } = makeService({
+        llm: throwingLLM,
+        topFiles: ['src/service.ts', 'src/routes.ts'],
+        criticalPaths: [['src/service.ts', 'src/routes.ts']],
+      });
+
+      const result = await service.generate(WORKSPACE_ID, REPO_ID);
+
+      expect(result.narrativeUnavailable).toBe(true);
+      expect(ArtifactSchema.safeParse(result).success).toBe(true);
+      // Pre-LLM gap detection found missing_test gaps → tasks must be present.
+      expect(result.sections.firstTasks).toBeDefined();
+      expect(result.sections.firstTasks!.length).toBeGreaterThan(0);
+      // All tasks must have the required shape (AC-13: no fabrication).
+      for (const task of result.sections.firstTasks!) {
+        expect(task.title).toBeTruthy();
+        expect(task.suggestedPath).toBeTruthy();
+        expect(task.gapType).toBeTruthy();
+        expect(task.rationale).toBeTruthy();
+      }
+    },
+  );
+
+  it(
+    'AC-9d: degraded-index path omits firstTasks even when gap detection ran',
+    async () => {
+      // AC-13 + AC-8: on the degraded path (index absent/degraded), firstTasks
+      // must remain undefined regardless of what firstTasksResult contains.
+      // The reviewer recommendation is explicit: "Keep the degraded-index path
+      // exactly as-is (no index ⇒ no genuine detection possible ⇒ firstTasks
+      // stays undefined there)."
+      //
+      // topFiles is non-empty so detectGaps would find a gap — but since the
+      // index is degraded, _buildSkeleton must not thread those tasks through.
+      const { service } = makeService({
+        isIndexDegraded: true,
+        topFiles: ['src/service.ts'],
+        criticalPaths: [['src/service.ts']],
+      });
+
+      const result = await service.generate(WORKSPACE_ID, REPO_ID);
+
+      expect(result.degraded).toBe(true);
+      expect(result.sections.firstTasks).toBeUndefined();
+      expect(ArtifactSchema.safeParse(result).success).toBe(true);
+    },
+  );
+});
+
 // ─── AC-13: genuine gap detection in First tasks ────────────────────────────
 
 describe('AC-13: genuine gap detection drives First tasks; covered fixture omits honestly', () => {

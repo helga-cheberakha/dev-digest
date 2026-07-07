@@ -880,6 +880,12 @@ export class OnboardingService {
       readingPath: deterministicReadingPath,
       topLevelDirs: facts.topLevelDirs,
       readingSeeds: facts.readingSeeds,
+      // Thread genuinely-detected firstTasks on the narrativeUnavailable path only.
+      // On the degraded path (flags.degraded) the index was absent, so no genuine
+      // gap detection was possible — firstTasks stays undefined there (AC-13).
+      ...(flags.narrativeUnavailable === true && firstTasksResult.kind === 'tasks'
+        ? { firstTasks: firstTasksResult.tasks }
+        : {}),
     };
 
     return buildSkeleton(skeletonInput);
