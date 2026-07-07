@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { SkillType, SkillSource } from '@devdigest/shared';
+import { eq } from 'drizzle-orm';
+import { SkillType, SkillSource, DocumentAttachment } from '@devdigest/shared';
+import * as t from '../../db/schema.js';
 import { getContext } from '../_shared/context.js';
 import { IdParams } from '../_shared/schemas.js';
 import { NotFoundError } from '../../platform/errors.js';
@@ -51,6 +53,8 @@ const ImportUrlBody = z.object({
  *   POST   /skills/:id/restore      → { version } → restore to that body version
  *   GET    /skills/:id/stats        → usage & finding stats
  *   POST   /skills/import           → { filename, content_base64 } → preview (no persist)
+ *   GET    /skills/:id/documents    → ordered attached document paths
+ *   POST   /skills/:id/documents    → replace full ordered set of attached documents
  */
 export default async function skillsRoutes(appBase: FastifyInstance) {
   const app = appBase.withTypeProvider<ZodTypeProvider>();
@@ -137,4 +141,46 @@ export default async function skillsRoutes(appBase: FastifyInstance) {
     if (!skillStats) throw new NotFoundError('Skill not found');
     return skillStats;
   });
+
+  // ---- document attachments (AC-6, AC-7, AC-8) ----------------------------
+
+  app.get('/skills/:id/documents', { schema: { params: IdParams } }, async (req) => {
+    const { workspaceId } = await getContext(app.container, req);
+    const docs = await service.getDocuments(workspaceId, req.params.id);
+    if (docs === undefined) throw new NotFoundError('Skill not found');
+    return { paths: docs } satisfies { paths: string[] };
+  });
+
+  /**
+   * Replace the full ordered set of attached document paths for a skill.
+   * Each path is validated against the workspace's active repo clone root (AC-8).
+   */
+  app.post(
+    '/skills/:id/documents',
+    { schema: { params: IdParams, body: DocumentAttachment } },
+    async (req) => {
+      const { workspaceId } = await getContext(app.container, req);
+
+      // Resolve the workspace's active repo clone root for path-guard validation.
+      // Follows the existing drift pattern (routes may query db/schema directly).
+      const [repoRow] = await app.container.db
+        .select({ owner: t.repos.owner, name: t.repos.name })
+        .from(t.repos)
+        .where(eq(t.repos.workspaceId, workspaceId))
+        .limit(1);
+
+      const cloneRoot = repoRow
+        ? app.container.git.clonePathFor({ owner: repoRow.owner, name: repoRow.name })
+        : '';
+
+      const docs = await service.setDocuments(
+        workspaceId,
+        req.params.id,
+        req.body.paths,
+        cloneRoot,
+      );
+      if (docs === undefined) throw new NotFoundError('Skill not found');
+      return { paths: docs } satisfies { paths: string[] };
+    },
+  );
 }

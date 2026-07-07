@@ -1,4 +1,4 @@
-import { and, count, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client.js';
 import * as t from '../../db/schema.js';
 
@@ -163,6 +163,33 @@ export class SkillsRepository {
       body: versionRow.body,
       message: `Restored from version ${version}`,
     });
+  }
+
+  // ---- skill_documents (ordered attachment list) ---------------------------
+
+  /** Ordered document paths for a skill, ascending by `order`. */
+  async documentsForSkill(skillId: string): Promise<string[]> {
+    const rows = await this.db
+      .select({ path: t.skillDocuments.path })
+      .from(t.skillDocuments)
+      .where(eq(t.skillDocuments.skillId, skillId))
+      .orderBy(asc(t.skillDocuments.order));
+    return rows.map((r) => r.path);
+  }
+
+  /**
+   * Replace the full ordered set of attached documents for a skill with `paths`,
+   * assigning order = index. Documents not in the list are removed.
+   * Mirrors `AgentsRepository.setSkills`.
+   */
+  async setDocuments(skillId: string, paths: string[]): Promise<void> {
+    await this.db
+      .delete(t.skillDocuments)
+      .where(eq(t.skillDocuments.skillId, skillId));
+    if (paths.length === 0) return;
+    await this.db
+      .insert(t.skillDocuments)
+      .values(paths.map((path, i) => ({ skillId, path, order: i })));
   }
 
   /** Usage and finding stats for a skill. */

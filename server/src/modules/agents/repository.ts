@@ -1,4 +1,4 @@
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, count, desc, eq } from 'drizzle-orm';
 import type { Db } from '../../db/client.js';
 import * as t from '../../db/schema.js';
 import type { CiFailOn, Provider, ReviewStrategy } from '@devdigest/shared';
@@ -232,5 +232,41 @@ export class AgentsRepository {
     await this.db
       .insert(t.agentSkills)
       .values(skillIds.map((skillId, i) => ({ agentId, skillId, order: i })));
+  }
+
+  // ---- agent_documents link table (AC-5, AC-9) ----------------------------
+
+  /** Ordered document paths attached to an agent. */
+  async documentsForAgent(agentId: string): Promise<string[]> {
+    const rows = await this.db
+      .select({ path: t.agentDocuments.path })
+      .from(t.agentDocuments)
+      .where(eq(t.agentDocuments.agentId, agentId))
+      .orderBy(asc(t.agentDocuments.order));
+    return rows.map((r) => r.path);
+  }
+
+  /**
+   * Replace the full set of attached document paths for an agent with `paths`,
+   * assigning order = index. Mirrors setSkills — replaces the whole ordered set.
+   */
+  async setDocuments(agentId: string, paths: string[]): Promise<void> {
+    await this.db.delete(t.agentDocuments).where(eq(t.agentDocuments.agentId, agentId));
+    if (paths.length === 0) return;
+    await this.db
+      .insert(t.agentDocuments)
+      .values(paths.map((path, i) => ({ agentId, path, order: i })));
+  }
+
+  /**
+   * How many agents currently attach this document path (AC-9 "used by N agents").
+   * Backed by the secondary index on `agent_documents.path`.
+   */
+  async usedByAgentsCount(path: string): Promise<number> {
+    const [row] = await this.db
+      .select({ cnt: count() })
+      .from(t.agentDocuments)
+      .where(eq(t.agentDocuments.path, path));
+    return Number(row?.cnt ?? 0);
   }
 }

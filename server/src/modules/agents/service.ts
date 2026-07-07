@@ -1,3 +1,4 @@
+import { eq } from 'drizzle-orm';
 import type { Container } from '../../platform/container.js';
 import type {
   Agent,
@@ -8,6 +9,9 @@ import type {
   Provider,
   ReviewStrategy,
 } from '@devdigest/shared';
+import { repos } from '../../db/schema.js';
+import { ValidationError } from '../../platform/errors.js';
+import { guardPath } from '../project-context/path-guard.js';
 import { AgentsRepository } from './repository.js';
 import { toAgentDto, toAgentVersionDto } from './helpers.js';
 
@@ -182,5 +186,70 @@ export class AgentsService {
     } catch {
       return [];
     }
+  }
+
+  // ---- document attachment (AC-5, AC-8, AC-9) ------------------------------
+
+  /**
+   * Ordered document paths attached to an agent (workspace-scoped).
+   * Returns undefined when the agent does not exist in this workspace.
+   */
+  async getDocuments(workspaceId: string, agentId: string): Promise<string[] | undefined> {
+    const agent = await this.repo.getById(workspaceId, agentId);
+    if (!agent) return undefined;
+    return this.repo.documentsForAgent(agentId);
+  }
+
+  /**
+   * Replace the agent's attached document paths. Each path is validated via
+   * the path-guard before persisting. If any path is invalid the entire request
+   * is rejected and nothing is persisted (AC-8).
+   *
+   * Returns the persisted ordered paths, or undefined when the agent does not
+   * exist in this workspace.
+   */
+  async setDocuments(
+    workspaceId: string,
+    agentId: string,
+    paths: string[],
+  ): Promise<string[] | undefined> {
+    const agent = await this.repo.getById(workspaceId, agentId);
+    if (!agent) return undefined;
+
+    const cloneRoot = await this.resolveCloneRoot(workspaceId);
+
+    // Validate ALL paths first — reject the whole request if any fail (AC-8).
+    const failures: string[] = [];
+    const normalizedPaths: string[] = [];
+    for (const path of paths) {
+      const result = await guardPath(path, cloneRoot);
+      if (!result.ok) {
+        failures.push(`"${path}": ${result.reason}`);
+      } else {
+        normalizedPaths.push(result.path);
+      }
+    }
+
+    if (failures.length > 0) {
+      throw new ValidationError('Invalid document paths', failures);
+    }
+
+    await this.repo.setDocuments(agentId, normalizedPaths);
+    return this.repo.documentsForAgent(agentId);
+  }
+
+  /**
+   * Resolve the absolute clone root for the workspace's first repo.
+   * Returns an empty string when no repo exists — guardPath will then fail on
+   * rule 5 (realpath) for any candidate, which is the correct fail-safe.
+   */
+  private async resolveCloneRoot(workspaceId: string): Promise<string> {
+    const [repo] = await this.container.db
+      .select({ owner: repos.owner, name: repos.name })
+      .from(repos)
+      .where(eq(repos.workspaceId, workspaceId))
+      .limit(1);
+    if (!repo) return '';
+    return this.container.git.clonePathFor({ owner: repo.owner, name: repo.name });
   }
 }

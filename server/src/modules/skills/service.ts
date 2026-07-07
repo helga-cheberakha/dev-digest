@@ -6,6 +6,7 @@ import type { SkillStats } from './repository.js';
 import { toSkillDto, toSkillVersionDto } from './helpers.js';
 import { ValidationError } from '../../platform/errors.js';
 import { detectInjection } from './injection-detector.js';
+import { guardPath } from '../project-context/path-guard.js';
 
 export type { SkillStats };
 
@@ -126,6 +127,47 @@ export class SkillsService {
     if (!skill) return undefined;
     const row = await this.repo.restore(workspaceId, skillId, version);
     return row ? toSkillDto(row) : undefined;
+  }
+
+  // ---- document attachments ------------------------------------------------
+
+  /**
+   * Ordered document paths attached to a skill. Returns undefined when the skill
+   * is not found in this workspace (route maps to 404).
+   */
+  async getDocuments(workspaceId: string, skillId: string): Promise<string[] | undefined> {
+    const skill = await this.repo.getById(workspaceId, skillId);
+    if (!skill) return undefined;
+    return this.repo.documentsForSkill(skillId);
+  }
+
+  /**
+   * Replace the full ordered set of attached documents for a skill. Every path is
+   * validated via the path-guard (AC-8) before persisting. Returns undefined when
+   * the skill is not found. Throws ValidationError if any path fails the guard.
+   */
+  async setDocuments(
+    workspaceId: string,
+    skillId: string,
+    paths: string[],
+    cloneRoot: string,
+  ): Promise<string[] | undefined> {
+    const skill = await this.repo.getById(workspaceId, skillId);
+    if (!skill) return undefined;
+
+    const validated: string[] = [];
+    for (const candidate of paths) {
+      const result = await guardPath(candidate, cloneRoot);
+      if (!result.ok) {
+        throw new ValidationError(
+          `Invalid document path "${candidate}": ${result.reason}`,
+        );
+      }
+      validated.push(result.path);
+    }
+
+    await this.repo.setDocuments(skillId, validated);
+    return this.repo.documentsForSkill(skillId);
   }
 
   /** Usage and finding stats for a skill. Returns undefined when not found. */
