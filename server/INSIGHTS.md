@@ -10,6 +10,8 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 ## What Doesn't Work
 
+- **2026-07-07 (onboarding)** — Hard-coding empty sections in an LLM-failure fallback throws away completed work: onboarding's `narrativeUnavailable` skeleton set `firstTasks: undefined` even though gap detection had already run deterministically BEFORE the LLM call — genuinely detected First Tasks vanished exactly when the deterministic fallback mattered most. Pattern: an LLM-failure skeleton must carry over every section computed pre-LLM; only the degraded-index path (no facts available) may omit them. Evidence: `server/src/modules/onboarding/service.ts` (`_buildSkeleton`), `analyzers/skeleton.ts`; fixed in commit `469e93f`.
+
 - **2026-07-07** — Resolving "the workspace's repo" with `SELECT … FROM repos WHERE workspace_id = ? LIMIT 1` and no `ORDER BY` is heap-order nondeterministic — live verification got a seed repo whose clone didn't exist on disk, failing attach-time path validation. Pattern now: accept an explicit `repoId` (threaded from the client's `useActiveRepo`), else fall back to `ORDER BY createdAt` preferring a repo whose clone dir `stat()`s. Evidence: `server/src/modules/agents/service.ts` (`resolveCloneRoot`).
 
 ## Codebase Patterns
@@ -33,6 +35,8 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 ## Tool & Library Notes
 
+- **2026-07-07** — `@fastify/rate-limit` is registered only when `config.nodeEnv !== 'test'`, so route tests asserting 429s must build the app with `loadConfig({ NODE_ENV: 'development', LOG_LEVEL: 'silent' })` — under the default test env the limiter silently never engages and the 11th request returns 200. Also: a per-route `config.rateLimit.keyGenerator` receives the RAW `FastifyRequest` (params not yet typed by ZodTypeProvider) — cast `req.params`. Evidence: `server/src/app.ts:96`, `server/src/modules/onboarding/routes.test.ts`, `server/src/modules/onboarding/routes.ts`.
+
 - **2026-07-06** — Drizzle's `selectDistinct()` is a separate method from `select()` — the no-DB mock in `blast-route.test.ts` stubs only `select()`, so any test that reaches `BlastRepository.findPriorPrsTouchingSameFiles` on a mock db throws. The route survives because the PR lookup 404s before the repository is called; a future happy-path smoke test with a mock db must also stub `selectDistinct` (and `innerJoin` chaining). Evidence: `server/src/modules/blast/repository.ts`, `server/test/blast-route.test.ts`.
 - **2026-06-14** — New DB columns: edit `db/schema/*.ts`, then `npm run db:generate` (drizzle-kit) auto-generates `00NN_*.sql` (e.g. `0010_solid_baron_zemo.sql` = `ALTER TABLE … ADD COLUMN`). Never hand-write migration SQL; apply with `npm run db:migrate`.
 - **2026-06-25** — **Supersedes above for column renames:** `drizzle-kit generate` opens an interactive TTY prompt when it detects a possible column rename — piping input doesn't work in non-TTY environments. For renames, write the migration SQL manually (use `ALTER TABLE … RENAME COLUMN old TO new`) and add a matching entry to `meta/_journal.json` with the next `idx`. Evidence: `server/src/db/migrations/0014_intent_layer.sql`, `server/src/db/migrations/meta/_journal.json`.
@@ -43,12 +47,19 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 ## Recurring Errors & Fixes
 
+- **2026-07-07** — A `*/` sequence inside a JSDoc comment (even wrapped in backticks, e.g. documenting a glob or `test file suffix`) terminates the `/* … */` block comment early — the rest of the file then parses as garbage (here: an unterminated template literal) with tsc errors pointing far from the real cause. Fix: never write `*/` inside a block comment; spell it out (e.g. `(* slash)`). Evidence: `server/src/modules/onboarding/service.ts` (`checkDocCoverage` docblock).
+
 - **2026-06-14** — Adding a required field to a Zod contract (`RunStats.cost_usd`) breaks the inline fixture in `server/test/contracts.test.ts` (RunTrace parse). Update the `stats: {…}` fixture in the same change. Evidence: `server/test/contracts.test.ts:160`.
 - **2026-07-07** — `db/migrations/meta/` is missing snapshots 0012–0014, so `db:generate` diffs the schema against snapshot 0011 and re-detects historical column renames — an interactive TTY prompt plus already-applied ALTERs leak into the new migration. Workaround used for 0015: answer prompts via an `expect` PTY, then strip everything but the genuinely new statements from the generated SQL. `0015_snapshot.json` now captures the full 42-table schema, so future generates diff cleanly. Evidence: `server/src/db/migrations/meta/_journal.json`, `0015_careless_famine.sql`.
 - **2026-07-07** — A running dev server does NOT auto-apply new migrations: after a schema-adding commit, routes touching the new tables 500 with `relation "…" does not exist` until a manual `cd server && npm run db:migrate`. If a brand-new endpoint 500s with `internal_error`, check for unapplied migrations first. Evidence: live verification of `agent_documents`/`skill_documents` (migration 0015).
 - **2026-06-25** — `reviews/repository/pull.repo.ts` contains hidden `upsertIntent`/`getIntent` helpers that mirror the `Intent` contract shape. When `Intent` fields are renamed (e.g. `intent` → `summary`), this file must be updated alongside the contract — it's easy to miss because it lives inside the `reviews` module, not in `modules/intent/`. Evidence: `server/src/modules/reviews/repository/pull.repo.ts:49-68`.
 
 ## Session Notes
+
+### 2026-07-07 (Onboarding Generator)
+- Built the Onboarding Generator per `specs/SPEC-2026-07-07-onboarding-generator.md` via the full SDD pipeline (spec-creator → implementation-planner → GPT-5 cross-model plan review (REQUEST CHANGES, all findings folded in) → 16-task multi-agent /implement → architecture-reviewer + plan-verifier gate): new `modules/onboarding/` (10 pure I/O-free analyzers + repository + 13-step service orchestrator + routes), additive `head_sha` migration 0016, `OnboardingArtifact` contract in both vendor mirrors with `.max()`-only caps so degraded 0-entry skeletons still `.parse()`.
+- Key decisions: hotness from path-scoped `git.log` bounded to top-N rank candidates with the 90-day filter inside `hotness.ts` (no repoIntel facade change needed); `getFeatureModelOverride` → 422 (never `resolveFeatureModel`'s silent default); grounding gate → `OnboardingArtifact.parse()` → upsert ordering; per-repo in-memory lock dedupes only the LLM call — fact-collection I/O still duplicates under concurrency (accepted local-first limit; lock is acquired after fact collection).
+- 112 module tests derived from spec AC observables (analyzers unit + no-DB service/routes integration), not from the implementation.
 
 ### 2026-07-07 (Project Context — in-app document editing)
 - Added the feature's first on-disk write surface: `PUT /project-context/documents` → `ProjectContextService.saveDocument` (repo resolution copied verbatim from `previewDocument` — extraction into a shared helper flagged by review, LOW) → `guardPath` → new additive `GitClient.writeFile` port implemented as temp-file+rename in `SimpleGitClient` (no partial write, AC-32). Edits are clone-local and ephemeral by decision: the next `git.sync()` `reset --hard` discards them (AC-31/AC-33).

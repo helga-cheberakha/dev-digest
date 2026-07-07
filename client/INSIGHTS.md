@@ -6,6 +6,8 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 ## What Works
 
+- **2026-07-07** — "Resource not generated yet" tri-state: catch the 404 in the fetcher (`ApiError.status === 404` → return `null`) so TanStack Query lands in the success state with `data === null` — the page then branches cleanly: `null` → first-visit CTA, data → content, `isError` → genuine failure only. No error-object probing in components. Evidence: `client/src/lib/api.ts` (`fetchOnboarding`), `client/src/lib/hooks/onboarding.ts`.
+
 - **2026-06-14** — `formatCost` (`src/lib/cost.ts`) distinguishes MISSING data (`null`/`undefined` → "—") from a genuine zero (`0` → "$0.00"), widens precision for sub-cent values (~2 sig figs), and trims trailing zeros to a 2dp floor ("$0.06" not "$0.060", "$0.0013" not "$0.00"). Reuse it for any per-run money display.
 
 ## What Doesn't Work
@@ -19,6 +21,8 @@ so the next agent/session doesn't relearn it. Append-only — see the
 - **2026-06-17** — The PR-list `tableCard` has `overflow: "hidden"` (`pulls/styles.ts`) which CLIPS absolutely-positioned hover popovers (`FindingsHoverCard`) opening downward from the bottom rows; upper rows render fine (matching the design). `FindingsHoverCard` is dependency-free (anchor wrapper + `position:absolute` panel) — to fully escape the card it would need a portal + `position:fixed` from the anchor's `getBoundingClientRect`. Deferred; not needed for the common case. Evidence: `client/src/components/FindingsHoverCard/`, `pulls/styles.ts:97`.
 
 ## Codebase Patterns
+
+- **2026-07-07** — Sidebar nav is split across two files: `vendor/ui/nav.ts` only declares items/hrefs (`:repoId`-templated); the active-state predicate is `activeKeyFor` in `components/app-shell/helpers.ts` — NOT in nav.ts (plan docs mislocated it there). Two routes sharing a trailing segment (`/onboarding` add-repo wizard vs `/repos/:id/onboarding` tour) cross-highlight unless the predicate is path-specific (`pathname.includes("/repos/") && pathname.endsWith("/onboarding")`). Evidence: `client/src/components/app-shell/helpers.ts:29`, `client/src/vendor/ui/nav.ts`.
 
 - **2026-06-25** — `DiffTab`'s smart/original toggle uses a `useRef` flag (`defaultedRef.current`) to flip the view to `"smart"` exactly once when `smartDiff` data first arrives, without re-flipping if the user switches back to original. A plain `useEffect([smartDiff])` without the ref would re-apply the default on every remount or data refresh. Evidence: `client/src/app/repos/[repoId]/pulls/[number]/_components/DiffTab/DiffTab.tsx`.
 - **2026-06-25** — `navigateToFinding(findingId)` in `page.tsx` sets BOTH `tab=findings` AND `finding=<id>` in a single `router.replace` to avoid double navigation that calling `setParam` twice would cause. Evidence: `client/src/app/repos/[repoId]/pulls/[number]/page.tsx`.
@@ -40,6 +44,8 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 ## Tool & Library Notes
 
+- **2026-07-07** — jsdom also lacks `IntersectionObserver` (the shared test setup stubs neither it nor `ResizeObserver`) — scroll-spy components crash in tests unless the test file defines a minimal class stub on `globalThis` before render, same pattern as the ResizeObserver entry below. Evidence: `client/src/app/repos/[repoId]/onboarding/_components/OnboardingTourView/OnboardingTourView.test.tsx`.
+
 - **2026-07-06** — `@testing-library/user-event` is NOT in client's package.json — component tests must use `fireEvent` from `@testing-library/react` for clicks/keys (established pattern: `BlastTab.test.tsx`). Don't write `userEvent.setup()` from RTL-skill muscle memory; it fails at import. Evidence: `client/src/app/repos/[repoId]/pulls/[number]/_components/OverviewTab/BlastRadiusSection.test.tsx`.
 - **2026-07-06** — jsdom has no `ResizeObserver` and no global stub exists in the client test setup — any component that instantiates one (e.g. to measure an SVG canvas) crashes its tests unless the test file defines a minimal stub (`class { observe(){} unobserve(){} disconnect(){} }`) on `globalThis` before render. Evidence: `client/src/app/repos/[repoId]/pulls/[number]/_components/OverviewTab/BlastGraphLightbox.test.tsx`.
 - **2026-06-25** — Design system color tokens (defined in `vendor/ui/styles.css`): green = `--ok` / `--ok-bg`, red = `--crit` / `--crit-bg`, amber/warning = `--warn` / `--warn-bg`. There is NO `--green`, `--red`, or `--amber` — using them silently produces invalid CSS (no color). Spin animation is `ddspin`, not `spin` (`@keyframes ddspin` at line 225). Evidence: `client/src/vendor/ui/styles.css:25-35,225`.
@@ -51,6 +57,10 @@ so the next agent/session doesn't relearn it. Append-only — see the
 - **2026-06-30** — React warns when `borderColor` (shorthand) and `borderLeftColor` (longhand) appear in the same style object — both affect the same CSS property and React detects the conflict on re-render. Fix: replace `borderColor` with three explicit longhands (`borderTopColor`, `borderRightColor`, `borderBottomColor`) and keep `borderLeftColor` unchanged. Evidence: `client/src/app/repos/[repoId]/pulls/[number]/_components/FindingCard/styles.ts:12-15`.
 
 ## Session Notes
+
+### 2026-07-07 (Onboarding Tour UI)
+- Built the tour page `repos/[repoId]/onboarding` (multi-agent /implement, tasks T12/T13/T16): five collapsible cards + sticky scroll-spy nav + header, hand-rolled SVG architecture diagram (bounded BFS, max n²+n iterations against cyclic data), blob links `target=_blank`, clipboard copy/share, first-visit "Generate tour" CTA that POSTs only on explicit click (never auto-POST on mount — avoids un-consented LLM spend and a naked 422 when no model is selected), degraded badge via `role="status"` + text (not colour-only).
+- New `onboardingTour` i18n namespace — `onboarding.json` belongs to the add-repo wizard; nav item + path-specific `activeKeyFor` so the two `/onboarding`-suffixed routes don't cross-highlight. 11 component tests from AC observables; 129 client tests green.
 
 ### 2026-07-07 (Project Context — Edit & Preview drawer)
 - Two spec deltas implemented (multi-agent /implement): Project Context page gained a Preview/Edit toggle (`textarea` seeded from the preview read, `role="alert"` ephemerality warning shown only in Edit mode, `aria-live` save status with 2.5s auto-clear, tab resets to Preview on doc switch); both editor Context tabs' preview replaced with a vendor `Drawer` + `SafeMarkdown` (AC-27). `useSaveDocument` does `setQueryData` (instant) then invalidates preview + discovery (token/size refresh, AC-31).
