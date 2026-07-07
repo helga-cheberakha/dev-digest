@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, integer, boolean, jsonb, primaryKey } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, integer, boolean, jsonb, primaryKey, index } from 'drizzle-orm/pg-core';
 import { now } from './_shared';
 import { workspaces } from './core';
 
@@ -33,4 +33,25 @@ export const skillVersions = pgTable(
     createdAt: now(),
   },
   (t) => ({ pk: primaryKey({ columns: [t.skillId, t.version] }) }),
+);
+
+/**
+ * Ordered list of markdown document paths attached to a skill.
+ * Documents are repo files (paths, not DB entities) — `path` is the entity key.
+ * PK leads with skillId so the FK column is index-covered by the PK.
+ * Secondary index on `path` backs the AC-9 "used by N agents" COUNT query.
+ */
+export const skillDocuments = pgTable(
+  'skill_documents',
+  {
+    skillId: uuid('skill_id')
+      .notNull()
+      .references(() => skills.id, { onDelete: 'cascade' }),
+    path: text('path').notNull(),
+    order: integer('order').notNull().default(0),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.skillId, t.path] }),
+    pathIdx: index('skill_documents_path_idx').on(t.path),
+  }),
 );

@@ -22,6 +22,8 @@ import type {
   UnifiedDiff,
   BlameLine,
   GitCommit,
+  ListDocsOptions,
+  ListDocsEntry,
   CodeIndex,
   CodeMatch,
   CodeSymbol,
@@ -249,6 +251,8 @@ export interface MockGitOptions {
   head?: string;
   /** Head `currentHead()` returns AFTER `sync()` runs — simulates fetch+reset advancing HEAD. */
   syncedHead?: string;
+  /** Pre-canned `listDocs` response (default `[]`). */
+  docs?: ListDocsEntry[];
 }
 
 export class MockGitClient implements GitClient {
@@ -292,6 +296,9 @@ export class MockGitClient implements GitClient {
   }
   async readFile(_repo: RepoRef, path: string): Promise<string> {
     return this.opts.files?.[path] ?? '';
+  }
+  async listDocs(_repo: RepoRef, _opts?: ListDocsOptions): Promise<ListDocsEntry[]> {
+    return this.opts.docs ?? [];
   }
 }
 
