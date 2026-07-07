@@ -136,7 +136,7 @@ export function ContextTab({ skillId }: { skillId: string }) {
     }
   }, [attachment]);
 
-  const { data: previewData, isLoading: previewLoading } = useDocumentPreview(previewPath);
+  const { data: previewData, isLoading: previewLoading } = useDocumentPreview(previewPath, repoId);
 
   if (discoveryLoading || attachLoading) return <Skeleton height={200} />;
 
@@ -164,9 +164,9 @@ export function ContextTab({ skillId }: { skillId: string }) {
   const toggleAttach = (path: string) => {
     const next = attachedSet.has(path)
       ? orderedPaths.filter((p) => p !== path)
-      : [...orderedPaths, path];
+      : [...new Set([...orderedPaths, path])];
     setOrderedPaths(next);
-    setDocs.mutate({ skillId, paths: next });
+    setDocs.mutate({ skillId, paths: next, repoId: repoId ?? undefined });
   };
 
   const handleDragStart = (idx: number) => {
@@ -183,7 +183,7 @@ export function ContextTab({ skillId }: { skillId: string }) {
     dragItem.current = null;
     dragOverItem.current = null;
     setOrderedPaths(next);
-    setDocs.mutate({ skillId, paths: next });
+    setDocs.mutate({ skillId, paths: next, repoId: repoId ?? undefined });
   };
 
   return (

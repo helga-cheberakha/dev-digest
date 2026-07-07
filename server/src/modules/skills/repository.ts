@@ -183,13 +183,13 @@ export class SkillsRepository {
    * Mirrors `AgentsRepository.setSkills`.
    */
   async setDocuments(skillId: string, paths: string[]): Promise<void> {
-    await this.db
-      .delete(t.skillDocuments)
-      .where(eq(t.skillDocuments.skillId, skillId));
-    if (paths.length === 0) return;
-    await this.db
-      .insert(t.skillDocuments)
-      .values(paths.map((path, i) => ({ skillId, path, order: i })));
+    await this.db.transaction(async (tx) => {
+      await tx.delete(t.skillDocuments).where(eq(t.skillDocuments.skillId, skillId));
+      if (paths.length === 0) return;
+      await tx
+        .insert(t.skillDocuments)
+        .values(paths.map((path, i) => ({ skillId, path, order: i })));
+    });
   }
 
   /** Usage and finding stats for a skill. */

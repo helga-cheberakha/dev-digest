@@ -33,6 +33,12 @@ const DiscoveryQuery = z.object({
 const PreviewQuery = z.object({
   /** A repo-relative path to the document (e.g. "specs/api.md"). */
   path: z.string().min(1),
+  /**
+   * Optional repository UUID (workspace-scoped). When provided the preview is
+   * resolved against that specific repo. When absent a deterministic fallback
+   * (oldest repo with an existing clone) is used.
+   */
+  repoId: z.string().uuid().optional(),
 });
 
 // ---- Plugin ----
@@ -68,7 +74,7 @@ export default async function projectContextRoutes(appBase: FastifyInstance) {
     { schema: { querystring: PreviewQuery } },
     async (req, reply) => {
       const { workspaceId } = await getContext(app.container, req);
-      const result = await service.previewDocument(workspaceId, req.query.path);
+      const result = await service.previewDocument(workspaceId, req.query.path, req.query.repoId);
       if (!result.ok) {
         throw new ValidationError(result.reason);
       }

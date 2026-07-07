@@ -144,6 +144,22 @@ describe('ProjectContextService – discoverDocuments', () => {
     expect(result.documents).toHaveLength(3);
   });
 
+  it('includes .md files where the context root appears at any depth (AC-1)', async () => {
+    // packages/api/specs/foo.md — `specs` is at depth 2
+    const listDocsResult = [
+      { path: 'packages/api/specs/foo.md', sizeBytes: 120 },
+      { path: 'src/app.md', sizeBytes: 50 },  // no context root at any depth → excluded
+    ];
+    const container = makeDiscoveryContainer({ listDocsResult });
+    const service = new ProjectContextService(container);
+
+    const result = await service.discoverDocuments('ws-1', 'repo-id-1');
+
+    const paths = result.documents.map((d) => d.path);
+    expect(paths).toContain('packages/api/specs/foo.md');
+    expect(paths).not.toContain('src/app.md');
+  });
+
   it('populates correct fields for each DiscoveredDocument (AC-1)', async () => {
     const listDocsResult = [{ path: 'specs/sub/api.md', sizeBytes: 400 }];
     const container = makeDiscoveryContainer({ listDocsResult, usedByCount: 2 });
@@ -161,6 +177,21 @@ describe('ProjectContextService – discoverDocuments', () => {
     // est_tokens = ceil(400 / 4) = 100
     expect(doc.est_tokens).toBe(100);
     expect(doc.used_by_agents).toBe(2);
+  });
+
+  it('derives folder_kind from the nearest (deepest) matching ancestor segment', async () => {
+    // packages/api/docs/guide.md — nearest root is `docs` (deepest match)
+    const listDocsResult = [{ path: 'packages/api/docs/guide.md', sizeBytes: 200 }];
+    const container = makeDiscoveryContainer({ listDocsResult });
+    const service = new ProjectContextService(container);
+
+    const result = await service.discoverDocuments('ws-1', 'repo-id-1');
+
+    expect(result.documents).toHaveLength(1);
+    const doc = result.documents[0]!;
+    expect(doc.folder_kind).toBe('docs');
+    expect(doc.parent_path).toBe('packages/api/docs');
+    expect(doc.name).toBe('guide.md');
   });
 
   it('returns truncated:false when under the cap', async () => {
@@ -223,8 +254,9 @@ describe('ProjectContextService – previewDocument', () => {
     const repoRow = opts.repoRow === undefined ? { owner: 'o', name: 'r' } : opts.repoRow;
     const repoResult: RepoRow[] = repoRow === null ? [] : [repoRow];
 
-    const limitFn = vi.fn().mockResolvedValue(repoResult);
-    const whereFn = vi.fn().mockReturnValue({ limit: limitFn });
+    // previewDocument without repoId uses .orderBy() (deterministic fallback).
+    const orderByFn = vi.fn().mockResolvedValue(repoResult);
+    const whereFn = vi.fn().mockReturnValue({ orderBy: orderByFn });
     const fromFn = vi.fn().mockReturnValue({ where: whereFn });
     const selectFn = vi.fn().mockReturnValue({ from: fromFn });
     const db = { select: selectFn } as unknown as Db;

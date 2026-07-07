@@ -1,9 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { eq } from 'drizzle-orm';
 import { SkillType, SkillSource, DocumentAttachment } from '@devdigest/shared';
-import * as t from '../../db/schema.js';
 import { getContext } from '../_shared/context.js';
 import { IdParams } from '../_shared/schemas.js';
 import { NotFoundError } from '../../platform/errors.js';
@@ -153,31 +151,20 @@ export default async function skillsRoutes(appBase: FastifyInstance) {
 
   /**
    * Replace the full ordered set of attached document paths for a skill.
-   * Each path is validated against the workspace's active repo clone root (AC-8).
+   * Clone-root resolution and path-guard validation are delegated to the service
+   * (AC-8). The optional `repoId` from the request body is forwarded so the
+   * service can scope to the correct repo clone.
    */
   app.post(
     '/skills/:id/documents',
     { schema: { params: IdParams, body: DocumentAttachment } },
     async (req) => {
       const { workspaceId } = await getContext(app.container, req);
-
-      // Resolve the workspace's active repo clone root for path-guard validation.
-      // Follows the existing drift pattern (routes may query db/schema directly).
-      const [repoRow] = await app.container.db
-        .select({ owner: t.repos.owner, name: t.repos.name })
-        .from(t.repos)
-        .where(eq(t.repos.workspaceId, workspaceId))
-        .limit(1);
-
-      const cloneRoot = repoRow
-        ? app.container.git.clonePathFor({ owner: repoRow.owner, name: repoRow.name })
-        : '';
-
       const docs = await service.setDocuments(
         workspaceId,
         req.params.id,
         req.body.paths,
-        cloneRoot,
+        req.body.repoId,
       );
       if (docs === undefined) throw new NotFoundError('Skill not found');
       return { paths: docs } satisfies { paths: string[] };

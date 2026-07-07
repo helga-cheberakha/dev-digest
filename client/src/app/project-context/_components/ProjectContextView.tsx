@@ -41,10 +41,12 @@ function AgentAttachRow({
   agentId,
   agentName,
   docPath,
+  repoId,
 }: {
   agentId: string;
   agentName: string;
   docPath: string;
+  repoId?: string | null;
 }) {
   const t = useTranslations("project-context");
   const { data: docs } = useAgentDocuments(agentId);
@@ -55,8 +57,8 @@ function AgentAttachRow({
     const current = docs?.paths ?? [];
     const newPaths = isAttached
       ? current.filter((p) => p !== docPath)
-      : [...current, docPath];
-    setDocs.mutate({ agentId, paths: newPaths });
+      : [...new Set([...current, docPath])];
+    setDocs.mutate({ agentId, paths: newPaths, repoId });
   };
 
   return (
@@ -90,10 +92,12 @@ function SkillAttachRow({
   skillId,
   skillName,
   docPath,
+  repoId,
 }: {
   skillId: string;
   skillName: string;
   docPath: string;
+  repoId?: string | null;
 }) {
   const t = useTranslations("project-context");
   const { data: docs } = useSkillDocuments(skillId);
@@ -104,8 +108,8 @@ function SkillAttachRow({
     const current = docs?.paths ?? [];
     const newPaths = isAttached
       ? current.filter((p) => p !== docPath)
-      : [...current, docPath];
-    setDocs.mutate({ skillId, paths: newPaths });
+      : [...new Set([...current, docPath])];
+    setDocs.mutate({ skillId, paths: newPaths, repoId });
   };
 
   return (
@@ -146,7 +150,7 @@ export function ProjectContextView() {
   const [filter, setFilter] = React.useState("");
   const [selectedPath, setSelectedPath] = React.useState<string | null>(null);
 
-  const { data: preview, isLoading: previewLoading } = useDocumentPreview(selectedPath);
+  const { data: preview, isLoading: previewLoading } = useDocumentPreview(selectedPath, repoId);
 
   const allDocs: DiscoveredDocument[] = discovery?.documents ?? [];
 
@@ -454,6 +458,7 @@ export function ProjectContextView() {
                         agentId={agent.id}
                         agentName={agent.name}
                         docPath={selectedDoc.path}
+                        repoId={repoId}
                       />
                     ))
                   )}
@@ -484,6 +489,7 @@ export function ProjectContextView() {
                         skillId={skill.id}
                         skillName={skill.name}
                         docPath={selectedDoc.path}
+                        repoId={repoId}
                       />
                     ))
                   )}

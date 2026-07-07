@@ -40,11 +40,11 @@ describe('AgentsRepository – document attachment', () => {
     it('persists paths in order and retrieves them ordered', async () => {
       const paths = ['specs/api.md', 'docs/guide.md', 'insights/notes.md'];
 
-      // Drizzle chain for delete().where()
+      // Drizzle chain for delete().where() — called via tx
       const deleteWhereFn = vi.fn().mockResolvedValue(undefined);
       const deleteFn = vi.fn().mockReturnValue({ where: deleteWhereFn });
 
-      // Drizzle chain for insert().values()
+      // Drizzle chain for insert().values() — called via tx
       const insertValuesFn = vi.fn().mockResolvedValue([]);
       const insertFn = vi.fn().mockReturnValue({ values: insertValuesFn });
 
@@ -60,6 +60,10 @@ describe('AgentsRepository – document attachment', () => {
         delete: deleteFn,
         insert: insertFn,
         select: selectFn,
+        // setDocuments wraps delete+insert in a transaction
+        transaction: vi.fn().mockImplementation(async (cb: (tx: unknown) => Promise<void>) =>
+          cb({ delete: deleteFn, insert: insertFn }),
+        ),
       } as unknown as Db;
 
       const repo = new AgentsRepository(db);
@@ -67,7 +71,11 @@ describe('AgentsRepository – document attachment', () => {
       await repo.setDocuments('agent-1', paths);
       const result = await repo.documentsForAgent('agent-1');
 
-      // Verify delete was called (replaces whole set)
+      // Verify transaction was used
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((db as any).transaction).toHaveBeenCalledOnce();
+
+      // Verify delete was called (replaces whole set) inside the transaction
       expect(deleteFn).toHaveBeenCalledOnce();
       expect(deleteWhereFn).toHaveBeenCalledOnce();
 
@@ -85,13 +93,37 @@ describe('AgentsRepository – document attachment', () => {
       const deleteWhereFn = vi.fn().mockResolvedValue(undefined);
       const deleteFn = vi.fn().mockReturnValue({ where: deleteWhereFn });
       const insertFn = vi.fn();
-      const db = { delete: deleteFn, insert: insertFn } as unknown as Db;
+      const db = {
+        delete: deleteFn,
+        insert: insertFn,
+        transaction: vi.fn().mockImplementation(async (cb: (tx: unknown) => Promise<void>) =>
+          cb({ delete: deleteFn, insert: insertFn }),
+        ),
+      } as unknown as Db;
 
       const repo = new AgentsRepository(db);
       await repo.setDocuments('agent-1', []);
 
       expect(deleteFn).toHaveBeenCalledOnce();
       expect(insertFn).not.toHaveBeenCalled();
+    });
+
+    it('wraps delete and insert in a transaction (atomicity)', async () => {
+      const deleteWhereFn = vi.fn().mockResolvedValue(undefined);
+      const deleteFn = vi.fn().mockReturnValue({ where: deleteWhereFn });
+      const insertValuesFn = vi.fn().mockResolvedValue([]);
+      const insertFn = vi.fn().mockReturnValue({ values: insertValuesFn });
+      const transactionFn = vi.fn().mockImplementation(async (cb: (tx: unknown) => Promise<void>) =>
+        cb({ delete: deleteFn, insert: insertFn }),
+      );
+      const db = { transaction: transactionFn } as unknown as Db;
+      const repo = new AgentsRepository(db);
+
+      await repo.setDocuments('agent-1', ['specs/a.md']);
+
+      expect(transactionFn).toHaveBeenCalledOnce();
+      expect(deleteFn).toHaveBeenCalledOnce();
+      expect(insertFn).toHaveBeenCalledOnce();
     });
   });
 
@@ -164,11 +196,11 @@ describe('AgentsService – setDocuments path validation', () => {
           );
           return { from: vi.fn().mockReturnValue({ where: whereFn }) };
         }
-        // resolveCloneRoot: select().from(repos).where(...).limit(1)
-        const limitFn = vi.fn().mockResolvedValue(
+        // resolveCloneRoot (no repoId): select().from(repos).where(...).orderBy(...)
+        const orderByFn = vi.fn().mockResolvedValue(
           opts.repoRow ? [opts.repoRow] : [],
         );
-        const whereFn = vi.fn().mockReturnValue({ limit: limitFn });
+        const whereFn = vi.fn().mockReturnValue({ orderBy: orderByFn });
         return { from: vi.fn().mockReturnValue({ where: whereFn }) };
       }),
     };
@@ -255,14 +287,13 @@ describe('AgentsService – setDocuments path validation', () => {
       const repoRow = { owner: 'myorg', name: 'myrepo' };
 
       // The final select chain used by documentsForAgent after setDocuments
-      const orderByFn = vi.fn().mockResolvedValue([{ path: 'specs/valid-doc.md' }]);
-      const selectWhereFn = vi.fn().mockReturnValue({ orderBy: orderByFn });
+      const documentsOrderByFn = vi.fn().mockResolvedValue([{ path: 'specs/valid-doc.md' }]);
 
-      // delete().where() for setDocuments
+      // delete().where() for setDocuments (via transaction tx)
       const deleteWhereFn = vi.fn().mockResolvedValue(undefined);
       const deleteFn = vi.fn().mockReturnValue({ where: deleteWhereFn });
 
-      // insert().values() for setDocuments
+      // insert().values() for setDocuments (via transaction tx)
       const insertValuesFn = vi.fn().mockResolvedValue([]);
       const insertFn = vi.fn().mockReturnValue({ values: insertValuesFn });
 
@@ -270,6 +301,10 @@ describe('AgentsService – setDocuments path validation', () => {
       const db = {
         delete: deleteFn,
         insert: insertFn,
+        // setDocuments wraps delete+insert in a transaction
+        transaction: vi.fn().mockImplementation(async (cb: (tx: unknown) => Promise<void>) =>
+          cb({ delete: deleteFn, insert: insertFn }),
+        ),
         select: vi.fn(() => {
           selectCallCount++;
           if (selectCallCount === 1) {
@@ -281,11 +316,11 @@ describe('AgentsService – setDocuments path validation', () => {
             };
           }
           if (selectCallCount === 2) {
-            // resolveCloneRoot
+            // resolveCloneRoot (no repoId): .where().orderBy()
             return {
               from: vi.fn().mockReturnValue({
                 where: vi.fn().mockReturnValue({
-                  limit: vi.fn().mockResolvedValue([repoRow]),
+                  orderBy: vi.fn().mockResolvedValue([repoRow]),
                 }),
               }),
             };
@@ -293,11 +328,10 @@ describe('AgentsService – setDocuments path validation', () => {
           // documentsForAgent after persist
           return {
             from: vi.fn().mockReturnValue({
-              where: vi.fn().mockReturnValue({ orderBy: orderByFn }),
+              where: vi.fn().mockReturnValue({ orderBy: documentsOrderByFn }),
             }),
           };
         }),
-        git: undefined,
       };
 
       const git = { clonePathFor: vi.fn().mockReturnValue(tmpDir) };
@@ -307,6 +341,66 @@ describe('AgentsService – setDocuments path validation', () => {
       const result = await service.setDocuments('ws-1', 'agent-1', ['specs/valid-doc.md']);
 
       expect(result).toEqual(['specs/valid-doc.md']);
+      expect(insertValuesFn).toHaveBeenCalledWith([
+        { agentId: 'agent-1', path: 'specs/valid-doc.md', order: 0 },
+      ]);
+    });
+
+    it('deduplicates post-normalization paths before persisting', async () => {
+      const repoRow = { owner: 'myorg', name: 'myrepo' };
+
+      const deleteWhereFn = vi.fn().mockResolvedValue(undefined);
+      const deleteFn = vi.fn().mockReturnValue({ where: deleteWhereFn });
+      const insertValuesFn = vi.fn().mockResolvedValue([]);
+      const insertFn = vi.fn().mockReturnValue({ values: insertValuesFn });
+
+      let selectCallCount = 0;
+      const db = {
+        delete: deleteFn,
+        insert: insertFn,
+        transaction: vi.fn().mockImplementation(async (cb: (tx: unknown) => Promise<void>) =>
+          cb({ delete: deleteFn, insert: insertFn }),
+        ),
+        select: vi.fn(() => {
+          selectCallCount++;
+          if (selectCallCount === 1) {
+            return {
+              from: vi.fn().mockReturnValue({
+                where: vi.fn().mockResolvedValue([AGENT_ROW]),
+              }),
+            };
+          }
+          if (selectCallCount === 2) {
+            return {
+              from: vi.fn().mockReturnValue({
+                where: vi.fn().mockReturnValue({
+                  orderBy: vi.fn().mockResolvedValue([repoRow]),
+                }),
+              }),
+            };
+          }
+          return {
+            from: vi.fn().mockReturnValue({
+              where: vi.fn().mockReturnValue({
+                orderBy: vi.fn().mockResolvedValue([{ path: 'specs/valid-doc.md' }]),
+              }),
+            }),
+          };
+        }),
+      };
+
+      const git = { clonePathFor: vi.fn().mockReturnValue(tmpDir) };
+      const container = { db, git } as unknown as Container;
+      const service = new AgentsService(container);
+
+      // Send duplicate paths — the service should dedup before persisting
+      const result = await service.setDocuments('ws-1', 'agent-1', [
+        'specs/valid-doc.md',
+        'specs/valid-doc.md',
+      ]);
+
+      expect(result).toEqual(['specs/valid-doc.md']);
+      // repo.setDocuments must receive a deduped list (one entry, not two)
       expect(insertValuesFn).toHaveBeenCalledWith([
         { agentId: 'agent-1', path: 'specs/valid-doc.md', order: 0 },
       ]);

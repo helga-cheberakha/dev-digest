@@ -43,7 +43,7 @@ export function ContextTab({ agentId }: { agentId: string }) {
     }
   }, [attachedData]);
 
-  const { data: previewData, isLoading: previewLoading } = useDocumentPreview(previewPath);
+  const { data: previewData, isLoading: previewLoading } = useDocumentPreview(previewPath, repoId);
 
   if (attachedLoading || discoveryLoading) return <Skeleton height={200} />;
 
@@ -66,9 +66,9 @@ export function ContextTab({ agentId }: { agentId: string }) {
   const toggle = (path: string) => {
     const next = attachedSet.has(path)
       ? orderedPaths.filter((p) => p !== path)
-      : [...orderedPaths, path];
+      : [...new Set([...orderedPaths, path])];
     setOrderedPaths(next);
-    setDocuments.mutate({ agentId, paths: next });
+    setDocuments.mutate({ agentId, paths: next, repoId: repoId ?? undefined });
   };
 
   const handleDragStart = (idx: number) => {
@@ -85,7 +85,7 @@ export function ContextTab({ agentId }: { agentId: string }) {
     dragItem.current = null;
     dragOverItem.current = null;
     setOrderedPaths(next);
-    setDocuments.mutate({ agentId, paths: next });
+    setDocuments.mutate({ agentId, paths: next, repoId: repoId ?? undefined });
   };
 
   const handlePreview = (path: string) => {

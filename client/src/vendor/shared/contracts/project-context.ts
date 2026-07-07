@@ -30,9 +30,15 @@ export const DiscoveryResponse = z.object({
 export type DiscoveryResponse = z.infer<typeof DiscoveryResponse>;
 
 // ---- DocumentAttachment ----
-export const DocumentAttachment = z.object({
-  paths: z.array(z.string()),
-});
+export const DocumentAttachment = z
+  .object({
+    paths: z.array(z.string()).max(500),
+    repoId: z.string().uuid().optional(),
+  })
+  .refine((v) => new Set(v.paths).size === v.paths.length, {
+    message: 'paths must be unique',
+    path: ['paths'],
+  });
 export type DocumentAttachment = z.infer<typeof DocumentAttachment>;
 
 // ---- DocumentPreview ----

@@ -73,7 +73,13 @@ describe('SkillsRepository.setDocuments', () => {
     const insertValuesFn = vi.fn().mockResolvedValue([]);
     const insertFn = vi.fn().mockReturnValue({ values: insertValuesFn });
 
-    const db = { delete: deleteFn, insert: insertFn } as unknown as Db;
+    const db = {
+      delete: deleteFn,
+      insert: insertFn,
+      transaction: vi.fn().mockImplementation(async (cb: (tx: unknown) => Promise<void>) =>
+        cb({ delete: deleteFn, insert: insertFn }),
+      ),
+    } as unknown as Db;
     const repo = new SkillsRepository(db);
 
     await repo.setDocuments('skill-1', ['specs/a.md', 'docs/b.md']);
@@ -92,13 +98,37 @@ describe('SkillsRepository.setDocuments', () => {
     const deleteFn = vi.fn().mockReturnValue({ where: deleteWhereFn });
     const insertFn = vi.fn();
 
-    const db = { delete: deleteFn, insert: insertFn } as unknown as Db;
+    const db = {
+      delete: deleteFn,
+      insert: insertFn,
+      transaction: vi.fn().mockImplementation(async (cb: (tx: unknown) => Promise<void>) =>
+        cb({ delete: deleteFn, insert: insertFn }),
+      ),
+    } as unknown as Db;
     const repo = new SkillsRepository(db);
 
     await repo.setDocuments('skill-1', []);
 
     expect(deleteFn).toHaveBeenCalled();
     expect(insertFn).not.toHaveBeenCalled();
+  });
+
+  it('wraps delete and insert in a transaction (atomicity)', async () => {
+    const deleteWhereFn = vi.fn().mockResolvedValue([]);
+    const deleteFn = vi.fn().mockReturnValue({ where: deleteWhereFn });
+    const insertValuesFn = vi.fn().mockResolvedValue([]);
+    const insertFn = vi.fn().mockReturnValue({ values: insertValuesFn });
+    const transactionFn = vi.fn().mockImplementation(async (cb: (tx: unknown) => Promise<void>) =>
+      cb({ delete: deleteFn, insert: insertFn }),
+    );
+    const db = { transaction: transactionFn } as unknown as Db;
+    const repo = new SkillsRepository(db);
+
+    await repo.setDocuments('skill-1', ['specs/a.md']);
+
+    expect(transactionFn).toHaveBeenCalledOnce();
+    expect(deleteFn).toHaveBeenCalledOnce();
+    expect(insertFn).toHaveBeenCalledOnce();
   });
 });
 
@@ -119,9 +149,17 @@ function makeService(): { service: SkillsService; mockRepo: MockRepo } {
     setDocuments: vi.fn(),
   };
 
-  // Container only needs `skillsRepo` for the methods under test.
+  // resolveCloneRoot uses db.select().from().where().orderBy() — mock returns []
+  // (no repos) so cloneRoot = ''. guardPath is mocked, so the value doesn't matter.
+  const orderByFn = vi.fn().mockResolvedValue([]);
+  const whereFn = vi.fn().mockReturnValue({ orderBy: orderByFn });
+  const fromFn = vi.fn().mockReturnValue({ where: whereFn });
+  const selectFn = vi.fn().mockReturnValue({ from: fromFn });
+
   const mockContainer = {
     skillsRepo: mockRepo,
+    db: { select: selectFn },
+    git: { clonePathFor: vi.fn().mockReturnValue('') },
   } as unknown as Container;
 
   const service = new SkillsService(mockContainer);
@@ -163,7 +201,7 @@ describe('SkillsService.setDocuments', () => {
     const { service, mockRepo } = makeService();
     mockRepo.getById.mockResolvedValue(undefined);
 
-    const result = await service.setDocuments('ws-1', 'skill-99', ['specs/a.md'], '/clone');
+    const result = await service.setDocuments('ws-1', 'skill-99', ['specs/a.md']);
 
     expect(result).toBeUndefined();
     expect(mockRepo.setDocuments).not.toHaveBeenCalled();
@@ -175,7 +213,7 @@ describe('SkillsService.setDocuments', () => {
     mockGuardPath.mockResolvedValue({ ok: false, reason: 'path traversal via ".." is not allowed' });
 
     await expect(
-      service.setDocuments('ws-1', 'skill-1', ['../../etc/passwd'], '/clone'),
+      service.setDocuments('ws-1', 'skill-1', ['../../etc/passwd']),
     ).rejects.toThrow(ValidationError);
 
     expect(mockRepo.setDocuments).not.toHaveBeenCalled();
@@ -187,7 +225,7 @@ describe('SkillsService.setDocuments', () => {
     mockGuardPath.mockResolvedValue({ ok: false, reason: 'absolute paths are not allowed' });
 
     await expect(
-      service.setDocuments('ws-1', 'skill-1', ['/etc/hosts'], '/clone'),
+      service.setDocuments('ws-1', 'skill-1', ['/etc/hosts']),
     ).rejects.toThrow(ValidationError);
 
     expect(mockRepo.setDocuments).not.toHaveBeenCalled();
@@ -199,7 +237,7 @@ describe('SkillsService.setDocuments', () => {
     mockGuardPath.mockResolvedValue({ ok: false, reason: 'only .md files are allowed' });
 
     await expect(
-      service.setDocuments('ws-1', 'skill-1', ['src/app.ts'], '/clone'),
+      service.setDocuments('ws-1', 'skill-1', ['src/app.ts']),
     ).rejects.toThrow(ValidationError);
 
     expect(mockRepo.setDocuments).not.toHaveBeenCalled();
@@ -218,7 +256,6 @@ describe('SkillsService.setDocuments', () => {
       'ws-1',
       'skill-1',
       ['specs/guide.md', 'docs/api.md'],
-      '/clone/root',
     );
 
     expect(result).toEqual(['specs/guide.md', 'docs/api.md']);
@@ -227,10 +264,10 @@ describe('SkillsService.setDocuments', () => {
       'specs/guide.md',
       'docs/api.md',
     ]);
-    // Guard was called once per path
+    // Guard was called once per path with the resolved cloneRoot ('')
     expect(mockGuardPath).toHaveBeenCalledTimes(2);
-    expect(mockGuardPath).toHaveBeenNthCalledWith(1, 'specs/guide.md', '/clone/root');
-    expect(mockGuardPath).toHaveBeenNthCalledWith(2, 'docs/api.md', '/clone/root');
+    expect(mockGuardPath).toHaveBeenNthCalledWith(1, 'specs/guide.md', '');
+    expect(mockGuardPath).toHaveBeenNthCalledWith(2, 'docs/api.md', '');
   });
 
   it('stops at the first bad path and does not call setDocuments', async () => {
@@ -242,7 +279,7 @@ describe('SkillsService.setDocuments', () => {
       .mockResolvedValueOnce({ ok: false, reason: 'only .md files are allowed' });
 
     await expect(
-      service.setDocuments('ws-1', 'skill-1', ['specs/good.md', 'src/app.ts'], '/clone'),
+      service.setDocuments('ws-1', 'skill-1', ['specs/good.md', 'src/app.ts']),
     ).rejects.toThrow(ValidationError);
 
     expect(mockRepo.setDocuments).not.toHaveBeenCalled();
@@ -254,11 +291,29 @@ describe('SkillsService.setDocuments', () => {
     mockRepo.setDocuments.mockResolvedValue(undefined);
     mockRepo.documentsForSkill.mockResolvedValue([]);
 
-    const result = await service.setDocuments('ws-1', 'skill-1', [], '/clone');
+    const result = await service.setDocuments('ws-1', 'skill-1', []);
 
     expect(result).toEqual([]);
     expect(mockRepo.setDocuments).toHaveBeenCalledWith('skill-1', []);
     // Guard was never called (no paths to validate)
     expect(mockGuardPath).not.toHaveBeenCalled();
+  });
+
+  it('deduplicates post-normalization paths before persisting', async () => {
+    const { service, mockRepo } = makeService();
+    mockRepo.getById.mockResolvedValue({ id: 'skill-1' });
+    // Both paths normalize to the same value
+    mockGuardPath
+      .mockResolvedValueOnce({ ok: true, path: 'specs/guide.md' })
+      .mockResolvedValueOnce({ ok: true, path: 'specs/guide.md' });
+    mockRepo.setDocuments.mockResolvedValue(undefined);
+    mockRepo.documentsForSkill.mockResolvedValue(['specs/guide.md']);
+
+    const result = await service.setDocuments('ws-1', 'skill-1', ['specs/guide.md', 'specs/guide.md']);
+
+    expect(result).toEqual(['specs/guide.md']);
+    // setDocuments called with deduped list (one entry, not two)
+    expect(mockRepo.setDocuments).toHaveBeenCalledWith('skill-1', ['specs/guide.md']);
+    expect(mockGuardPath).toHaveBeenCalledTimes(2);
   });
 });

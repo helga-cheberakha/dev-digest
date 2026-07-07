@@ -251,11 +251,13 @@ export class AgentsRepository {
    * assigning order = index. Mirrors setSkills — replaces the whole ordered set.
    */
   async setDocuments(agentId: string, paths: string[]): Promise<void> {
-    await this.db.delete(t.agentDocuments).where(eq(t.agentDocuments.agentId, agentId));
-    if (paths.length === 0) return;
-    await this.db
-      .insert(t.agentDocuments)
-      .values(paths.map((path, i) => ({ agentId, path, order: i })));
+    await this.db.transaction(async (tx) => {
+      await tx.delete(t.agentDocuments).where(eq(t.agentDocuments.agentId, agentId));
+      if (paths.length === 0) return;
+      await tx
+        .insert(t.agentDocuments)
+        .values(paths.map((path, i) => ({ agentId, path, order: i })));
+    });
   }
 
   /**

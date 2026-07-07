@@ -48,7 +48,7 @@ type ContextLog = {
 // Constants
 // ---------------------------------------------------------------------------
 
-const TRUNCATION_MARKER = '\n\n[... document truncated at 20,000 characters ...]';
+const TRUNCATION_MARKER = `\n\n[... document truncated at ${PER_DOC_CHAR_CAP.toLocaleString('en-US')} characters ...]`;
 
 /** Unicode replacement character — Node places this when decoding invalid UTF-8 bytes. */
 const REPLACEMENT_CHAR = '�';

@@ -67,12 +67,9 @@ export async function guardPath(
     return { ok: false, reason: 'only .md files are allowed' };
   }
 
-  // 4. Require the first non-empty segment to be a configured root folder.
-  const firstSegment = segments.find((s) => s.length > 0);
-  if (
-    !firstSegment ||
-    !(CONTEXT_ROOT_FOLDERS as readonly string[]).includes(firstSegment)
-  ) {
+  // 4. Require at least one segment to be a configured root folder (any depth, AC-1).
+  //    Allows paths like `packages/api/specs/foo.md` where `specs` appears at depth > 0.
+  if (!segments.some((s) => (CONTEXT_ROOT_FOLDERS as readonly string[]).includes(s))) {
     return {
       ok: false,
       reason: `path must be under one of: ${CONTEXT_ROOT_FOLDERS.join(', ')}`,

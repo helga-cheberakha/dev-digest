@@ -199,7 +199,7 @@ export default async function agentsRoutes(appBase: FastifyInstance) {
     { schema: { params: IdParams, body: DocumentAttachment } },
     async (req) => {
       const { workspaceId } = await getContext(app.container, req);
-      const paths = await service.setDocuments(workspaceId, req.params.id, req.body.paths);
+      const paths = await service.setDocuments(workspaceId, req.params.id, req.body.paths, req.body.repoId);
       if (paths === undefined) throw new NotFoundError('Agent not found');
       return { paths };
     },

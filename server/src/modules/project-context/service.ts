@@ -15,7 +15,7 @@
  */
 
 import { stat } from 'node:fs/promises';
-import { and, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import type { Container } from '../../platform/container.js';
 import * as t from '../../db/schema.js';
 import type { DiscoveredDocument, DiscoveryResponse, DocumentPreview } from '@devdigest/shared';
@@ -73,12 +73,13 @@ export class ProjectContextService {
       maxFiles: MAX_DISCOVERED_FILES + 1,
     });
 
-    // 4. Filter to context root folders only (AC-1: specs / docs / insights).
-    //    listDocs returns ALL .md files from the whole clone; the service limits
-    //    the scope to the configured root folders here.
+    // 4. Filter to context root folders at any depth (AC-1: specs / docs / insights).
+    //    listDocs returns ALL .md files from the whole clone; the service keeps only
+    //    entries where at least one path segment is a configured root folder.
+    //    This matches `**/{specs,docs,insights}/**/*.md` semantics.
     const filtered = raw.filter((entry) => {
-      const firstSegment = entry.path.split('/')[0];
-      return (CONTEXT_ROOT_FOLDERS as readonly string[]).includes(firstSegment ?? '');
+      const segments = entry.path.split('/');
+      return segments.some((s) => (CONTEXT_ROOT_FOLDERS as readonly string[]).includes(s));
     });
 
     // 5. Apply the cap and derive the truncation flag.
@@ -95,7 +96,13 @@ export class ProjectContextService {
         const parts = entry.path.split('/');
         const name = parts[parts.length - 1] ?? entry.path;
         const parent_path = parts.slice(0, -1).join('/');
-        const folder_kind = parts[0] as FolderKind;
+        // folder_kind: nearest (deepest/rightmost) matching ancestor segment.
+        // For `specs/sub/api.md` → 'specs'; for `packages/api/docs/guide.md` → 'docs'.
+        const nearestFolderKindSegment = parts
+          .slice()
+          .reverse()
+          .find((s) => (CONTEXT_ROOT_FOLDERS as readonly string[]).includes(s));
+        const folder_kind = (nearestFolderKindSegment ?? parts[0]) as FolderKind;
         const est_tokens = Math.ceil(entry.sizeBytes / 4);
         const used_by_agents = await this.container.agentsRepo.usedByAgentsCount(
           entry.path,
@@ -134,13 +141,41 @@ export class ProjectContextService {
   async previewDocument(
     workspaceId: string,
     candidatePath: string,
+    repoId?: string,
   ): Promise<{ ok: true; document: DocumentPreview } | { ok: false; reason: string }> {
-    // 1. Resolve the active repo for this workspace (single-repo scan decision).
-    const [repo] = await this.container.db
-      .select({ owner: t.repos.owner, name: t.repos.name })
-      .from(t.repos)
-      .where(eq(t.repos.workspaceId, workspaceId))
-      .limit(1);
+    // 1. Resolve the repo. When repoId is provided, scope exactly to that repo
+    //    (workspace-scoped). When absent, use a deterministic fallback: ORDER BY
+    //    created_at and prefer the first whose clone directory exists on disk.
+    let repo: { owner: string; name: string } | undefined;
+
+    if (repoId) {
+      const [row] = await this.container.db
+        .select({ owner: t.repos.owner, name: t.repos.name })
+        .from(t.repos)
+        .where(and(eq(t.repos.workspaceId, workspaceId), eq(t.repos.id, repoId)));
+      repo = row;
+    } else {
+      const rows = await this.container.db
+        .select({ owner: t.repos.owner, name: t.repos.name })
+        .from(t.repos)
+        .where(eq(t.repos.workspaceId, workspaceId))
+        .orderBy(asc(t.repos.createdAt));
+
+      for (const row of rows) {
+        const clonePath = this.container.git.clonePathFor({ owner: row.owner, name: row.name });
+        try {
+          await stat(clonePath);
+          repo = row;
+          break;
+        } catch {
+          // clone not present — try next repo
+        }
+      }
+      // Fall back to the oldest repo even if its clone doesn't exist yet.
+      if (!repo && rows.length > 0) {
+        repo = rows[0];
+      }
+    }
 
     if (!repo) {
       return { ok: false, reason: 'No repository configured for this workspace.' };

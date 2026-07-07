@@ -188,6 +188,7 @@ describe("ContextTab (AC-20, AC-22)", () => {
     expect(mockMutate).toHaveBeenCalledWith({
       agentId: "ag1",
       paths: ["specs/api.md", "docs/guide.md", "insights/notes.md"],
+      repoId: "repo1",
     });
   });
 
@@ -221,6 +222,7 @@ describe("ContextTab (AC-20, AC-22)", () => {
     expect(mockMutate).toHaveBeenCalledWith({
       agentId: "ag1",
       paths: ["docs/guide.md", "specs/api.md"],
+      repoId: "repo1",
     });
   });
 

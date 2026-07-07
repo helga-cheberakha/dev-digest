@@ -216,11 +216,12 @@ describe("ProjectContextView", () => {
     });
     fireEvent.click(checkbox);
 
-    // The set-hook should be called with the doc path appended
+    // The set-hook should be called with the doc path appended (including repoId for determinism)
     expect(mockMutate).toHaveBeenCalledOnce();
     expect(mockMutate).toHaveBeenCalledWith({
       agentId: "ag1",
       paths: ["specs/api-contract.md"],
+      repoId: "repo1",
     });
   });
 
@@ -244,7 +245,7 @@ describe("ProjectContextView", () => {
     fireEvent.click(checkbox);
 
     expect(mockMutate).toHaveBeenCalledOnce();
-    expect(mockMutate).toHaveBeenCalledWith({ agentId: "ag1", paths: [] });
+    expect(mockMutate).toHaveBeenCalledWith({ agentId: "ag1", paths: [], repoId: "repo1" });
   });
 
   it("renders xss-inert preview: <script> tag is inert, javascript: link has no href", () => {

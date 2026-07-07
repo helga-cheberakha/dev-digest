@@ -45,6 +45,10 @@ beforeAll(async () => {
   // A non-.md file inside a root folder
   await writeFile(join(cloneRoot, 'specs', 'schema.ts'), 'export type Foo = {}');
 
+  // An any-depth context doc: packages/api/specs/foo.md (root folder at depth 2)
+  await mkdir(join(cloneRoot, 'packages', 'api', 'specs'), { recursive: true });
+  await writeFile(join(cloneRoot, 'packages', 'api', 'specs', 'foo.md'), '# Foo spec');
+
   // A symlink inside docs/ pointing to a file outside the clone root
   await writeFile(join(outsideDir, 'secret.md'), 'top secret');
   await symlink(
@@ -113,6 +117,15 @@ describe('guardPath — rejections', () => {
     }
   });
 
+  it('rejects a .md with no context root segment anywhere (src/app.md)', async () => {
+    // No segment in `src/app.md` is specs|docs|insights — rejected at rule 4
+    const result = await guardPath('src/app.md', cloneRoot);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/specs|docs|insights/i);
+    }
+  });
+
   it('rejects a symlink inside the clone that escapes to outside the clone root', async () => {
     // docs/escaped.md is a symlink → outsideDir/secret.md
     const result = await guardPath('docs/escaped.md', cloneRoot);
@@ -168,6 +181,15 @@ describe('guardPath — happy paths', () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.path).toBe('docs/sub/deep.md');
+    }
+  });
+
+  it('accepts a .md under a context root at any depth (packages/api/specs/foo.md)', async () => {
+    // root folder `specs` appears at depth 2 — still valid per AC-1 any-depth rule
+    const result = await guardPath('packages/api/specs/foo.md', cloneRoot);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.path).toBe('packages/api/specs/foo.md');
     }
   });
 });
