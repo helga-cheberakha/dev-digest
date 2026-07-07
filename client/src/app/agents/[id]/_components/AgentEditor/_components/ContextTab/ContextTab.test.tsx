@@ -1,8 +1,9 @@
-/* ContextTab RTL tests — AC-20, AC-22
+/* ContextTab RTL tests — AC-20, AC-22, AC-27
    Tests: lists documents, filters, toggles attach, reorders via drag,
-   shows token total + untrusted note, and renders when ?tab=context. */
+   shows token total + untrusted note, AC-27 drawer (open/switch/dismiss/XSS),
+   and renders when ?tab=context. */
 import { describe, it, expect, afterEach, vi, beforeEach } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, within } from "@testing-library/react";
 import { NextIntlClientProvider } from "next-intl";
 import type { Agent } from "@devdigest/shared";
 import messages from "../../../../../../../../messages/en/agents.json";
@@ -241,7 +242,84 @@ describe("ContextTab (AC-20, AC-22)", () => {
     expect(screen.getByText(/Project context/i)).toBeInTheDocument();
   });
 
-  it("shows a preview panel when Preview is clicked", () => {
+  it("opens an AC-27 drawer with filename, parent path, and rendered markdown when Preview is clicked", () => {
+    vi.mocked(projectContextHooks.useDocumentPreview).mockReturnValue({
+      data: { path: "specs/api.md", content: "# API spec\n\nSome content." },
+      isLoading: false,
+    } as ReturnType<typeof projectContextHooks.useDocumentPreview>);
+
+    renderWithIntl(<ContextTab agentId="ag1" />);
+
+    // Drawer not shown yet
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    const previewBtns = screen.getAllByText("Preview");
+    fireEvent.click(previewBtns[0]!);
+
+    // Drawer opens — check role="dialog"
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    // Title = filename (scoped to dialog, since "api.md" also appears in the doc list)
+    expect(within(dialog).getByText("api.md")).toBeInTheDocument();
+    // Subtitle = parent path (multiple "specs" elements expected: badge + subtitle)
+    expect(within(dialog).getAllByText("specs").length).toBeGreaterThan(0);
+    // SafeMarkdown renders the heading (not raw "# API spec")
+    expect(within(dialog).getByRole("heading", { name: "API spec" })).toBeInTheDocument();
+    expect(within(dialog).getByText("Some content.")).toBeInTheDocument();
+  });
+
+  it("renders XSS content inert in the drawer (AC-21): javascript: links become spans, script tags absent", () => {
+    vi.mocked(projectContextHooks.useDocumentPreview).mockReturnValue({
+      data: {
+        path: "specs/api.md",
+        content: "[click me](javascript:alert(1))\n\n<script>window.__xss=1</script>",
+      },
+      isLoading: false,
+    } as ReturnType<typeof projectContextHooks.useDocumentPreview>);
+
+    renderWithIntl(<ContextTab agentId="ag1" />);
+
+    const previewBtns = screen.getAllByText("Preview");
+    fireEvent.click(previewBtns[0]!);
+
+    // The dialog is open
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    // "click me" text is still visible (as a span, not a link)
+    expect(screen.getByText("click me")).toBeInTheDocument();
+    // No <a> with role="link" for the javascript: URL
+    expect(screen.queryByRole("link", { name: "click me" })).not.toBeInTheDocument();
+
+    // No <script> elements injected into the dialog
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.querySelector("script")).not.toBeInTheDocument();
+  });
+
+  it("switches drawer content when another row's Preview is activated (AC-27)", () => {
+    vi.mocked(projectContextHooks.useDocumentPreview).mockReturnValue({
+      data: { path: "specs/api.md", content: "First doc content" },
+      isLoading: false,
+    } as ReturnType<typeof projectContextHooks.useDocumentPreview>);
+
+    renderWithIntl(<ContextTab agentId="ag1" />);
+
+    const previewBtns = screen.getAllByText("Preview");
+
+    // Open drawer for api.md (first row)
+    fireEvent.click(previewBtns[0]!);
+    let dialog = screen.getByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    // Title in the drawer (scoped to dialog; "api.md" also appears in doc list)
+    expect(within(dialog).getByText("api.md")).toBeInTheDocument();
+
+    // Clicking guide.md's Preview switches the drawer title
+    fireEvent.click(previewBtns[1]!);
+    dialog = screen.getByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByText("guide.md")).toBeInTheDocument();
+  });
+
+  it("closes the drawer when the close button is clicked (AC-27)", () => {
     vi.mocked(projectContextHooks.useDocumentPreview).mockReturnValue({
       data: { path: "specs/api.md", content: "# API spec" },
       isLoading: false,
@@ -251,8 +329,32 @@ describe("ContextTab (AC-20, AC-22)", () => {
 
     const previewBtns = screen.getAllByText("Preview");
     fireEvent.click(previewBtns[0]!);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
 
-    expect(screen.getByText("# API spec")).toBeInTheDocument();
+    // Click the close button (rendered by Drawer as aria-label="Close")
+    const closeBtn = screen.getByRole("button", { name: "Close" });
+    fireEvent.click(closeBtn);
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("closes the drawer when the same row's Preview is re-activated (AC-27)", () => {
+    vi.mocked(projectContextHooks.useDocumentPreview).mockReturnValue({
+      data: { path: "specs/api.md", content: "# API spec" },
+      isLoading: false,
+    } as ReturnType<typeof projectContextHooks.useDocumentPreview>);
+
+    renderWithIntl(<ContextTab agentId="ag1" />);
+
+    const previewBtns = screen.getAllByText("Preview");
+
+    // Open drawer for api.md
+    fireEvent.click(previewBtns[0]!);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    // Re-click the same row's Preview — should close the drawer
+    fireEvent.click(previewBtns[0]!);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });
 

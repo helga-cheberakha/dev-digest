@@ -1,6 +1,9 @@
+/* ContextTab tests — AC-20, AC-22, AC-23, AC-27
+   AC-27: Preview opens a dismissible Drawer with filename, parent path, and SafeMarkdown body.
+   Tests use fireEvent (not @testing-library/user-event which is absent from this package). */
 import React from "react";
 import { describe, it, expect, afterEach, vi, beforeEach } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, within } from "@testing-library/react";
 import { NextIntlClientProvider } from "next-intl";
 import skillsMessages from "../../../../../../../../messages/en/skills.json";
 
@@ -58,37 +61,41 @@ function renderWithIntl(ui: React.ReactElement) {
   );
 }
 
-// ---- Tests ----
+// ---- Shared mock setup ----
+
+function setupDefaultMocks() {
+  vi.mocked(useActiveRepo).mockReturnValue({
+    repoId: "repo1",
+    setRepoId: vi.fn(),
+    repos: [],
+    activeRepo: null,
+    reposLoaded: true,
+  });
+  vi.mocked(useDiscoveredDocuments).mockReturnValue({
+    isLoading: false,
+    isError: false,
+    data: { documents: DISCOVERED_DOCS, truncated: false },
+  } as ReturnType<typeof useDiscoveredDocuments>);
+  vi.mocked(useSkillDocuments).mockReturnValue({
+    isLoading: false,
+    isError: false,
+    data: { paths: ["specs/public-api.md"] },
+  } as ReturnType<typeof useSkillDocuments>);
+  vi.mocked(useSetSkillDocuments).mockReturnValue({
+    mutate: vi.fn(),
+    isPending: false,
+  } as unknown as ReturnType<typeof useSetSkillDocuments>);
+  vi.mocked(useDocumentPreview).mockReturnValue({
+    isLoading: false,
+    isError: false,
+    data: undefined,
+  } as ReturnType<typeof useDocumentPreview>);
+}
+
+// ---- Tests: existing AC-22/AC-23 coverage (preserved) ----
 
 describe("ContextTab (skill editor)", () => {
-  beforeEach(() => {
-    vi.mocked(useActiveRepo).mockReturnValue({
-      repoId: "repo1",
-      setRepoId: vi.fn(),
-      repos: [],
-      activeRepo: null,
-      reposLoaded: true,
-    });
-    vi.mocked(useDiscoveredDocuments).mockReturnValue({
-      isLoading: false,
-      isError: false,
-      data: { documents: DISCOVERED_DOCS, truncated: false },
-    } as ReturnType<typeof useDiscoveredDocuments>);
-    vi.mocked(useSkillDocuments).mockReturnValue({
-      isLoading: false,
-      isError: false,
-      data: { paths: ["specs/public-api.md"] },
-    } as ReturnType<typeof useSkillDocuments>);
-    vi.mocked(useSetSkillDocuments).mockReturnValue({
-      mutate: vi.fn(),
-      isPending: false,
-    } as unknown as ReturnType<typeof useSetSkillDocuments>);
-    vi.mocked(useDocumentPreview).mockReturnValue({
-      isLoading: false,
-      isError: false,
-      data: undefined,
-    } as ReturnType<typeof useDocumentPreview>);
-  });
+  beforeEach(setupDefaultMocks);
 
   it("renders the SERIALIZES AS block with the attached path under ## Project context (AC-23)", () => {
     renderWithIntl(<ContextTab skillId="skill1" />);
@@ -213,5 +220,104 @@ describe("ContextTab (skill editor)", () => {
         paths: ["specs/gamma-spec.md", "specs/alpha-spec.md", "docs/beta-doc.md"],
       }),
     );
+  });
+});
+
+// ---- Tests: AC-27 Preview drawer ----
+
+describe("ContextTab drawer (AC-27)", () => {
+  beforeEach(() => {
+    setupDefaultMocks();
+    // Override preview hook to return markdown content for drawer tests.
+    vi.mocked(useDocumentPreview).mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: { path: "specs/public-api.md", content: "# API Overview\n\nSome content here." },
+    } as ReturnType<typeof useDocumentPreview>);
+  });
+
+  it("clicking Preview opens a drawer with the document filename as title and renders SafeMarkdown body", () => {
+    renderWithIntl(<ContextTab skillId="skill1" />);
+
+    // Preview button for the attached doc
+    const previewBtn = screen.getByRole("button", { name: /preview public-api\.md/i });
+    fireEvent.click(previewBtn);
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    // Drawer title shows filename
+    expect(within(dialog).getByText("public-api.md")).toBeInTheDocument();
+    // SafeMarkdown renders the heading as an <h1>
+    expect(within(dialog).getByRole("heading", { name: /api overview/i })).toBeInTheDocument();
+  });
+
+  it("drawer subtitle shows the document parent path", () => {
+    renderWithIntl(<ContextTab skillId="skill1" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /preview public-api\.md/i }));
+
+    const dialog = screen.getByRole("dialog");
+    // "specs" appears in subtitle (and optionally footer badge) — at least one occurrence
+    expect(within(dialog).getAllByText("specs").length).toBeGreaterThan(0);
+  });
+
+  it("XSS content in preview renders inert — script stripped, javascript: link is not an anchor (AC-21)", () => {
+    vi.mocked(useDocumentPreview).mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: {
+        path: "specs/public-api.md",
+        content:
+          "<script>alert('xss')</script>\n\n[click me](javascript:alert(1))",
+      },
+    } as ReturnType<typeof useDocumentPreview>);
+
+    renderWithIntl(<ContextTab skillId="skill1" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /preview public-api\.md/i }));
+
+    const dialog = screen.getByRole("dialog");
+    // No <script> element inside the drawer
+    expect(dialog.querySelector("script")).toBeNull();
+    // The javascript: link must NOT render as a real anchor (<a>) — SafeMarkdown replaces with <span>
+    expect(within(dialog).queryByRole("link", { name: /click me/i })).not.toBeInTheDocument();
+  });
+
+  it("clicking Preview on a different row switches the drawer to that document", () => {
+    renderWithIntl(<ContextTab skillId="skill1" />);
+
+    // Open drawer for public-api.md (attached doc)
+    fireEvent.click(screen.getByRole("button", { name: /preview public-api\.md/i }));
+    expect(within(screen.getByRole("dialog")).getByText("public-api.md")).toBeInTheDocument();
+
+    // Switch to onboarding.md (unattached doc)
+    fireEvent.click(screen.getByRole("button", { name: /preview onboarding\.md/i }));
+
+    // Drawer stays open, title changes to onboarding.md
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("onboarding.md")).toBeInTheDocument();
+  });
+
+  it("close button hides the drawer", () => {
+    renderWithIntl(<ContextTab skillId="skill1" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /preview public-api\.md/i }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    // Drawer's IconBtn renders with aria-label="Close"
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("re-clicking the same Preview button dismisses the drawer", () => {
+    renderWithIntl(<ContextTab skillId="skill1" />);
+
+    const previewBtn = screen.getByRole("button", { name: /preview public-api\.md/i });
+    fireEvent.click(previewBtn);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    // Second click on the same row toggles the preview off
+    fireEvent.click(previewBtn);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });

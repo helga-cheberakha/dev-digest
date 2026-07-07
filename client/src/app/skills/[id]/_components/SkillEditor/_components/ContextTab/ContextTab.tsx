@@ -1,8 +1,13 @@
+/* ContextTab — Skill editor tab for attaching project context documents.
+   Shows discovered .md files (specs/docs/insights) with drag-reorder, checkbox
+   attach/detach, folder-kind badge, and a dismissible preview drawer.
+   AC-20, AC-22, AC-23, AC-27. */
 "use client";
 import React from "react";
-import { Badge, Skeleton } from "@devdigest/ui";
+import { Badge, Drawer, Skeleton } from "@devdigest/ui";
 import { useTranslations } from "next-intl";
 import type { DiscoveredDocument } from "@devdigest/shared";
+import { SafeMarkdown } from "@/components/SafeMarkdown";
 import {
   useSkillDocuments,
   useSetSkillDocuments,
@@ -30,6 +35,7 @@ interface DocRowProps {
   onToggle: () => void;
   onPreview: () => void;
   isPreviewing: boolean;
+  previewLabel: string;
 }
 
 function DocRow({
@@ -42,6 +48,7 @@ function DocRow({
   onToggle,
   onPreview,
   isPreviewing,
+  previewLabel,
 }: DocRowProps) {
   return (
     <div
@@ -96,19 +103,19 @@ function DocRow({
       </span>
       <button
         onClick={onPreview}
-        aria-label={`Preview ${doc.name}`}
+        aria-label={`${previewLabel} ${doc.name}`}
         style={{
           background: "none",
-          border: "none",
+          border: "1px solid var(--border)",
+          borderRadius: 4,
+          padding: "2px 7px",
+          fontSize: 11,
           cursor: "pointer",
           color: isPreviewing ? "var(--accent)" : "var(--text-secondary)",
-          fontSize: 12,
-          padding: "0 4px",
           flexShrink: 0,
-          textDecoration: isPreviewing ? "underline" : "none",
         }}
       >
-        Preview
+        {previewLabel}
       </button>
     </div>
   );
@@ -161,6 +168,15 @@ export function ContextTab({ skillId }: { skillId: string }) {
       !search || d.name.toLowerCase().includes(search.toLowerCase()),
   );
 
+  const previewDoc = previewPath ? docMap.get(previewPath) : undefined;
+  const previewFileName =
+    previewDoc?.name ?? (previewPath ? (previewPath.split("/").pop() ?? previewPath) : "");
+  const previewParentPath =
+    previewDoc?.parent_path ??
+    (previewPath ? previewPath.substring(0, previewPath.lastIndexOf("/")) : "");
+
+  const previewLabel = t("detail.editor.context.previewButton");
+
   const toggleAttach = (path: string) => {
     const next = attachedSet.has(path)
       ? orderedPaths.filter((p) => p !== path)
@@ -187,166 +203,177 @@ export function ContextTab({ skillId }: { skillId: string }) {
   };
 
   return (
-    <div style={{ maxWidth: 680, display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* Header: count + filter */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <span style={{ fontSize: 14, fontWeight: 600 }}>{orderedPaths.length} attached</span>
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder={t("detail.editor.context.filterPlaceholder")}
-          aria-label={t("detail.editor.context.filterPlaceholder")}
+    <>
+      <div style={{ maxWidth: 680, display: "flex", flexDirection: "column", gap: 16 }}>
+        {/* Header: count + filter */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: 14, fontWeight: 600 }}>{orderedPaths.length} attached</span>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t("detail.editor.context.filterPlaceholder")}
+            aria-label={t("detail.editor.context.filterPlaceholder")}
+            style={{
+              marginLeft: "auto",
+              background: "var(--bg-surface)",
+              border: "1px solid var(--border)",
+              borderRadius: 5,
+              padding: "4px 10px",
+              fontSize: 12,
+              color: "var(--text-primary)",
+              outline: "none",
+              width: 180,
+            }}
+          />
+        </div>
+
+        <p style={{ fontSize: 12, color: "var(--text-muted)", margin: 0 }}>
+          {t("detail.editor.context.orderNote")}
+        </p>
+
+        {/* Attached docs (ordered, draggable) */}
+        {orderedPaths.length > 0 && (
+          <div>
+            {orderedPaths
+              .filter((path) => {
+                const doc = docMap.get(path);
+                return !doc || !search || doc.name.toLowerCase().includes(search.toLowerCase());
+              })
+              .map((path) => {
+                const doc = docMap.get(path);
+                if (!doc) return null;
+                // Drag indices must address the UNFILTERED source array: while a
+                // search filter is active, the row's position in the filtered list
+                // diverges from its position in orderedPaths, and splicing by the
+                // filtered index would reorder the wrong documents.
+                const srcIdx = orderedPaths.indexOf(path);
+                return (
+                  <DocRow
+                    key={path}
+                    doc={doc}
+                    attached={true}
+                    draggable={true}
+                    onDragStart={() => handleDragStart(srcIdx)}
+                    onDragEnter={() => handleDragEnter(srcIdx)}
+                    onDragEnd={handleDragEnd}
+                    onToggle={() => toggleAttach(path)}
+                    onPreview={() => setPreviewPath(previewPath === path ? null : path)}
+                    isPreviewing={previewPath === path}
+                    previewLabel={previewLabel}
+                  />
+                );
+              })}
+          </div>
+        )}
+
+        {/* Unattached docs */}
+        {filteredDocs
+          .filter((d: DiscoveredDocument) => !attachedSet.has(d.path))
+          .map((doc: DiscoveredDocument) => (
+            <DocRow
+              key={doc.path}
+              doc={doc}
+              attached={false}
+              onToggle={() => toggleAttach(doc.path)}
+              onPreview={() => setPreviewPath(previewPath === doc.path ? null : doc.path)}
+              isPreviewing={previewPath === doc.path}
+              previewLabel={previewLabel}
+            />
+          ))}
+
+        {/* AC-22: Token total + untrusted note */}
+        <div
           style={{
-            marginLeft: "auto",
+            padding: "12px 14px",
             background: "var(--bg-surface)",
             border: "1px solid var(--border)",
-            borderRadius: 5,
-            padding: "4px 10px",
+            borderRadius: 6,
             fontSize: 12,
-            color: "var(--text-primary)",
-            outline: "none",
-            width: 180,
+            color: "var(--text-secondary)",
           }}
-        />
-      </div>
-
-      <p style={{ fontSize: 12, color: "var(--text-muted)", margin: 0 }}>
-        {t("detail.editor.context.orderNote")}
-      </p>
-
-      {/* Attached docs (ordered, draggable) */}
-      {orderedPaths.length > 0 && (
-        <div>
-          {orderedPaths
-            .filter((path) => {
-              const doc = docMap.get(path);
-              return !doc || !search || doc.name.toLowerCase().includes(search.toLowerCase());
-            })
-            .map((path) => {
-              const doc = docMap.get(path);
-              if (!doc) return null;
-              // Drag indices must address the UNFILTERED source array: while a
-              // search filter is active, the row's position in the filtered list
-              // diverges from its position in orderedPaths, and splicing by the
-              // filtered index would reorder the wrong documents.
-              const srcIdx = orderedPaths.indexOf(path);
-              return (
-                <DocRow
-                  key={path}
-                  doc={doc}
-                  attached={true}
-                  draggable={true}
-                  onDragStart={() => handleDragStart(srcIdx)}
-                  onDragEnter={() => handleDragEnter(srcIdx)}
-                  onDragEnd={handleDragEnd}
-                  onToggle={() => toggleAttach(path)}
-                  onPreview={() => setPreviewPath(previewPath === path ? null : path)}
-                  isPreviewing={previewPath === path}
-                />
-              );
-            })}
-        </div>
-      )}
-
-      {/* Unattached docs */}
-      {filteredDocs
-        .filter((d: DiscoveredDocument) => !attachedSet.has(d.path))
-        .map((doc: DiscoveredDocument) => (
-          <DocRow
-            key={doc.path}
-            doc={doc}
-            attached={false}
-            onToggle={() => toggleAttach(doc.path)}
-            onPreview={() => setPreviewPath(previewPath === doc.path ? null : doc.path)}
-            isPreviewing={previewPath === doc.path}
-          />
-        ))}
-
-      {/* Inline preview pane */}
-      {previewPath !== null && (
-        <div
-          role="region"
-          aria-label="Document preview"
-          style={{ border: "1px solid var(--border)", borderRadius: 6, padding: 14 }}
         >
-          {previewLoading ? (
-            <Skeleton height={80} />
-          ) : previewData ? (
-            <pre
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>
+            ≈ {totalTokens.toLocaleString()} tokens attached
+          </div>
+          <div style={{ color: "var(--text-muted)", lineHeight: 1.5 }}>
+            {t("detail.editor.context.untrustedNote")}
+          </div>
+        </div>
+
+        {/* AC-23: SERIALIZES AS — derived, read-only block */}
+        {serializesAsText !== null && (
+          <div>
+            <div
               style={{
+                fontSize: 11,
+                fontWeight: 700,
+                color: "var(--text-muted)",
+                letterSpacing: 0.8,
+                marginBottom: 8,
+                textTransform: "uppercase",
+              }}
+            >
+              {t("detail.editor.context.serializesAs")}
+            </div>
+            <pre
+              data-testid="serializes-as-block"
+              style={{
+                background: "var(--bg-surface)",
+                border: "1px solid var(--border)",
+                borderRadius: 6,
+                padding: "12px 14px",
                 fontSize: 12,
                 color: "var(--text-secondary)",
                 margin: 0,
                 whiteSpace: "pre-wrap",
                 wordBreak: "break-word",
+                fontFamily: "monospace",
               }}
             >
-              {previewData.content}
+              {serializesAsText}
             </pre>
-          ) : null}
-        </div>
-      )}
+          </div>
+        )}
 
-      {/* AC-22: Token total + untrusted note */}
-      <div
-        style={{
-          padding: "12px 14px",
-          background: "var(--bg-surface)",
-          border: "1px solid var(--border)",
-          borderRadius: 6,
-          fontSize: 12,
-          color: "var(--text-secondary)",
-        }}
-      >
-        <div style={{ fontWeight: 600, marginBottom: 6 }}>
-          ≈ {totalTokens.toLocaleString()} tokens attached
-        </div>
-        <div style={{ color: "var(--text-muted)", lineHeight: 1.5 }}>
-          {t("detail.editor.context.untrustedNote")}
-        </div>
+        {/* No active repo — discovery is unavailable */}
+        {!repoId && (
+          <p style={{ fontSize: 13, color: "var(--text-muted)" }}>
+            {t("detail.editor.context.noRepo")}
+          </p>
+        )}
       </div>
 
-      {/* AC-23: SERIALIZES AS — derived, read-only block */}
-      {serializesAsText !== null && (
-        <div>
-          <div
-            style={{
-              fontSize: 11,
-              fontWeight: 700,
-              color: "var(--text-muted)",
-              letterSpacing: 0.8,
-              marginBottom: 8,
-              textTransform: "uppercase",
-            }}
-          >
-            {t("detail.editor.context.serializesAs")}
-          </div>
-          <pre
-            data-testid="serializes-as-block"
-            style={{
-              background: "var(--bg-surface)",
-              border: "1px solid var(--border)",
-              borderRadius: 6,
-              padding: "12px 14px",
-              fontSize: 12,
-              color: "var(--text-secondary)",
-              margin: 0,
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              fontFamily: "monospace",
-            }}
-          >
-            {serializesAsText}
-          </pre>
-        </div>
+      {/* AC-27: Preview drawer — fixed overlay, always visible regardless of list length */}
+      {previewPath && (
+        <Drawer
+          title={previewFileName}
+          subtitle={previewParentPath}
+          onClose={() => setPreviewPath(null)}
+          footer={
+            previewDoc ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <Badge
+                  color={FOLDER_KIND_COLORS[previewDoc.folder_kind] ?? "var(--text-secondary)"}
+                  mono
+                >
+                  {previewDoc.folder_kind}
+                </Badge>
+                <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                  {t("detail.editor.context.drawerTokenEstimate", {
+                    count: (previewDoc.est_tokens ?? 0).toLocaleString(),
+                  })}
+                </span>
+              </div>
+            ) : undefined
+          }
+        >
+          {previewLoading ? (
+            <Skeleton height={100} />
+          ) : previewData ? (
+            <SafeMarkdown content={previewData.content} />
+          ) : null}
+        </Drawer>
       )}
-
-      {/* No active repo — discovery is unavailable */}
-      {!repoId && (
-        <p style={{ fontSize: 13, color: "var(--text-muted)" }}>
-          {t("detail.editor.context.noRepo")}
-        </p>
-      )}
-    </div>
+    </>
   );
 }

@@ -14,11 +14,19 @@
  *
  * Route paths match the client TanStack Query hooks in
  * client/src/lib/hooks/project-context.ts exactly (verified against T9).
+ *
+ *   PUT /project-context/documents
+ *       Write new content back to an existing context document in the clone
+ *       worktree. Body: `{ path, content, repoId? }` (DocumentSave contract).
+ *       Confinement via guardPath (same rules as preview). Returns
+ *       `{ path, content }` (DocumentPreview) on success; 422 on any rejection
+ *       (traversal, non-.md, outside root folder, missing clone, write error).
  */
 
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { DocumentSave } from '@devdigest/shared';
 import { getContext } from '../_shared/context.js';
 import { ValidationError } from '../../platform/errors.js';
 import { ProjectContextService } from './service.js';
@@ -75,6 +83,30 @@ export default async function projectContextRoutes(appBase: FastifyInstance) {
     async (req, reply) => {
       const { workspaceId } = await getContext(app.container, req);
       const result = await service.previewDocument(workspaceId, req.query.path, req.query.repoId);
+      if (!result.ok) {
+        throw new ValidationError(result.reason);
+      }
+      return result.document;
+    },
+  );
+
+  /**
+   * Save: write new content to an existing confined document (AC-30, AC-31, AC-32).
+   *
+   * Body: `{ path, content, repoId? }` (DocumentSave contract from T1).
+   * Returns 422 when the path fails confinement, the clone is missing, or the
+   * write fails. On success returns `{ path, content }` (DocumentPreview shape).
+   *
+   * IMPORTANT: Route path is exactly `PUT /project-context/documents` — the T5
+   * client hook (`useSaveDocument`) is hardcoded to this string.
+   */
+  app.put(
+    '/project-context/documents',
+    { schema: { body: DocumentSave } },
+    async (req) => {
+      const { workspaceId } = await getContext(app.container, req);
+      const { path, content, repoId } = req.body;
+      const result = await service.saveDocument(workspaceId, path, content, repoId);
       if (!result.ok) {
         throw new ValidationError(result.reason);
       }

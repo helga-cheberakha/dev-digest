@@ -101,7 +101,8 @@
     "previewButton": "Preview",
     "closePreview": "Close preview",
     "tokenTotal": "≈ {count} tokens selected",
-    "untrustedNote": "Injected as an untrusted ## Project context block"
+    "untrustedNote": "Injected as an untrusted ## Project context block",
+    "drawerTokenEstimate": "≈ {count} tokens"
   },
   "mount": {
     "body": "Mount point for {owner}. The Agent Editor shell + tab routing are wired by A2 — {owner} renders this tab."

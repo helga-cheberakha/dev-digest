@@ -1,12 +1,13 @@
 /* ContextTab — Agent editor tab for attaching project context documents.
    Shows discovered .md files (specs/docs/insights) with drag-reorder, checkbox
-   attach/detach, folder-kind badge, and a document preview panel.
-   AC-20, AC-22. */
+   attach/detach, folder-kind badge, and a dismissible preview drawer.
+   AC-20, AC-22, AC-27. */
 "use client";
 import React from "react";
-import { Badge, Skeleton } from "@devdigest/ui";
+import { Badge, Drawer, Skeleton } from "@devdigest/ui";
 import { useTranslations } from "next-intl";
 import type { DiscoveredDocument } from "@devdigest/shared";
+import { SafeMarkdown } from "@/components/SafeMarkdown";
 import {
   useAgentDocuments,
   useSetAgentDocuments,
@@ -56,6 +57,8 @@ export function ContextTab({ agentId }: { agentId: string }) {
     return sum + (docMap.get(path)?.est_tokens ?? 0);
   }, 0);
 
+  const previewDoc = previewPath ? docMap.get(previewPath) : undefined;
+
   const filteredDocs = allDocs.filter(
     (d: DiscoveredDocument) =>
       !search ||
@@ -92,7 +95,14 @@ export function ContextTab({ agentId }: { agentId: string }) {
     setPreviewPath(previewPath === path ? null : path);
   };
 
+  const previewFileName =
+    previewDoc?.name ?? (previewPath ? (previewPath.split("/").pop() ?? previewPath) : "");
+  const previewParentPath =
+    previewDoc?.parent_path ??
+    (previewPath ? previewPath.substring(0, previewPath.lastIndexOf("/")) : "");
+
   return (
+    <>
     <div style={{ maxWidth: 580 }}>
       {/* ── Header ── */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
@@ -255,55 +265,6 @@ export function ContextTab({ agentId }: { agentId: string }) {
           </div>
         ))}
 
-      {/* ── Preview panel ── */}
-      {previewPath && (
-        <div
-          style={{
-            marginTop: 16,
-            padding: "12px 14px",
-            border: "1px solid var(--border)",
-            borderRadius: 6,
-            background: "var(--bg-surface)",
-            fontSize: 12,
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", marginBottom: 8 }}>
-            <span style={{ fontWeight: 600, flex: 1, fontSize: 13 }}>
-              {previewPath.split("/").pop()}
-            </span>
-            <button
-              onClick={() => setPreviewPath(null)}
-              aria-label={t("context.closePreview")}
-              style={{
-                background: "none",
-                border: "none",
-                cursor: "pointer",
-                color: "var(--text-muted)",
-                fontSize: 16,
-              }}
-            >
-              ×
-            </button>
-          </div>
-          {previewLoading ? (
-            <Skeleton height={100} />
-          ) : (
-            <pre
-              style={{
-                fontFamily: "monospace",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-all",
-                maxHeight: 300,
-                overflow: "auto",
-                margin: 0,
-              }}
-            >
-              {previewData?.content ?? ""}
-            </pre>
-          )}
-        </div>
-      )}
-
       {/* ── Footer: token total + untrusted note (AC-22) ── */}
       <div
         style={{
@@ -321,5 +282,38 @@ export function ContextTab({ agentId }: { agentId: string }) {
         <span>{t("context.untrustedNote")}</span>
       </div>
     </div>
+
+    {/* ── AC-27 Preview drawer — fixed overlay, always visible ── */}
+    {previewPath && (
+      <Drawer
+        title={previewFileName}
+        subtitle={previewParentPath}
+        onClose={() => setPreviewPath(null)}
+        footer={
+          previewDoc ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <Badge
+                color={FOLDER_KIND_COLOR[previewDoc.folder_kind] ?? "var(--text-secondary)"}
+                mono
+              >
+                {previewDoc.folder_kind}
+              </Badge>
+              <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                {t("context.drawerTokenEstimate", {
+                  count: (previewDoc.est_tokens ?? 0).toLocaleString(),
+                })}
+              </span>
+            </div>
+          ) : undefined
+        }
+      >
+        {previewLoading ? (
+          <Skeleton height={100} />
+        ) : previewData ? (
+          <SafeMarkdown content={previewData.content} />
+        ) : null}
+      </Drawer>
+    )}
+    </>
   );
 }

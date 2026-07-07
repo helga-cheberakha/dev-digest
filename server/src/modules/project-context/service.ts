@@ -199,4 +199,84 @@ export class ProjectContextService {
       return { ok: false, reason: 'File could not be read.' };
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // saveDocument — AC-30, AC-31, AC-32
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Write new content to an existing context document in the clone worktree.
+   *
+   * Applies the same `guardPath` confinement as `previewDocument` (AC-30):
+   *  - `.md` only, under a context root folder, no `..`, no absolute paths,
+   *    no symlink escapes; the file MUST already exist (realpath rejects missing
+   *    files — blocks new-file creation without a separate check).
+   *
+   * Writes go through `container.git.writeFile` — never raw `fs` in the service.
+   * The adapter implements temp+rename so a mid-write crash leaves no partial
+   * file (AC-32).
+   *
+   * Returns a discriminated union so the route can 422 on rejection (AC-32).
+   */
+  async saveDocument(
+    workspaceId: string,
+    candidatePath: string,
+    content: string,
+    repoId?: string,
+  ): Promise<{ ok: true; document: DocumentPreview } | { ok: false; reason: string }> {
+    // 1. Resolve the repo — verbatim same logic as previewDocument to preserve
+    //    the heap-order nondeterminism fix (server/INSIGHTS.md 2026-07-07).
+    let repo: { owner: string; name: string } | undefined;
+
+    if (repoId) {
+      const [row] = await this.container.db
+        .select({ owner: t.repos.owner, name: t.repos.name })
+        .from(t.repos)
+        .where(and(eq(t.repos.workspaceId, workspaceId), eq(t.repos.id, repoId)));
+      repo = row;
+    } else {
+      const rows = await this.container.db
+        .select({ owner: t.repos.owner, name: t.repos.name })
+        .from(t.repos)
+        .where(eq(t.repos.workspaceId, workspaceId))
+        .orderBy(asc(t.repos.createdAt));
+
+      for (const row of rows) {
+        const clonePath = this.container.git.clonePathFor({ owner: row.owner, name: row.name });
+        try {
+          await stat(clonePath);
+          repo = row;
+          break;
+        } catch {
+          // clone not present — try next repo
+        }
+      }
+      // Fall back to the oldest repo even if its clone doesn't exist yet.
+      if (!repo && rows.length > 0) {
+        repo = rows[0];
+      }
+    }
+
+    if (!repo) {
+      return { ok: false, reason: 'No repository configured for this workspace.' };
+    }
+
+    const repoRef = { owner: repo.owner, name: repo.name };
+    const clonePath = this.container.git.clonePathFor(repoRef);
+
+    // 2. Confine the path before any write (AC-30).
+    const guard = await guardPath(candidatePath, clonePath);
+    if (!guard.ok) {
+      return { ok: false, reason: guard.reason };
+    }
+
+    // 3. Write via the GitClient port — never raw fs in the service.
+    //    The adapter (SimpleGitClient) uses temp+rename for AC-32 atomicity.
+    try {
+      await this.container.git.writeFile(repoRef, guard.path, content);
+      return { ok: true, document: { path: guard.path, content } };
+    } catch {
+      return { ok: false, reason: 'File could not be written.' };
+    }
+  }
 }

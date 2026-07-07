@@ -19,6 +19,7 @@ import type {
   DiscoveryResponse,
   DocumentPreview,
   DocumentAttachment,
+  DocumentSave,
 } from "@devdigest/shared";
 
 // ---- Query-key constants (unique, referenced by siblings for invalidation) ----
@@ -152,6 +153,41 @@ export function useSetSkillDocuments() {
     onSuccess: (_data, { skillId }) => {
       qc.invalidateQueries({ queryKey: projectContextKeys.skillDocuments(skillId) });
       // Refresh all discovery results so used_by_agents counts are up to date (AC-24).
+      qc.invalidateQueries({ queryKey: ["project-context-documents"] });
+    },
+  });
+}
+
+// ---- Save document ----
+
+/**
+ * Persist edited markdown content back to the clone worktree file (AC-30).
+ *
+ * On success:
+ *   1. `setQueryData` — write the returned `{ path, content }` directly into the
+ *      preview cache so the Preview tab updates without a refetch flash (AC-31, ref pattern).
+ *   2. `invalidateQueries` the preview key — forces a background refetch so the
+ *      cache stays fresh for subsequent reads.
+ *   3. `invalidateQueries` the discovery key — refreshes token-estimate and byte-size
+ *      metadata so the Project Context page reflects the new file size (AC-31).
+ */
+export function useSaveDocument() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ path, content, repoId }: DocumentSave) =>
+      api.put<DocumentPreview>("/project-context/documents", {
+        path,
+        content,
+        repoId: repoId ?? undefined,
+      }),
+    onSuccess: (data, { path, repoId }) => {
+      // 1. Instant cache write — Preview shows the saved content without a round-trip flash.
+      qc.setQueryData(projectContextKeys.preview(path, repoId ?? null), data);
+      // 2. Invalidate preview — lets the cache refetch in the background for consistency.
+      qc.invalidateQueries({
+        queryKey: projectContextKeys.preview(path, repoId ?? null),
+      });
+      // 3. Invalidate discovery — refreshes est_tokens / size_bytes for the saved file (AC-31).
       qc.invalidateQueries({ queryKey: ["project-context-documents"] });
     },
   });
