@@ -136,4 +136,20 @@ describe('SimpleGitClient.listDocs', () => {
     // node_modules/foo/README.md should now be included.
     expect(paths.some((p) => p.startsWith('node_modules/'))).toBe(true);
   });
+
+  it('includeSegments: only matching files count toward maxFiles', async () => {
+    // Regression for AC-4: without includeSegments, a clone full of unrelated
+    // .md files exhausts the cap before context docs are reached. The fixture
+    // has non-context files (README.md, deep/nested/doc.md) that walk-order
+    // could visit first; with maxFiles=3 + includeSegments, all 3 context docs
+    // must still be returned.
+    const client = new SimpleGitClient(tempBase);
+    const docs = await client.listDocs(REPO_REF, {
+      maxFiles: 3,
+      includeSegments: ['specs', 'docs', 'insights'],
+    });
+
+    const paths = docs.map((d) => d.path).sort();
+    expect(paths).toEqual(['docs/api.md', 'insights/notes.md', 'specs/overview.md']);
+  });
 });

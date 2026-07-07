@@ -222,17 +222,22 @@ export function ContextTab({ skillId }: { skillId: string }) {
               const doc = docMap.get(path);
               return !doc || !search || doc.name.toLowerCase().includes(search.toLowerCase());
             })
-            .map((path, idx) => {
+            .map((path) => {
               const doc = docMap.get(path);
               if (!doc) return null;
+              // Drag indices must address the UNFILTERED source array: while a
+              // search filter is active, the row's position in the filtered list
+              // diverges from its position in orderedPaths, and splicing by the
+              // filtered index would reorder the wrong documents.
+              const srcIdx = orderedPaths.indexOf(path);
               return (
                 <DocRow
                   key={path}
                   doc={doc}
                   attached={true}
                   draggable={true}
-                  onDragStart={() => handleDragStart(idx)}
-                  onDragEnter={() => handleDragEnter(idx)}
+                  onDragStart={() => handleDragStart(srcIdx)}
+                  onDragEnter={() => handleDragEnter(srcIdx)}
                   onDragEnd={handleDragEnd}
                   onToggle={() => toggleAttach(path)}
                   onPreview={() => setPreviewPath(previewPath === path ? null : path)}

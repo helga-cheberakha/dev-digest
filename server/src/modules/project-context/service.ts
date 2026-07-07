@@ -67,16 +67,17 @@ export class ProjectContextService {
       };
     }
 
-    // 3. Walk for .md files. Request one extra entry to detect truncation without
-    //    a second pass.
+    // 3. Walk for .md files matching `**/{specs,docs,insights}/**/*.md` (AC-1).
+    //    The root-folder filter runs INSIDE the walk (`includeSegments`), so
+    //    `maxFiles` counts only matching files — a clone full of unrelated .md
+    //    files cannot exhaust the cap and silently drop context docs (AC-4).
+    //    One extra entry detects truncation without a second pass.
     const raw = await this.container.git.listDocs(repoRef, {
       maxFiles: MAX_DISCOVERED_FILES + 1,
+      includeSegments: [...CONTEXT_ROOT_FOLDERS],
     });
 
-    // 4. Filter to context root folders at any depth (AC-1: specs / docs / insights).
-    //    listDocs returns ALL .md files from the whole clone; the service keeps only
-    //    entries where at least one path segment is a configured root folder.
-    //    This matches `**/{specs,docs,insights}/**/*.md` semantics.
+    // 4. Defense-in-depth re-filter (adapter contract already guarantees this).
     const filtered = raw.filter((entry) => {
       const segments = entry.path.split('/');
       return segments.some((s) => (CONTEXT_ROOT_FOLDERS as readonly string[]).includes(s));

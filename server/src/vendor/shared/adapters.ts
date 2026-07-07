@@ -217,6 +217,13 @@ export interface ListDocsOptions {
    * default set covering `node_modules`, `.git`, build outputs, etc. is used.
    */
   excludeDirs?: string[];
+  /**
+   * When set, only files whose relative path contains at least one of these
+   * directory segments are returned — and only those count toward `maxFiles`.
+   * Without this, a clone with many non-matching `.md` files could exhaust the
+   * cap before the caller's filter runs, silently dropping matching files.
+   */
+  includeSegments?: string[];
 }
 
 /**

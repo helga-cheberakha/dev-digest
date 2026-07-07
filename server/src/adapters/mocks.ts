@@ -297,8 +297,13 @@ export class MockGitClient implements GitClient {
   async readFile(_repo: RepoRef, path: string): Promise<string> {
     return this.opts.files?.[path] ?? '';
   }
-  async listDocs(_repo: RepoRef, _opts?: ListDocsOptions): Promise<ListDocsEntry[]> {
-    return this.opts.docs ?? [];
+  async listDocs(_repo: RepoRef, opts?: ListDocsOptions): Promise<ListDocsEntry[]> {
+    let docs = this.opts.docs ?? [];
+    if (opts?.includeSegments) {
+      const includeSet = new Set(opts.includeSegments);
+      docs = docs.filter((d) => d.path.split('/').some((s) => includeSet.has(s)));
+    }
+    return opts?.maxFiles !== undefined ? docs.slice(0, opts.maxFiles) : docs;
   }
 }
 

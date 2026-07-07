@@ -165,4 +165,53 @@ describe("ContextTab (skill editor)", () => {
     expect(screen.queryByText("public-api.md")).not.toBeInTheDocument();
     expect(screen.getByText("onboarding.md")).toBeInTheDocument();
   });
+
+  it("drag-reorder while a filter is active persists the correct full order", () => {
+    // Regression: drag indices must address the UNFILTERED orderedPaths array.
+    // With three attached docs [alpha, beta, gamma] and a filter hiding beta,
+    // dragging gamma onto alpha must produce [gamma, alpha, beta] — not move
+    // the hidden beta (which is what filtered-list indices would do).
+    const threeDocs = [
+      { ...DISCOVERED_DOCS[0], path: "specs/alpha-spec.md", name: "alpha-spec.md" },
+      { ...DISCOVERED_DOCS[1], path: "docs/beta-doc.md", name: "beta-doc.md" },
+      { ...DISCOVERED_DOCS[0], path: "specs/gamma-spec.md", name: "gamma-spec.md" },
+    ];
+    vi.mocked(useDiscoveredDocuments).mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: { documents: threeDocs, truncated: false },
+    } as ReturnType<typeof useDiscoveredDocuments>);
+    vi.mocked(useSkillDocuments).mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: { paths: ["specs/alpha-spec.md", "docs/beta-doc.md", "specs/gamma-spec.md"] },
+    } as unknown as ReturnType<typeof useSkillDocuments>);
+    const mutate = vi.fn();
+    vi.mocked(useSetSkillDocuments).mockReturnValue({
+      mutate,
+      isPending: false,
+    } as unknown as ReturnType<typeof useSetSkillDocuments>);
+
+    renderWithIntl(<ContextTab skillId="skill1" />);
+
+    // Filter to "spec" — hides beta-doc.md, leaves alpha and gamma visible.
+    const filterInput = screen.getByRole("textbox", { name: /filter documents/i });
+    fireEvent.change(filterInput, { target: { value: "spec" } });
+    expect(screen.queryByText("beta-doc.md")).not.toBeInTheDocument();
+
+    const rowOf = (name: RegExp) =>
+      screen.getByRole("checkbox", { name })!.closest('[draggable="true"]')!;
+    const gammaRow = rowOf(/Detach gamma-spec\.md/i);
+    const alphaRow = rowOf(/Detach alpha-spec\.md/i);
+
+    fireEvent.dragStart(gammaRow);
+    fireEvent.dragEnter(alphaRow);
+    fireEvent.dragEnd(gammaRow);
+
+    expect(mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        paths: ["specs/gamma-spec.md", "specs/alpha-spec.md", "docs/beta-doc.md"],
+      }),
+    );
+  });
 });

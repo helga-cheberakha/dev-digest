@@ -166,6 +166,9 @@ export class SimpleGitClient implements GitClient {
     const excludeSet: ReadonlySet<string> = opts?.excludeDirs
       ? new Set(opts.excludeDirs)
       : LIST_DOCS_EXCLUDED_DIRS;
+    const includeSet: ReadonlySet<string> | null = opts?.includeSegments
+      ? new Set(opts.includeSegments)
+      : null;
 
     const cloneRoot = this.clonePathFor(repo);
     if (!(await this.exists(cloneRoot))) return [];
@@ -210,6 +213,8 @@ export class SimpleGitClient implements GitClient {
 
         // Posix-style relative path (matches `pr_files.path` convention).
         const relPath = relative(cloneRoot, full).split(sep).join('/');
+        // Only matching files count toward maxFiles (see ListDocsOptions).
+        if (includeSet && !relPath.split('/').some((s) => includeSet.has(s))) continue;
         results.push({ path: relPath, sizeBytes: size });
       }
     };
