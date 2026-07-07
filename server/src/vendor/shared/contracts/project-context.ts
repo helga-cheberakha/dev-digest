@@ -47,3 +47,11 @@ export const DocumentPreview = z.object({
   content: z.string(),
 });
 export type DocumentPreview = z.infer<typeof DocumentPreview>;
+
+// ---- DocumentSave ----
+export const DocumentSave = z.object({
+  path: z.string().min(1),
+  content: z.string(),
+  repoId: z.string().uuid().optional(),
+});
+export type DocumentSave = z.infer<typeof DocumentSave>;

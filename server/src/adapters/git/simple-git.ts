@@ -1,6 +1,6 @@
 import { simpleGit, type SimpleGit } from 'simple-git';
 import { join, relative, sep } from 'node:path';
-import { mkdir, readFile, access, rm, readdir, stat } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename, access, rm, readdir, stat } from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
 import { constants } from 'node:fs';
 import type {
@@ -153,6 +153,21 @@ export class SimpleGitClient implements GitClient {
 
   async readFile(repo: RepoRef, path: string): Promise<string> {
     return readFile(join(this.clonePathFor(repo), path), 'utf8');
+  }
+
+  /**
+   * Write `content` (UTF-8) to `path` inside the clone worktree.
+   * Uses a temp-file + rename strategy (both in the same directory) so
+   * a mid-write crash never leaves a partial file (AC-32).
+   * Path confinement is the caller's responsibility (`guardPath` in the service).
+   */
+  async writeFile(repo: RepoRef, path: string, content: string): Promise<void> {
+    const dest = join(this.clonePathFor(repo), path);
+    // Write to a temp file in the same directory so the subsequent rename is
+    // atomic within the same filesystem — avoids a partial file on crash.
+    const tmpPath = `${dest}.tmp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    await writeFile(tmpPath, content, 'utf8');
+    await rename(tmpPath, dest);
   }
 
   /**

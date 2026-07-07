@@ -259,6 +259,13 @@ export interface GitClient {
   blame(repo: RepoRef, path: string): Promise<BlameLine[]>;
   log(repo: RepoRef, path?: string): Promise<GitCommit[]>;
   readFile(repo: RepoRef, path: string): Promise<string>;
+  /**
+   * Write `content` (UTF-8) to `path` inside the clone worktree using a
+   * temp-file + rename strategy so a mid-write crash never leaves a partial
+   * file (AC-32). The caller (`ProjectContextService.saveDocument`) is
+   * responsible for path confinement via `guardPath` before calling this method.
+   */
+  writeFile(repo: RepoRef, path: string, content: string): Promise<void>;
   clonePathFor(repo: RepoRef): string;
   /**
    * Stat-only recursive walk of the clone returning only `.md` files. Never

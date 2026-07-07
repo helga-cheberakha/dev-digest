@@ -258,6 +258,8 @@ export interface MockGitOptions {
 export class MockGitClient implements GitClient {
   public cloned: { repo: RepoRef; url: string }[] = [];
   public syncs: { repo: RepoRef; branch: string }[] = [];
+  /** In-memory store for `writeFile` calls — path → content. */
+  public writes: Map<string, string> = new Map();
   private syncedHead?: string;
 
   constructor(private opts: MockGitOptions = {}) {}
@@ -295,7 +297,11 @@ export class MockGitClient implements GitClient {
     return [{ sha: 'a1b2c3d4', message: 'init', author: 'marisa.koch', date: '2026-06-01' }];
   }
   async readFile(_repo: RepoRef, path: string): Promise<string> {
-    return this.opts.files?.[path] ?? '';
+    // Prefer in-memory writes (from writeFile calls) so write-then-read tests work.
+    return this.writes.get(path) ?? this.opts.files?.[path] ?? '';
+  }
+  async writeFile(_repo: RepoRef, path: string, content: string): Promise<void> {
+    this.writes.set(path, content);
   }
   async listDocs(_repo: RepoRef, opts?: ListDocsOptions): Promise<ListDocsEntry[]> {
     let docs = this.opts.docs ?? [];
