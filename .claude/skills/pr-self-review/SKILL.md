@@ -66,6 +66,14 @@ issue, fix}`) — no prose. Reuse the project's existing analyzers where they fi
 For small diffs (≤ ~3 files, single bucket) skip the fan-out and review inline — the subagent
 overhead isn't worth it.
 
+**After an /implement review gate (don't review the same files with the same lenses twice):**
+when the diff under review already passed an /implement gate this session (architecture-reviewer +
+plan-verifier + a completed fix loop), scope the LLM passes to (a) the **delta committed since
+that gate** and (b) the **lenses the gate did not apply** (the per-bucket quality/security skills
+above — the gate ran architecture/plan lenses only). Pass the gate's accepted decisions,
+sanctioned drift, and already-recorded advisory findings into each analyzer brief as explicit
+do-not-re-report exclusions. Deterministic gates (§2) still run package-wide regardless.
+
 ### 4. Normalize, verify, gate
 Per [gate.md](gate.md) §2–§5:
 - Collapse findings to the shared severity scale; drop anything matching a

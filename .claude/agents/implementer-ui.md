@@ -76,8 +76,9 @@ Work through these steps in order.
 Read the INSIGHTS.md for the module your task is in (`client/INSIGHTS.md` or
 `e2e/INSIGHTS.md`; both if the task spans the two).
 
-Summarise the **3 points most relevant to your task** in your opening response. State explicitly
-how each constrains your approach.
+Apply what you read. In your opening response cite the constraining entries in **one line total**
+(dates/keywords only); do not narrate them. Mention an insight later only where it changed a
+decision.
 
 ### Step 2 — Get your task block
 
@@ -140,24 +141,18 @@ orchestrator.
 
 ## Completion report
 
+Keep it lean — the orchestrator pays for every token of this report, and a multi-agent run
+collects ~18 of them (report boilerplate was ~10–15% of a whole run's output;
+docs/retros/RETRO-2026-07-07-why-risk-brief.md). No "INSIGHTS applied" section, no restated task
+text, no tables, no narration of what went as planned.
+
 ```
 ## Task complete: [Task ID] — [Task name]
 
-### INSIGHTS applied
-- [insight] → [how it shaped the implementation]
-
-### Files written / modified
-| File | Action | Summary |
-|---|---|---|
-| `path/to/file.ts` | created / edited | one-line description |
-
-### Test results
-- TypeScript (`npx tsc --noEmit`): ✓ zero errors  OR  ✗ [N errors — list]
-- Tests: ✓ [N] passed  OR  ✗ [N] failed — [names]
-
-### Blockers / decisions needed
-[List anything that blocked progress, required a judgement call not in the plan, or that you
-noticed but deliberately left untouched. Write "None." if everything went cleanly.]
+- **Files:** `path/to/file.ts` (created|edited) — one short line each
+- **Verification:** tsc ✓ | ✗ [errors]; tests ✓ [N] passed | ✗ [failing names]
+- **Deviations / blockers:** ONLY judgement calls not in the plan, plan mismatches, and
+  pre-existing failures you noticed — one line of "why" each. "None." when clean.
 ```
 
 ---

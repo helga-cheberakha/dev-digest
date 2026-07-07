@@ -97,6 +97,18 @@ Specification work belongs to the `spec-creator` agent:
   the feature's new module (nav registries, resolvers, shared helpers), the plan must cite the
   grep-verified `file:line` where that symbol actually lives — never an assumed location. A wrong
   Owned-path file costs an implement-time refusal + an orchestrator amendment + a DRIFT decision.
+- **Consumer sweep for deleted/narrowed shared symbols.** For EVERY symbol a task deletes, renames,
+  or narrows in `@devdigest/shared` (or any cross-package export), grep ALL code that compiles it —
+  including path-alias consumers outside the obvious package (`reviewer-core` is typechecked by
+  server's `tsc`) and test fixtures (`server/test/`, `**/*.test.ts*`) — and assign every hit to
+  some task's Owned paths. An unassigned consumer is a guaranteed implement-time gap (retro
+  evidence: `reviewer-core/src/prompt.ts` and `server/test/contracts.test.ts` were both missed
+  this way — docs/retros/RETRO-2026-07-07-why-risk-brief.md, "What was missed").
+- **New files must match their discoverer's convention.** When a task creates a file that a runner
+  or registry finds by glob/naming convention (e2e specs are discovered ONLY as
+  `e2e/specs/*.flow.json`; migrations via `meta/_journal.json`; server modules via
+  `src/modules/index.ts`), cite the discovering glob/registry (`file:line`) in the task and name
+  the file to match — a mismatch is silent: the runner reports green while the file never runs.
 - **Write the plan file incrementally.** Emit the plan as a header `Write` followed by per-section
   `Edit` appends — never one giant single `Write` (a 700-line single Write killed the planner twice
   with "API Error: Connection closed mid-response"; see docs/retros/INSIGHTS.md 2026-07-07).
@@ -285,6 +297,9 @@ Note any item marked "assumed default — confirm" if it rests on an unconfirmed
 - [ ] No AC prose restated from the spec (IDs + deltas only; any traceability matrix uses IDs)
 - [ ] No task `Action` has 10+ numbered steps; no sub-5-minute sibling tasks left unmerged
 - [ ] Every cross-cutting Owned path is grep-verified (`file:line` cited), not inferred
+- [ ] Every deleted/narrowed shared symbol has ALL consumers (grep across packages, incl. path-alias
+      compiles and test fixtures) assigned to a task — no orphan consumers
+- [ ] Every new runner/registry-discovered file cites the discovering glob and matches it
 ```
 
 ---

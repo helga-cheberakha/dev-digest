@@ -71,6 +71,22 @@ Read the plan file. Extract for every task: `T-id`, `Action`, `Module`, `Type`, 
 field; a `mode:` arg overrides it. Build the dependency DAG from `Depends-on`. Print a one-line
 summary of what will run (e.g. "6 tasks, multi-agent, 3 phases; fix loop max 3").
 
+### Step 0.5 — Preflight (30 seconds of bash, before the first spawn)
+
+Check every external prerequisite the plan names BEFORE Batch 1 — one discovered mid-run stalls a
+whole stage (retro: an empty `OPENROUTER_API_KEY` surfaced only at the stage that needed it):
+
+- **Env keys / secrets** any task or later stage depends on — verify the var is non-empty without
+  printing its value (`node -e` boolean check), never echo secrets.
+- **External tools** the plan's acceptance requires (e.g. `agent-browser` for e2e runs) — `which`
+  them; if absent, state up front which acceptance defers to CI instead of failing that task late.
+- **Migrations state** when the plan has schema tasks — `cd server && npm run db:migrate` is cheap
+  and idempotent.
+- **Runner discovery globs** for any file the plan creates by convention — one grep in the runner
+  confirms the plan's claimed filename actually gets picked up.
+
+Report missing prerequisites to the user immediately; do not start batches that dead-end on them.
+
 ### Step 1 — Implement
 
 **Multi-agent mode** (default when the plan says so):
@@ -122,6 +138,14 @@ reports). Then spawn, **concurrently**:
   **PASS / FAIL / REVIEW NEEDED** verdict.
 
 Both run on Sonnet (read-only, structured prompts). Collect both verdicts.
+
+**Brief both reviewers with the accepted-decisions list** — the plan's decided deviations,
+spec-mandated exceptions, documented known drift (INSIGHTS entries), and anything the user already
+accepted mid-run, each with its spec/plan/INSIGHTS reference. Instruct: *"verify these are
+documented where claimed; do not re-report a sanctioned, documented decision as a finding."* A
+reviewer that doesn't know a decision was sanctioned re-litigates it as a HIGH and burns a full
+fix iteration + re-review (retro: the spec-mandated cross-module imports cost exactly that —
+docs/retros/RETRO-2026-07-07-why-risk-brief.md).
 
 ### Step 3 — Fix loop (bounded — this is where review comments get resolved)
 

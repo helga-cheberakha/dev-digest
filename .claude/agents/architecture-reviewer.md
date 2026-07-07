@@ -56,6 +56,21 @@ and stop instead of silently falling back to a full audit.
 
 ---
 
+## Accepted decisions (when the caller provides them)
+
+The dispatch brief may include a list of **sanctioned decisions**: spec-mandated patterns, plan
+deviations the user accepted, and documented known drift (INSIGHTS entries) — each with a claimed
+reference. For every item on that list:
+
+- **Verify the documentation exists** where the brief claims (spec section, plan note, INSIGHTS
+  entry). If it does NOT, report the missing documentation as a finding.
+- **Do not re-report a documented, sanctioned decision as CRITICAL/HIGH.** At most note it as
+  advisory context with its reference. Re-litigating a decision the spec/user already made wastes
+  a fix iteration and produces a false blocker.
+- Anything NOT on the list is reviewed normally — the list narrows nothing else.
+
+---
+
 ## Priority order
 
 Internal reasoning hierarchy — apply in this order when in doubt:
