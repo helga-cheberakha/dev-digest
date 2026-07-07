@@ -10,6 +10,8 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 ## What Doesn't Work
 
+- **2026-07-07** — Resolving "the workspace's repo" with `SELECT … FROM repos WHERE workspace_id = ? LIMIT 1` and no `ORDER BY` is heap-order nondeterministic — live verification got a seed repo whose clone didn't exist on disk, failing attach-time path validation. Pattern now: accept an explicit `repoId` (threaded from the client's `useActiveRepo`), else fall back to `ORDER BY createdAt` preferring a repo whose clone dir `stat()`s. Evidence: `server/src/modules/agents/service.ts` (`resolveCloneRoot`).
+
 ## Codebase Patterns
 
 - **2026-07-03** — LLM-structured output that gets persisted and later re-injected into another LLM prompt as trusted context (`pr_intent` → review prompt scoping in `run-executor.ts`) must be re-validated with the contract Zod schema right before persist (`Intent.parse(result.data)`) — `completeStructured`'s internal validation is adapter-specific, not an independent integrity check at the trust boundary. Flagged by the Security Reviewer agent on PR #6. Evidence: `server/src/modules/intent/service.ts:117`.
@@ -35,13 +37,21 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 - **2026-07-06** — Tests that feed a canned `Review` through `MockLLMProvider` (`adapters/mocks.ts`) into `reviewPullRequest` must craft the fixture so each finding's `file` AND `start_line` land inside the test diff's hunk lines — otherwise reviewer-core's grounding gate silently drops the finding and the assertion fails with zero findings, not an error. Evidence: `server/src/cli/pre-review.test.ts`, `reviewer-core/src/grounding.ts`.
 - **2026-07-06** — `tsx` resolves `@devdigest/*` path aliases from the tsconfig at the CWD — `npm run pre-review` works from `server/`, but invoking `src/cli/pre-review.ts` from any other directory needs an explicit `tsx --tsconfig server/tsconfig.json`. Evidence: `server/package.json` (`pre-review` script).
+- **2026-07-07** — `npm run depcruise` does NOT exist: `dependency-cruiser` is a devDependency but there is no npm script and no `.dependency-cruiser.cjs` config, so plans/skills referencing the depcruise architecture gate cannot actually run it. Onion-boundary checks must be done by source inspection until the script+config are added. Evidence: `server/package.json:25`.
 
 ## Recurring Errors & Fixes
 
 - **2026-06-14** — Adding a required field to a Zod contract (`RunStats.cost_usd`) breaks the inline fixture in `server/test/contracts.test.ts` (RunTrace parse). Update the `stats: {…}` fixture in the same change. Evidence: `server/test/contracts.test.ts:160`.
+- **2026-07-07** — `db/migrations/meta/` is missing snapshots 0012–0014, so `db:generate` diffs the schema against snapshot 0011 and re-detects historical column renames — an interactive TTY prompt plus already-applied ALTERs leak into the new migration. Workaround used for 0015: answer prompts via an `expect` PTY, then strip everything but the genuinely new statements from the generated SQL. `0015_snapshot.json` now captures the full 42-table schema, so future generates diff cleanly. Evidence: `server/src/db/migrations/meta/_journal.json`, `0015_careless_famine.sql`.
+- **2026-07-07** — A running dev server does NOT auto-apply new migrations: after a schema-adding commit, routes touching the new tables 500 with `relation "…" does not exist` until a manual `cd server && npm run db:migrate`. If a brand-new endpoint 500s with `internal_error`, check for unapplied migrations first. Evidence: live verification of `agent_documents`/`skill_documents` (migration 0015).
 - **2026-06-25** — `reviews/repository/pull.repo.ts` contains hidden `upsertIntent`/`getIntent` helpers that mirror the `Intent` contract shape. When `Intent` fields are renamed (e.g. `intent` → `summary`), this file must be updated alongside the contract — it's easy to miss because it lives inside the `reviews` module, not in `modules/intent/`. Evidence: `server/src/modules/reviews/repository/pull.repo.ts:49-68`.
 
 ## Session Notes
+
+### 2026-07-07 (Project Context Folder)
+- Built the Project Context Folder feature per `specs/SPEC-2026-07-07-project-context-folder.md` (multi-agent /implement run, 14 tasks): `project-context` module (stat-only discovery via new `GitClient.listDocs` port method + `guardPath` realpath confinement), `agent_documents`/`skill_documents` join tables (migration 0015), ordered path attachments on `GET|POST /agents|skills/:id/documents`, run-time injection via `reviews/context-loader.ts` (agent-first dedup, 20k/40k caps, best-effort skip+log) into reviewer-core's existing `specs` slot. reviewer-core unchanged.
+- Live verification (AC-16): a reviewer with an attached invariant spec produced a finding paraphrasing the spec's rule on a violating PR; `specs_read` and `prompt_assembly.specs` populated as designed.
+- Review-gate fixes: repoId-scoped clone resolution, dedup + `db.transaction` on attachment writes (duplicate paths previously wiped the set — DELETE committed, INSERT threw on PK), skills route onion violation removed, any-depth root-folder matching per AC-1.
 
 ### 2026-07-06 (Pre-review CLI)
 - Built local pre-review CLI per `docs/plans/PLAN-local-pre-review-cli.md`: new `src/cli/` tree — `diff-source.ts` (`DiffMode` union `working|staged|branch`, `DiffSource` port, factory throws "not yet implemented" for staged/branch), `diff-sources/working.ts` (`git diff` via promisified `execFile`, "not a git repository" → `GitNotARepoError` code `not_a_repo`), `output.ts` (`renderFindings` stdout / `renderSummary` stderr / `resolveExitCode` with `FailOnPolicy critical|warning|any|never`), `pre-review.ts` composition root. Reviewer-core consumed unchanged. Exit codes: 0 clean, 1 blocking findings, 2 runtime error. 176 server tests green (162 + 14 new).
