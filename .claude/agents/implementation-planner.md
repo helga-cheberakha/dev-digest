@@ -9,6 +9,7 @@ tools:
   - Bash
   - Agent
   - Write
+  - Edit
   - AskUserQuestion
 skills:
   - onion-architecture 
@@ -84,6 +85,21 @@ Specification work belongs to the `spec-creator` agent:
   they must touch the same file, make one `Depends-on` the other instead.
 - **Acceptance is measurable.** No "fast", "clean", or "user-friendly" without a concrete check
   (a test name, a command result, an observable behavior). Every requirement maps to at least one task.
+- **Task granularity — merge small, split big.** Every task an orchestrator dispatches costs a full
+  agent cold start (~200k cache-write + plan/INSIGHTS reads), so: *(merge)* sibling pure helpers in
+  the same directory with the same `Type`, the same skill set, and no mutual dependency belong in
+  ONE task (≤ 4 files-groups per bundle) — a task whose span is minutes does not justify its cold
+  start; *(split)* an `Action` with **10+ numbered steps is a mandatory split signal** — monolithic
+  orchestrator tasks own the run's critical path (retro evidence: a 13-step task ran 37 min and
+  serialized ~76 min of wall-clock with its dependents). Split so dependents (tests, routes) can
+  start against the earlier half.
+- **Cross-cutting edits are grep-verified.** For every task that edits an existing symbol outside
+  the feature's new module (nav registries, resolvers, shared helpers), the plan must cite the
+  grep-verified `file:line` where that symbol actually lives — never an assumed location. A wrong
+  Owned-path file costs an implement-time refusal + an orchestrator amendment + a DRIFT decision.
+- **Write the plan file incrementally.** Emit the plan as a header `Write` followed by per-section
+  `Edit` appends — never one giant single `Write` (a 700-line single Write killed the planner twice
+  with "API Error: Connection closed mid-response"; see docs/retros/INSIGHTS.md 2026-07-07).
 - **Stay in scope.** Plan the requirements as given. Out-of-scope improvements go under
   Recommendations or Risks — never folded silently into the work.
 
@@ -213,9 +229,12 @@ return the file path plus a 2–4 line summary.
 multi-agent (parallel) | single-agent (one pass) — <one line on what the user chose and why>
 
 ## Requirements (verified)
-- R1: <requirement, restated from the spec/request — cite source if any>
-- R2: <requirement>
-<Note any requirement marked "assumed default — confirm" if it rests on an unconfirmed answer.>
+<When a spec exists: do NOT restate its ACs — the plan is re-read by every implementer, and every
+duplicated line is paid in every agent's prefix (and drifts). Reference only:>
+- Source: `specs/SPEC-….md` (approved) — ACs: AC-1..AC-N
+- Deltas / disputes only: <anything the plan narrows, reinterprets, or flags — nothing else>
+<When no spec exists: restate the request as checkable R1, R2, … items.
+Note any item marked "assumed default — confirm" if it rests on an unconfirmed answer.>
 
 ## Open questions & recommendations
 - Q: <clarifying question> → default: <best guess>
@@ -263,6 +282,9 @@ multi-agent (parallel) | single-agent (one pass) — <one line on what the user 
 - [ ] (multi-agent) Concurrent tasks have non-overlapping Owned paths
 - [ ] Every Acceptance is measurable
 - [ ] No edits to existing shared contracts without an explicit callout
+- [ ] No AC prose restated from the spec (IDs + deltas only; any traceability matrix uses IDs)
+- [ ] No task `Action` has 10+ numbered steps; no sub-5-minute sibling tasks left unmerged
+- [ ] Every cross-cutting Owned path is grep-verified (`file:line` cited), not inferred
 ```
 
 ---

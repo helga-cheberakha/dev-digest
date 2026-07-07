@@ -55,6 +55,12 @@ the args in one line before starting.
 - **Respect owned-path non-overlap** whenever you run implementers concurrently.
 - **Keep context lean.** Hold the plan path and each agent's short report — never paste an agent's
   full working transcript back into your own reasoning.
+- **Never call `TaskOutput` with `block:true` on a running agent.** Completion notifications arrive
+  automatically; a blocking call that times out dumps the agent's raw JSONL transcript into your
+  context (thousands of junk tokens). If a status check is truly needed, use `block:false`.
+- **Batch commits use explicit file paths — never `git add -A`/`git add .`.** Parallel sessions may
+  share the worktree; a blanket add sweeps their untracked files into your commit (it happened;
+  see docs/retros/INSIGHTS.md 2026-07-07). List the paths from the implementer reports.
 
 ## Execution algorithm
 
@@ -70,8 +76,12 @@ summary of what will run (e.g. "6 tasks, multi-agent, 3 phases; fix loop max 3")
 **Multi-agent mode** (default when the plan says so):
 1. Find the **ready set** — tasks whose `Depends-on` are all complete and whose `Owned paths` do not
    overlap any task already running this batch.
-2. Spawn one implementer per ready task, **concurrently** (one message, multiple `Agent` calls),
-   **routed by the task's `Type`**:
+1b. **Bundle small tasks.** If the ready set contains 3+ tasks of the same `Type` in the same module
+   directory whose Actions are small (pure helpers, one-file edits), dispatch them to ONE
+   implementer as an ordered bundle (owned paths = the union; cap: ≤ 4 tasks per bundle). Each
+   dispatched agent costs a full cold start — a 2-minute task does not justify one.
+2. Spawn one implementer per ready task (or bundle), **concurrently** (one message, multiple `Agent`
+   calls), **routed by the task's `Type`**:
 
    | Task `Type` | Agent to spawn |
    |---|---|
@@ -79,9 +89,14 @@ summary of what will run (e.g. "6 tasks, multi-agent, 3 phases; fix loop max 3")
    | `ui` \| `e2e` | `implementer-ui` |
    | spans both | `implementer` (generic) |
 
-   Give each one the **plan path + its task ID** (its contract is to read its own task from the
-   plan file), any run notes from the args, **plus the list of the other tasks' `Owned paths`** so
-   it stays in its lane.
+   Brief each one with **the task's full block pasted inline** (Action, Owned paths, Known
+   gotchas, Acceptance — you already read the plan in Step 0; don't make 16 agents re-read ~700
+   lines for their ~30), plus: the plan path as authoritative fallback reference, any run notes
+   from the args, the **landed API signatures from earlier batches' reports** the task depends on,
+   and **the list of the other tasks' `Owned paths`** so it stays in its lane. State in the brief:
+   "your task block is inline; do not re-read the plan unless the block references another
+   section". If you amend the plan mid-run, re-paste the affected blocks — the plan file remains
+   the source of truth.
 3. Wait for the batch, collect reports, mark tasks done.
 4. **Commit the batch**: `[PLAN-<feature>] Phase <N>: <T-ids> — <one line>` (see Guardrails — the
    review gate reads committed work only).
@@ -142,6 +157,25 @@ If the backlog is empty → go to Step 4. Otherwise loop, for iteration `i = 1 �
 If `max-fix` is reached with a non-empty backlog → stop and list the remaining findings for a human
 decision. Never exceed the cap.
 
+### Step 3.5 — Live verify (after the fix loop, before the final report)
+
+Mock-green is not running: a full gate PASS has shipped features that were never once executed
+(unapplied migrations, dead routes — both are recurring INSIGHTS errors). When the plan's changed
+set includes **runtime surface** (routes, UI pages, migrations, CLI entry points), invoke the
+`verify` skill (or launch the app per the `run` skill) and drive the affected flow **once**.
+Minimum checklist:
+
+- pending migrations applied — `cd server && npm run db:migrate` (a running dev server does NOT
+  auto-apply them; new-table routes 500 with `relation … does not exist` until you do);
+- each new/changed route answers non-500 for its happy path (422/404 contract responses count as
+  answers);
+- each new/changed page renders its primary state (and its empty/first-visit state if the plan
+  defines one).
+
+Failures feed the **same fix loop** (Step 3), bounded by the same `max-fix` cap. **Skip** this step
+only when the changed set has no runtime surface (contracts-only, docs-only, test-only) — record
+`skipped (no runtime surface)` in the report; never skip because "the tests are green".
+
 ### Step 4 — Final report
 
 Output the summary below and recommend running **`pr-self-review`** before push. Do **not** push,
@@ -168,6 +202,9 @@ merge, or open a PR. Offer to invoke `pr-self-review` as the next step.
 - iterations run: <i> / <max-fix>
 - resolved: <findings fixed>
 - **remaining (needs human):** <list, or "none">
+
+### Live verify
+- passed (<flows driven>) | skipped (no runtime surface) | findings → fix loop: <list>
 
 ### Next step
 Run `pr-self-review` before pushing. (Not pushed — by design.)

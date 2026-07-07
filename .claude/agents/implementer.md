@@ -96,9 +96,12 @@ Read the INSIGHTS.md for the module your task is in:
 Summarise the **3 points most relevant to your task** in your opening response. State explicitly
 how each constrains your approach. If a task spans two modules, read both files.
 
-### Step 2 — Read the plan task
+### Step 2 — Get your task block
 
-Open the plan file (`docs/plans/PLAN-*.md`) and extract for your task ID:
+If the dispatch brief **embeds your task block inline** (the orchestrator pastes it from the
+plan), treat it as authoritative and **skip the plan read** — open the plan file only if the block
+references another section you need. Only when no inline block was given, open the plan file
+(`docs/plans/PLAN-*.md`). Either way, you need for your task ID:
 - **Owned paths** — the files to touch (these and only these)
 - **Action** — the steps to follow in order
 - **Acceptance** — the measurable check that defines done (including tests that must pass)

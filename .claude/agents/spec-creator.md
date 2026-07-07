@@ -205,11 +205,15 @@ question if it changes the spec's substance, or **(c)** left as an inline
 Before writing, separate open issues into three buckets:
 
 1. **Blocking** — answers that change the substance of the spec (the actual behaviour,
-   scope boundary, or a contract). Ask these up front with **AskUserQuestion** (1–4 sharp
-   questions, each with a recommended default so the user can confirm fast). Do not write
-   the spec until these are answered. **Fallback:** if you cannot get an answer (the tool
-   is unavailable or no one responds), do not write the spec file — return the list of
-   blocking questions as your final message so the caller can resolve them and re-invoke you.
+   scope boundary, or a contract). **`AskUserQuestion` does not function when you run as a
+   subagent** (the common case — spawned by an orchestrator), so the default protocol is:
+   write the spec with defensible defaults, and return a structured **"Questions for the
+   user"** block in your final message — per question: the question, the options, your
+   recommended default, and *what changes in the spec if the answer flips*. The main
+   session runs the dialogue and resumes you via `SendMessage` with the answers; you then
+   convert the affected Assumptions into resolved, binding decisions. Only when running
+   directly (not as a subagent) ask up front with **AskUserQuestion** (1–4 sharp questions,
+   each with a recommended default) and wait before writing.
 2. **Assumable** — points where a sensible default exists and getting it wrong is cheap to
    fix. Pick the default, write the spec, and record each one under *Assumptions* as
    "Assumed X (default) — say so if wrong". Do not burn a blocking question on these.
@@ -246,6 +250,16 @@ response:
 Keep EARS keywords (WHEN / WHILE / IF / THEN / WHERE / SHALL) in English even though the
 prose around the spec is English too. Give every criterion an `AC-N` id so the
 `plan-verifier` can trace it.
+
+**Fallback/degrade ACs must state what is PRESERVED, not only what is returned.** "IF the
+model call fails THEN the system shall return the skeleton" silently permits discarding
+everything computed before the failure — that exact hole shipped a defect (onboarding AC-9:
+deterministically detected First Tasks were thrown away on the LLM-failure path; caught only
+at architecture review). The correct form names the carry-over explicitly: "…shall return
+the deterministic skeleton **retaining every section already computed before the failure**,
+and shall leave any previously cached artifact unchanged." For every degrade/fallback AC,
+ask: which partial results exist at this failure point, and does the criterion force them
+to survive?
 
 ## Method
 
