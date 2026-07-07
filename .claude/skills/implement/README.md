@@ -16,15 +16,16 @@ comments through a bounded fix loop. It never pushes or merges.
 ```
 args: plan:<path>  [mode:multi|single]  [max-fix:N]
   └─ read plan (tasks · DAG · owned paths · execution mode)
-       └─ implementer ×N   (multi-agent by DAG / non-overlapping owned paths, or single-agent)
+       └─ implementer ×N   (multi-agent by DAG / non-overlapping owned paths, or single-agent;
+            routed by task Type: backend|core → implementer-backend, ui|e2e → implementer-ui)
             └─ architecture-reviewer ‖ plan-verifier   (parallel, read-only, Sonnet)
-                 └─ fix loop ×≤max-fix   (implementer fixes crit/high + missing/partial → re-review changed files)
-                      └─ final report  +  "run pr-self-review before push"
+                 └─ fix loop ×≤max-fix   (implementer fixes CRITICAL/HIGH + VIOLATIONs → re-review changed files)
+                      └─ final report (incl. per-agent usage)  +  "run pr-self-review before push"
 ```
 
 ## When to invoke
 
-- `/run-plan plan:docs/plans/<feature>.md` (optionally `mode:single`, `max-fix:2`)
+- `/implement plan:docs/plans/<feature>.md` (optionally `mode:single`, `max-fix:2`)
 - Phrases: "run the plan", "execute the plan", "implement docs/plans/<x>.md".
 
 ## Inputs
@@ -40,10 +41,10 @@ args: plan:<path>  [mode:multi|single]  [max-fix:N]
 
 | Stage | Agent | Model | Role |
 |-------|-------|-------|------|
-| Build | `implementer` ×N | sonnet | One task each; parallel by non-overlapping owned paths; self-verifies |
+| Build | `implementer-backend` / `implementer-ui` / `implementer` ×N | sonnet | One task each, routed by task Type; parallel by non-overlapping owned paths; self-verifies |
 | Review | `architecture-reviewer` | sonnet | Structural contracts (read-only) |
 | Review | `plan-verifier` | sonnet | Requirement traceability / completeness (read-only) |
-| Fix | `implementer` ×N | sonnet | Resolve critical/high + missing/partial findings |
+| Fix | matching implementer profile ×N | sonnet | Resolve CRITICAL/HIGH findings + VIOLATIONs (DRIFT and uncovered ACs go to a human) |
 
 **Not invoked here:** `spec-creator`, `implementation-planner` (run manually beforehand), and
 `test-writer` (dedicated test authoring is intentionally disabled to save tokens — coverage comes
@@ -60,7 +61,7 @@ from each implementer's self-verification).
 ## File structure
 
 ```
-run-plan/
+implement/
 ├── SKILL.md     ← orchestrator — phased execution algorithm + bounded fix loop
 ├── tile.json    ← skill metadata
 └── README.md    ← this file
@@ -68,7 +69,7 @@ run-plan/
 
 ## Relationship to `pr-self-review`
 
-`run-plan` builds and reviews a feature **before** push (deep structural + traceability gate via the
-dedicated agents). `pr-self-review` is the **broad pre-push gate** (security, npm audit, contract
-sync, test-coverage, react/next checks) that runs at `git push`. Run `run-plan` to build the feature,
-then `pr-self-review` as the final gate before pushing.
+`/implement` builds and reviews a feature **before** push (deep structural + traceability gate via
+the dedicated agents). `pr-self-review` is the **broad pre-push gate** (security, npm audit, contract
+sync, test-coverage, react/next checks) that runs at `git push`. Run `/implement` to build the
+feature, then `pr-self-review` as the final gate before pushing.

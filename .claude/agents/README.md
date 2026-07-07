@@ -264,15 +264,20 @@ and implementer agents execute against.
   interactions, UX gaps — out-of-scope improvements returned as explicit [PROPOSAL] items.
 - Bash is read-only; new specs always start as `Status: draft` (human flips to `approved`,
   caller/plan-verifier to `implemented`).
+- **Two spec modes:** *lightweight* (one page — Problem / Goals / User stories / AC / Edge
+  cases / Assumptions / Open questions) when the feature is single-module with no new
+  cross-boundary contracts and no new untrusted-input surface; *full* (complete template)
+  for everything else. The agent states the chosen mode and reason in its reply.
 
-**Model:** `opus`
+**Model:** `opus` (default). For a clearly lightweight request, spawn with the
+`model: sonnet` override — the one-page form does not need Opus.
 
 **Tools:** Read · Glob · Grep · Bash · WebFetch · Write · Edit · Agent · AskUserQuestion
 
 **Preloaded skills:**
-`security` · `onion-architecture` · `frontend-architecture` · `fastify-best-practices` ·
-`react-best-practices` · `next-best-practices` · `typescript-expert` · `zod` ·
-`drizzle-orm-patterns` · `postgresql-table-design` · `mermaid-diagram`
+`security` · `onion-architecture` · `frontend-architecture` · `zod` · `mermaid-diagram`
+(implementation-level skills are deliberately not loaded — the agent reads existing code
+directly when it needs grounding)
 
 ---
 

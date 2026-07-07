@@ -8,6 +8,7 @@ import type { ReviewRepository, FindingRow, PullRow, ReviewRow } from './reposit
 import { REVIEW_STRATEGY } from './constants.js';
 import { taskLine } from './helpers.js';
 import { loadDiff } from './diff-loader.js';
+import { loadContextDocs } from './context-loader.js';
 
 /** Thrown by a run when the user cancels it mid-flight (between map files). */
 export class RunCancelledError extends Error {
@@ -172,6 +173,10 @@ export class ReviewRunExecutor {
 
     runLog.info(`Starting review with agent "${agent.name}" (${agent.provider}/${agent.model})`);
 
+    // Populated by context loading inside the try block; available in the
+    // catch block so the failure trace still reflects any partially-loaded docs.
+    let specsRead: string[] = [];
+
     try {
       // Resolve the agent's LLM provider. (container.llm throws if the provider
       // key is missing — caught below and persisted as a failed run.)
@@ -204,10 +209,39 @@ export class ReviewRunExecutor {
       const task = taskLine(pull) + rankNote;
 
       const linked = await this.container.agentsRepo.linkedSkills(agent.id);
-      const skillBodies = linked
-        .filter((l) => l.skill.enabled && !l.skill.injectionDetected)
-        .map((l) => l.skill.body);
+      const enabledLinked = linked.filter((l) => l.skill.enabled && !l.skill.injectionDetected);
+      const skillBodies = enabledLinked.map((l) => l.skill.body);
       if (skillBodies.length) runLog.info(`Skills: ${skillBodies.length} skill(s) attached to prompt`);
+
+      // ---- Context docs (best-effort — never fails the run) -----------------
+      // Loads attached Project Context documents for the agent and its enabled
+      // skills, deduplicates, re-validates paths, truncates/drops per budget.
+      let contextSpecs: string[] = [];
+      try {
+        const cloneRoot = this.container.git.clonePathFor({ owner: repo.owner, name: repo.name });
+        const contextResult = await loadContextDocs(
+          this.container,
+          cloneRoot,
+          { owner: repo.owner, name: repo.name },
+          agent.id,
+          enabledLinked.map((l) => l.skill.id),
+          runLog,
+        );
+        contextSpecs = contextResult.specs;
+        specsRead = contextResult.specsRead;
+        const { skipped, truncated, dropped } = contextResult;
+        if (specsRead.length > 0 || skipped.length > 0 || dropped.length > 0) {
+          runLog.info(
+            `Context docs: ${specsRead.length} loaded, ${skipped.length} skipped, ${truncated.length} truncated, ${dropped.length} dropped`,
+          );
+        }
+      } catch (err) {
+        // Safety net — loadContextDocs should never throw (all errors are caught
+        // internally), but if one escapes: log and continue without context docs.
+        runLog.info(
+          `Context loading error (best-effort, continuing): ${(err as Error).message}`,
+        );
+      }
 
       // ---- Engine: assemble → single-pass → grounding -----------------------
       // The pure review pipeline lives in @devdigest/reviewer-core (shared with
@@ -233,6 +267,9 @@ export class ReviewRunExecutor {
         ...(intent ? { intent } : {}),
         task,
         ...(skillBodies.length ? { skills: skillBodies } : {}),
+        // Inject Project Context docs when any were loaded (AC-18: omit when empty
+        // so prompt_assembly.specs stays null — reviewer-core unchanged).
+        ...(contextSpecs.length ? { specs: contextSpecs } : {}),
         sessionId: `${repo.owner}/${repo.name}#${pull.number}:${agent.name}`,
         onEvent: (e) => runLog.event(e.kind, e.msg, e.data),
         checkCancelled: () => {
@@ -308,7 +345,7 @@ export class ReviewRunExecutor {
         })),
         raw_output: outcome.raw,
         memory_pulled: [],
-        specs_read: [],
+        specs_read: specsRead,
         // Persisted log = the run's FULL event buffer (incl. shared pre-work:
         // diff load + intent), not just events recorded inside this method.
         log: runLog.logFor(runId),
@@ -338,7 +375,7 @@ export class ReviewRunExecutor {
         })
         .catch(() => undefined);
       await this.repo
-        .saveRunTrace(runId, this.traceFromBuffer(runId, pull, agent, '0/0 passed', Date.now() - start))
+        .saveRunTrace(runId, this.traceFromBuffer(runId, pull, agent, '0/0 passed', Date.now() - start, specsRead))
         .catch(() => undefined);
       this.container.runBus.complete(runId);
       throw err;
@@ -443,6 +480,7 @@ export class ReviewRunExecutor {
     agent: AgentRow,
     grounding: string,
     durationMs = 0,
+    specsRead: string[] = [],
   ): RunTrace {
     return {
       config: {
@@ -458,7 +496,7 @@ export class ReviewRunExecutor {
       tool_calls: [],
       raw_output: '',
       memory_pulled: [],
-      specs_read: [],
+      specs_read: specsRead,
       log: this.container.runBus.buffer(runId).map((e) => ({ t: e.t, kind: e.kind, msg: e.msg })),
     };
   }

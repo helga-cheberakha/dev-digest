@@ -156,6 +156,9 @@ merge, or open a PR. Offer to invoke `pr-self-review` as the next step.
 - **Implemented:** <N> tasks (T1…Tn) — <one line>
 - **Commits:** <list of `[PLAN-<feature>] …` commits made this run>
 - **Self-verify:** module suites + typecheck green | failing (<detail>)
+- **Agent usage:** <one line per spawn, from its `<usage>` block: agent · tokens · tool uses ·
+  duration> — Σ totals. Note: these exclude any nested sub-agents; run `/workflow-retro deep`
+  for exact totals.
 
 ### Review gate
 - architecture-reviewer (sonnet): PASS (0 CRITICAL/HIGH) | FAIL — <CRITICAL/HIGH counts; MEDIUM/LOW recorded>

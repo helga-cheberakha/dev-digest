@@ -21,7 +21,7 @@ Reusable AI skills that provide specialized knowledge and workflows. Canonical l
 | [pr-self-review](pr-self-review/SKILL.md) | Review | Pre-PR gate — runs cheap deterministic checks (tsc, lint, dependency-cruiser, tests), routes the diff through architecture/quality skills per file bucket, and blocks the push on any verified CRITICAL |
 | [implement](implement/SKILL.md) | Orchestration | `/implement plan:<path>` — executes a `docs/plans/PLAN-*.md`: implementer profiles per batch/DAG, commit per batch, then architecture-reviewer ∥ plan-verifier in parallel and a bounded fix loop (max-fix, default 3); ends recommending pr-self-review, never pushes |
 | [code-review-conventions](code-review-conventions/SKILL.md) | Review | Severity scale (CRITICAL→LOW), structured finding format, adversarial verification protocol, suppression, and reviewer etiquette |
-| [workflow-retro](workflow-retro/SKILL.md) | Meta | `/workflow-retro` (manual only, never auto-runs) — post-run retrospective of a multi-agent workflow: per-agent token/duration metrics, launch order & parallelism, hard/easy/duplicated/missed insights; one report per run in `docs/retros/` + append-only orchestration lessons |
+| [workflow-retro](workflow-retro/SKILL.md) | Meta | `/workflow-retro` (manual only, never auto-runs) — post-run retrospective of a multi-agent workflow: per-agent token/duration metrics (or exact tokens, cache hit ratio, and nested-sub-agent totals via `deep` mode's journal parser), launch order & parallelism, hard/easy/duplicated/missed insights; one report per run in `docs/retros/` + a trend row in `docs/retros/ledger.md` + append-only orchestration lessons |
 
 ## What Are Skills?
 
