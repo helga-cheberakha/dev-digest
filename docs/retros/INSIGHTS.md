@@ -15,6 +15,12 @@ with a new dated note, never edit or delete.
   pass them into every agent brief as "verified, don't re-derive" — both spec-creator and
   implementation-planner built on them without re-research, and the "zero reviewer-core changes"
   claim held through planning. Evidence: `docs/retros/RETRO-2026-07-07-project-context-folder-spec.md`.
+- **2026-07-07 (why-risk-brief)** — Two-tier typecheck gate makes breaking shared-contract changes
+  parallelizable: per-task gates scoped to "no error ORIGINATES in owned files" + one final
+  full-package sink task (T18) that reconciles everything jointly. T1 deleted/narrowed shared
+  types consumed by 5 sibling tasks in the same run — zero gate deadlocks, zero waived checks.
+  (Came out of a GPT-5 cross-model review blocker, B1.) Evidence:
+  `docs/retros/RETRO-2026-07-07-why-risk-brief.md`, `docs/plans/PLAN-why-risk-brief.md` (Testing strategy).
 
 ## What Doesn't Work
 
@@ -48,6 +54,13 @@ with a new dated note, never edit or delete.
 
 ## Recurring Errors & Fixes
 
+- **2026-07-07 (why-risk-brief)** — "API Error: Connection closed mid-response" strikes agents
+  emitting one giant tool call (a 700-line plan in a single `Write`): it killed the
+  implementation-planner twice at the same spot, plus one reviewer resume. Fix that worked first
+  try: resume via `SendMessage` with an explicit instruction to build the file INCREMENTALLY
+  (header `Write`, then small per-section appends/edits; agents without Edit use `cat >>` heredocs
+  or `python3` str.replace with asserted counts). Brief this preemptively for any agent expected
+  to produce a 20K+ char artifact. Evidence: `docs/retros/RETRO-2026-07-07-why-risk-brief.md`.
 - **2026-07-07** — `git add -A` in a batch commit on a worktree shared with a PARALLEL session
   swept an unrelated untracked file into the commit (required an amend). When multiple sessions
   can touch the same branch, orchestrator commits must list explicit paths. Evidence:
