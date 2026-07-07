@@ -20,7 +20,6 @@ export class IntentRepository {
     summary: string;
     inScope: string[];
     outOfScope: string[];
-    riskAreas?: string[] | null;
     model: string;
     tokensSaved?: number | null;
   }): Promise<PrIntentRow> {
@@ -31,7 +30,6 @@ export class IntentRepository {
         summary: data.summary,
         inScope: data.inScope,
         outOfScope: data.outOfScope,
-        riskAreas: data.riskAreas ?? null,
         model: data.model,
         tokensSaved: data.tokensSaved ?? null,
       })
@@ -41,7 +39,6 @@ export class IntentRepository {
           summary: data.summary,
           inScope: data.inScope,
           outOfScope: data.outOfScope,
-          riskAreas: data.riskAreas ?? null,
           model: data.model,
           tokensSaved: data.tokensSaved ?? null,
           updatedAt: new Date(),

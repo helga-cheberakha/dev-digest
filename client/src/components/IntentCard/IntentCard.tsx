@@ -1,9 +1,48 @@
 "use client";
 
 import React from "react";
-import { Icon, SectionLabel, Badge } from "@devdigest/ui";
+import { Icon, SectionLabel } from "@devdigest/ui";
 import { usePrIntent, useClassifyIntent } from "@/lib/hooks/intent";
-import type { PrIntentRecord } from "@devdigest/shared";
+import type { PrIntentRecord, Risk, RiskAreaKind, RiskSeverity } from "@devdigest/shared";
+import { s } from "./styles";
+
+/** Navigation target derived from a `Risk.file_refs` entry (AC-14). */
+export interface FileRefTarget {
+  path: string;
+  line?: number;
+}
+
+const KIND_ICON: Record<RiskAreaKind, keyof typeof Icon> = {
+  security: "Shield",
+  dependency: "Boxes",
+  performance: "Gauge",
+  data: "Database",
+  api_change: "Code",
+  other: "Info",
+};
+
+const SEVERITY_COLOR: Record<RiskSeverity, { color: string; bg: string }> = {
+  high: { color: "var(--crit)", bg: "var(--crit-bg)" },
+  medium: { color: "var(--warn)", bg: "var(--warn-bg)" },
+  low: { color: "var(--ok)", bg: "var(--ok-bg)" },
+};
+
+/**
+ * Parses a `file_ref` (`"path"`, `"path:line"`, or `"path:start-end"`) into a
+ * navigable target. A range contributes its start line (m2); a suffix that
+ * isn't a recognised line/range falls back to treating the whole ref as a
+ * bare path (defensive — grounding already guarantees the path portion is a
+ * known file, but the suffix shape isn't validated there).
+ */
+function parseFileRef(ref: string): FileRefTarget {
+  const idx = ref.lastIndexOf(":");
+  if (idx === -1) return { path: ref };
+  const path = ref.slice(0, idx);
+  const suffix = ref.slice(idx + 1);
+  const match = suffix.match(/^(\d+)(?:-\d+)?$/);
+  if (!match) return { path: ref };
+  return { path, line: Number(match[1]) };
+}
 
 // ---- Skeleton shown while loading -----------------------------------------
 
@@ -52,16 +91,92 @@ function IntentEmpty({ onClassify, loading }: { onClassify: () => void; loading:
   );
 }
 
+// ---- Risk Areas accordion (AC-13) -----------------------------------------
+
+function RiskAccordionItem({
+  risk,
+  onOpenFile,
+}: {
+  risk: Risk;
+  onOpenFile?: (ref: FileRefTarget) => void;
+}) {
+  const [expanded, setExpanded] = React.useState(false);
+  const KindIcon = Icon[KIND_ICON[risk.kind]];
+  const sevColor = SEVERITY_COLOR[risk.severity];
+
+  return (
+    <div style={s.riskItem}>
+      <button
+        type="button"
+        style={s.riskItemHeader}
+        onClick={() => setExpanded((e) => !e)}
+        aria-expanded={expanded}
+      >
+        <KindIcon size={14} style={{ color: sevColor.color, flexShrink: 0 }} />
+        <span style={s.riskItemTitle}>{risk.title}</span>
+        <Icon.ChevronDown size={14} style={s.riskChevron(expanded)} />
+      </button>
+
+      {risk.file_refs.length > 0 && (
+        <div style={s.riskFileRefs}>
+          {risk.file_refs.map((ref) => (
+            <button
+              key={ref}
+              type="button"
+              className="mono"
+              style={s.riskFileRefBtn}
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenFile?.(parseFileRef(ref));
+              }}
+            >
+              {ref}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {expanded && <p style={s.riskExplanation}>{risk.explanation}</p>}
+    </div>
+  );
+}
+
+function RiskAreasSection({
+  risks,
+  onOpenFile,
+}: {
+  risks: Risk[];
+  onOpenFile?: (ref: FileRefTarget) => void;
+}) {
+  return (
+    <div style={s.riskSection}>
+      <div style={s.riskSectionHeader}>
+        <Icon.AlertTriangle size={13} style={{ color: "var(--warn)", flexShrink: 0 }} />
+        <span style={s.riskLabel}>RISK AREAS</span>
+      </div>
+      <div style={s.riskList}>
+        {risks.map((risk, i) => (
+          <RiskAccordionItem key={`${risk.kind}-${risk.title}-${i}`} risk={risk} onOpenFile={onOpenFile} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ---- Populated intent card -----------------------------------------------
 
 function IntentFilled({
   intent,
   onRefresh,
   loading,
+  risks,
+  onOpenFile,
 }: {
   intent: PrIntentRecord;
   onRefresh: () => void;
   loading: boolean;
+  risks?: Risk[];
+  onOpenFile?: (ref: FileRefTarget) => void;
 }) {
   return (
     <div style={s.card}>
@@ -111,26 +226,24 @@ function IntentFilled({
         </div>
       </div>
 
-      {intent.risk_areas && intent.risk_areas.length > 0 && (
-        <div style={s.riskRow}>
-          <Icon.AlertTriangle size={13} style={{ color: "var(--warn)", flexShrink: 0 }} />
-          <span style={s.riskLabel}>RISK AREAS</span>
-          <div style={s.riskBadges}>
-            {intent.risk_areas.map((area) => (
-              <Badge key={area} color="var(--warn)" bg="var(--warn-bg)" icon="AlertTriangle">
-                {area}
-              </Badge>
-            ))}
-          </div>
-        </div>
-      )}
+      {risks && risks.length > 0 && <RiskAreasSection risks={risks} onOpenFile={onOpenFile} />}
     </div>
   );
 }
 
 // ---- Public component -------------------------------------------------------
 
-export function IntentCard({ prId }: { prId: string | null | undefined }) {
+export function IntentCard({
+  prId,
+  risks,
+  onOpenFile,
+}: {
+  prId: string | null | undefined;
+  /** Brief risk areas (owned by the caller — IntentCard does not fetch the Brief itself). */
+  risks?: Risk[];
+  /** Called when a risk's `file_ref` is clicked (AC-14 navigation, wired by the caller). */
+  onOpenFile?: (ref: FileRefTarget) => void;
+}) {
   const { data: intent, isLoading } = usePrIntent(prId);
   const classify = useClassifyIntent(prId);
 
@@ -150,114 +263,8 @@ export function IntentCard({ prId }: { prId: string | null | undefined }) {
       intent={intent}
       onRefresh={() => classify.mutate()}
       loading={classify.isPending}
+      risks={risks}
+      onOpenFile={onOpenFile}
     />
   );
 }
-
-// ---- Styles -----------------------------------------------------------------
-
-const s = {
-  card: {
-    border: "1px solid var(--border)",
-    borderRadius: 8,
-    background: "var(--bg-elevated)",
-    padding: 18,
-    marginBottom: 16,
-  },
-  summary: {
-    fontStyle: "italic",
-    fontSize: 14,
-    color: "var(--text-primary)",
-    margin: "0 0 16px",
-    lineHeight: 1.5,
-  },
-  columns: {
-    display: "flex",
-    gap: 24,
-    flexWrap: "wrap" as const,
-  },
-  col: {
-    flex: 1,
-    minWidth: 180,
-  },
-  colHeader: {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    marginBottom: 10,
-  },
-  scopeItem: {
-    display: "flex",
-    gap: 6,
-    marginBottom: 6,
-    alignItems: "flex-start",
-  },
-  scopeText: {
-    fontSize: 13,
-    color: "var(--text-secondary)",
-    lineHeight: 1.4,
-  },
-  riskRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    marginTop: 16,
-    flexWrap: "wrap" as const,
-  },
-  riskLabel: {
-    fontSize: 11,
-    fontWeight: 700,
-    letterSpacing: "0.06em",
-    color: "var(--warn)",
-  },
-  riskBadges: {
-    display: "flex",
-    gap: 6,
-    flexWrap: "wrap" as const,
-  },
-  emptyRow: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
-    flexWrap: "wrap" as const,
-  },
-  muted: {
-    fontSize: 13,
-    color: "var(--text-muted)",
-  },
-  btn: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 6,
-    padding: "6px 12px",
-    borderRadius: 6,
-    border: "1px solid var(--border)",
-    background: "var(--bg-elevated)",
-    color: "var(--text-secondary)",
-    fontSize: 12,
-    fontWeight: 600,
-    cursor: "pointer",
-  },
-  btnSmall: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 4,
-    padding: "3px 8px",
-    borderRadius: 5,
-    border: "1px solid var(--border)",
-    background: "transparent",
-    color: "var(--text-muted)",
-    fontSize: 11,
-    fontWeight: 600,
-    cursor: "pointer",
-  },
-  skeletonLine: {
-    height: 14,
-    borderRadius: 4,
-    background: "var(--bg-hover)",
-  },
-  spinning: {
-    animation: "ddspin 1s linear infinite",
-  },
-} as const;

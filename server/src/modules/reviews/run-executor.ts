@@ -114,7 +114,6 @@ export class ReviewRunExecutor {
           summary: intentRow.summary,
           in_scope: intentRow.inScope,
           out_of_scope: intentRow.outOfScope,
-          risk_areas: intentRow.riskAreas ?? undefined,
         };
         runLog.info(`Intent loaded: "${intent.summary.slice(0, 80)}…"`);
       } else {

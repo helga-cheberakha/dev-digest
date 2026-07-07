@@ -1,9 +1,11 @@
 import type { Container } from '../../platform/container.js';
 import type { FindingActionKind, RunEventKind, RunTrace } from '@devdigest/shared';
+import { inArray } from 'drizzle-orm';
+import * as t from '../../db/schema.js';
 import { AppError, NotFoundError } from '../../platform/errors.js';
 import type { AgentRow } from '../../db/rows.js';
 import { ReviewRepository } from './repository.js';
-import { type ReviewDto, type ReviewDtoFinding } from './helpers.js';
+import { type ReviewDto, type ReviewDtoFinding, type ReviewRunMetrics } from './helpers.js';
 import { ReviewRunExecutor, type Logger } from './run-executor.js';
 import { actOnFinding as actOnFindingImpl } from './findings.js';
 import { reviewToDto } from './helpers.js';
@@ -168,8 +170,29 @@ export class ReviewService {
         if (a) names.set(review.agentId, a.name);
       }
     }
+
+    // AC-11: surface each review's run metrics (tokens/cost) from `agent_runs`,
+    // one `inArray` query + JS-map lookup — same read-time-join shape as the
+    // PR-list per-PR aggregate (`pulls/routes.ts`); `run_id` may be null.
+    const runMetrics = new Map<string, ReviewRunMetrics>();
+    const runIds = [...new Set(rows.map(({ review }) => review.runId).filter((id): id is string => id != null))];
+    if (runIds.length > 0) {
+      const runRows = await this.container.db
+        .select({ id: t.agentRuns.id, tokensIn: t.agentRuns.tokensIn, tokensOut: t.agentRuns.tokensOut, costUsd: t.agentRuns.costUsd })
+        .from(t.agentRuns)
+        .where(inArray(t.agentRuns.id, runIds));
+      for (const r of runRows) {
+        runMetrics.set(r.id, { tokensIn: r.tokensIn, tokensOut: r.tokensOut, costUsd: r.costUsd });
+      }
+    }
+
     return rows.map(({ review, findings }) =>
-      reviewToDto(review, findings, review.agentId ? names.get(review.agentId) : null),
+      reviewToDto(
+        review,
+        findings,
+        review.agentId ? names.get(review.agentId) : null,
+        review.runId ? runMetrics.get(review.runId) : null,
+      ),
     );
   }
 

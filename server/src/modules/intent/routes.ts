@@ -30,7 +30,6 @@ export default async function intentRoutes(appBase: FastifyInstance) {
         summary: row.summary,
         in_scope: row.inScope,
         out_of_scope: row.outOfScope,
-        risk_areas: row.riskAreas ?? undefined,
       };
     },
   );
@@ -50,7 +49,6 @@ export default async function intentRoutes(appBase: FastifyInstance) {
         summary: row.summary,
         in_scope: row.inScope,
         out_of_scope: row.outOfScope,
-        risk_areas: row.riskAreas ?? undefined,
       };
     },
   );
