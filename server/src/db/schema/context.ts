@@ -123,4 +123,6 @@ export const onboarding = pgTable('onboarding', {
     .references(() => repos.id, { onDelete: 'cascade' }),
   json: jsonb('json').notNull(),
   generatedAt: timestamp('generated_at', { withTimezone: true }).defaultNow().notNull(),
+  /** Cache key: the git HEAD SHA at generation time. NULL = legacy row → treat as cache miss. */
+  headSha: text('head_sha'),
 });

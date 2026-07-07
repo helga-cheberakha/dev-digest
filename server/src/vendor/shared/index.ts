@@ -25,4 +25,5 @@ export * from './contracts/eval-ci.js';
 export * from './contracts/observability.js';
 export * from './contracts/productionize.js';
 export * from './contracts/project-context.js';
+export * from './contracts/onboarding.js';
 export * from './adapters.js';
