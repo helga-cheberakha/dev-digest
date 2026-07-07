@@ -1,33 +1,39 @@
 "use client";
 
-import React, { useCallback } from "react";
+import React from "react";
 import { SectionLabel } from "@devdigest/ui";
 import PrBriefCard from "../PrBriefCard";
 import { IntentCard } from "@/components/IntentCard";
+import { usePrBrief } from "@/lib/hooks/brief";
 import { BlastRadiusSection } from "./BlastRadiusSection";
 import { s } from "./styles";
+
+/** Navigation target derived from a `file_ref` (AC-14) — matches the shape
+ *  PrBriefCard/IntentCard already call their `onOpenFile` prop with. */
+interface FileRefTarget {
+  path: string;
+  line?: number;
+}
 
 interface OverviewTabProps {
   prId: string | null;
   prBody: string | null | undefined;
-  onWhy: (file: string, line: number) => void;
+  onOpenFile: (ref: FileRefTarget) => void;
   onGoToBlast: () => void;
 }
 
-export function OverviewTab({ prId, prBody, onWhy, onGoToBlast }: OverviewTabProps) {
-  const handleWhy = useCallback(
-    (file: string, line: number) => {
-      onWhy(file, line);
-    },
-    [onWhy],
-  );
+export function OverviewTab({ prId, prBody, onOpenFile, onGoToBlast }: OverviewTabProps) {
+  // Reuses the SAME `["brief", prId]` query PrBriefCard fetches (deduped by
+  // TanStack Query) — no second fetch (m6) — to feed IntentCard's Risk Areas
+  // accordion (AC-13) with `brief.risks`.
+  const { data: brief } = usePrBrief(prId);
 
   return (
     <>
-      <IntentCard prId={prId} />
+      <IntentCard prId={prId} risks={brief?.risks} onOpenFile={onOpenFile} />
       <section>
         <SectionLabel icon="FileText">PR Brief</SectionLabel>
-        {prId && <PrBriefCard prId={prId} onWhy={handleWhy} />}
+        {prId && <PrBriefCard prId={prId} onOpenFile={onOpenFile} />}
       </section>
       {prBody && (
         <section>
