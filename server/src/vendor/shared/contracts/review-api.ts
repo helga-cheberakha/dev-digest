@@ -34,6 +34,9 @@ export const ReviewRecord = z.object({
   grounding: z.string().nullish(),
   created_at: z.string(),
   findings: z.array(FindingRecord),
+  tokens_in: z.number().int().nullable(),
+  tokens_out: z.number().int().nullable(),
+  cost_usd: z.number().nullable(),
 });
 export type ReviewRecord = z.infer<typeof ReviewRecord>;
 
