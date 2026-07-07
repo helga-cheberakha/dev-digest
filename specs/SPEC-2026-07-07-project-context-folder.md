@@ -32,8 +32,10 @@ with **zero new LLM calls**.
   This is the headline deferral and must not creep in.
 - Non-goal: Indexing / chunking / embedding of documents (the mock's "Indexed: 12 files ·
   1,240 chunks" footer and any vector search). Discovery lists files; it does not chunk them.
-- Non-goal: Creating, uploading, editing, or deleting repo document files from the app
-  (the mock's `+` / upload / Edit-mode toolbar). This is a **read-only reader** of repo files.
+- Non-goal: Creating, uploading, or deleting repo document files from the app (the mock's
+  `+` / upload toolbar). **Editing the content of an already-discovered `.md` document from
+  the Project Context page is in scope** (AC-28..AC-32); creating new files, uploading, and
+  deleting remain out of scope. (Amendment 2026-07-07 — see Decisions.)
 - Non-goal: A "coverage ring" or any computed coverage/quality metric over documents.
 - Non-goal: Any change to reviewer-core (the `specs` slot, wrapping, and grounding already exist).
 - Non-goal: Reading `.md` files outside the configured root folders, or non-`.md` files.
@@ -58,6 +60,10 @@ with **zero new LLM calls**.
   Project-context text, so that I can see verbatim what was sent to the model.
 - As a reviewer author, I want a reviewer with an attached invariant spec to catch and quote a
   PR that violates it, so that written rules become enforced rules.
+- As a reviewer author, I want to edit a discovered document's content from the Project Context
+  page via a Preview/Edit toggle, so that I can correct or refine a spec without leaving the app.
+- As a reviewer author, I want the Preview action on an Agent/Skill Context tab to open a
+  readable preview of the document, so that I can check a document's content before attaching it.
 
 ## Inputs (provenance)
 - Discovered document list (paths, parent path, folder-kind badge, byte size)
@@ -69,6 +75,8 @@ with **zero new LLM calls**.
   read boundary]; injected as resolved strings into reviewer-core's `specs` slot.
 - Prompt injection of those strings — [reused: reviewer-core `## Project context` slot +
   `wrapUntrusted` + `INJECTION_GUARD`].
+- Edited document content on save — [deterministic: user-authored text] written back to the
+  existing clone file at a confined path; re-read on the next Preview/run. No LLM.
 - **Zero new LLM calls anywhere in this feature.** (No `[new: … LLM call]` inputs exist.)
 
 ## Acceptance criteria (EARS)
@@ -192,7 +200,19 @@ with **zero new LLM calls**.
 - AC-20: The Agent and Skill Context tabs **shall** present each candidate document as a row with a
   drag handle, an attach checkbox, filename, parent path, a folder-kind badge, and a Preview
   action, plus a "Filter documents…" search, styled consistently with the existing Skills tab.
+  The Preview action's behavior is specified in AC-27.
   _(observable: the Context tab matches the Skills-tab interaction pattern; search filters the list.)_
+- AC-27: WHEN a user activates a document row's Preview action on an Agent or Skill Context tab,
+  the system **shall** open a preview drawer/panel that displays the document's filename and its
+  parent path, a close (dismiss) control, and the document's content rendered as **sanitized**
+  markdown (AC-21 applies — identical rendering to the Project Context page's Preview, **not**
+  inert plain text); WHEN the user activates Preview on a different row, the drawer **shall**
+  switch to that document; WHEN the user activates the close control (or re-activates the same
+  row's Preview), the drawer **shall** be dismissed.
+  _(observable: clicking Preview on `onboarding.system.md` from the General Reviewer agent's
+  Context tab opens a drawer titled with that filename and its parent path (`server/src/prompts`)
+  showing sanitized rendered markdown; a doc containing `<script>` or a `javascript:` link renders
+  inert; clicking another row swaps the drawer content; the close control hides the drawer.)_
 - AC-21: The system **shall** render every document Preview as **sanitized** markdown — no raw
   embedded HTML/script execution and no `javascript:` URLs — because document content is
   repo-controlled untrusted text.
@@ -207,6 +227,49 @@ with **zero new LLM calls**.
   — computed entirely client-side from the attached selection (no backend change).
   _(observable: attaching `specs/public-api.md` to a skill renders a "SERIALIZES AS" block listing
   that path under a `## Project context` heading; it updates as the selection changes.)_
+
+### Editing (Project Context page)
+- AC-28: WHERE a document is selected on the Project Context page, the document pane **shall**
+  present a **Preview / Edit** toggle: Preview renders the content as sanitized markdown (AC-21),
+  and Edit presents the current content in a plain-text editor. Edit mode is offered **only on
+  the Project Context page**, not in the Agent/Skill Context-tab preview drawer (AC-27 stays
+  preview-only).
+  _(observable: the document header shows two toggle tabs; switching to Edit replaces the rendered
+  preview with an editable plain-text area, switching back to Preview restores the rendered view;
+  the Context-tab drawer shows no Edit affordance.)_
+- AC-29: WHEN the user switches a selected document to Edit, the system **shall** load that
+  document's current content — read through the **same** confined read boundary as Preview
+  (AC-8) — into the editor.
+  _(observable: opening Edit shows the exact current file text, matching the Preview source.)_
+- AC-30: WHEN the user saves an edited document, the system **shall** write the submitted content
+  to that document's path only after confining the path with the **same** rules as AC-8/AC-13 —
+  `.md` extension, under a configured root folder, no `..`/absolute path, and the resolved real
+  path (symlinks included) inside the clone root — and **shall** reject the save and write nothing
+  to disk otherwise.
+  _(observable: saving a valid `specs/foo.md` updates the file on disk; a save targeting
+  `../../etc/passwd`, `/etc/hosts`, `src/app.ts`, or a symlink escaping the clone is rejected with
+  a validation error and no file is written.)_
+- AC-31: WHEN a save succeeds, the system **shall** make the saved content the new source of truth
+  for that document, read back on subsequent access **until the next repo resync**: the pane's
+  Preview, the document's token estimate and byte size (recomputed from the new content), and any
+  subsequent run's injected content for that path **shall** reflect the saved text — because
+  attachments store paths only and both Preview and run-time injection re-read the file (AC-7,
+  AC-11). The edit is **clone-local and ephemeral**: the next `git.sync()` (`git fetch` +
+  `git reset --hard origin/<branch>`) restores the upstream file and discards the edit; this
+  resync behavior is **accepted, not a bug** (see Decisions).
+  _(observable: after saving, re-opening Preview shows the new text, the "≈ N tokens" and size
+  update, and a run that injects that path injects the edited content — no re-attach needed; after
+  a repo resync the same path reads back the upstream content.)_
+- AC-32: IF the repo clone is missing, or the target file cannot be written (unwritable / I/O
+  error), or the path fails confinement (AC-30), THEN the system **shall** reject the save with an
+  explicit error and leave the existing on-disk file unchanged (no partial write).
+  _(observable: a save against a workspace with no clone, or an unwritable file, returns an error;
+  the previous file content is intact.)_
+- AC-33: WHILE the Project Context page document pane is in Edit mode, the system **shall** display
+  an explicit warning that edits are local to the review clone and may be overwritten on the next
+  sync, so the user understands the edit is ephemeral (AC-31).
+  _(observable: switching a document to Edit shows a visible notice such as "Edits are local to the
+  review clone and may be overwritten on the next sync"; Preview mode does not show it.)_
 
 ## Edge cases
 - Empty discovery result (no matching folders/files) → AC-3 (empty state, no error).
@@ -227,13 +290,31 @@ with **zero new LLM calls**.
   the existing skill-body gate → covered by AC-10 ("enabled linked skills").
 - Document with non-UTF-8 / unreadable content at run time → treated as an unreadable file →
   AC-12 (skip + log).
+- Save targeting a path that fails confinement / non-`.md` / outside root folders / symlink
+  escape → AC-30 (reject, nothing written; same guard as attach).
+- Save when the clone is missing or the target file is unwritable → AC-32 (reject, file unchanged).
+- Edited document clobbered by a repo resync: `git.sync()` runs `git fetch` + `git reset --hard
+  origin/<branch>` (`server/src/adapters/git/simple-git.ts:102`), which discards any local
+  worktree edit to a tracked file. A saved edit is therefore **clone-local and lives only until
+  the next resync of that repo**, after which the upstream content returns. At run time the run
+  reads whatever the clone currently holds (edited or resynced) → AC-11/AC-31. This is the
+  **accepted, chosen behavior** (ephemeral, option (a)); the Edit UI warns about it → AC-33.
+  Not a bug → accepted: no additional handling.
 
 ## Non-functional
-- Security (path confinement, A01/A05): attached paths are attacker-influenceable input. Every read
-  — discovery, Preview, and run-time injection — **shall** confine to the repo clone root: allow
-  only `.md` files under a configured root folder, reject `..`/absolute paths, and validate the
-  resolved real path (symlinks included) stays within the clone dir. Enforced at attach time (AC-8)
-  and again at read/run time (AC-13). No path escaping the clone is ever read.
+- Security (path confinement, A01/A05): attached paths **and the edit/save path** are
+  attacker-influenceable input. Every read — discovery, Preview, and run-time injection — **and
+  the save write (AC-30)** **shall** confine to the repo clone root: allow only `.md` files under
+  a configured root folder, reject `..`/absolute paths, and validate the resolved real path
+  (symlinks included) stays within the clone dir. Enforced at attach time (AC-8), at read/run time
+  (AC-13), and before any write on save (AC-30). No path escaping the clone is ever read **or
+  written**.
+- Security (write surface, A01/A08 — new in this amendment): the save endpoint (AC-30) is the
+  feature's only mutation of on-disk repo files. It **shall** be workspace-scoped (writes only
+  within the requesting workspace's repo clone, resolved server-side like discovery/preview — not
+  from a client-supplied absolute path), reject non-confined paths before writing, and never
+  partially write on failure (AC-32). It grants no new prompt trust: edited content re-enters a
+  run through the same `wrapUntrusted` boundary as any repo file (AC-11).
 - Security (untrusted content): document text is repo-controlled and **shall** be treated as data,
   never instructions — wrapped by `wrapUntrusted` under the injection guard in the prompt (AC-11),
   and sanitized before browser Preview (AC-21).
@@ -256,6 +337,12 @@ with **zero new LLM calls**.
   page's attach/detach control (AC-24) reuses the **same** agent/skill attachment write endpoints as
   the editor tabs — no new endpoint. Failure contract: discovery degrades to an empty list with a
   reason (AC-3); a bad attach path is rejected (AC-8).
+- **client → server (edit/save):** the Project Context page's Edit mode calls a **new** server
+  endpoint to write a confined document's content back to the clone worktree file (AC-30). This is
+  the only write endpoint in the feature. Failure contract: confinement failure, missing clone, or
+  an unwritable file → the save is rejected and nothing is written (AC-30/AC-32). The read used to
+  populate the editor reuses the existing Preview read boundary (AC-29). The edit is clone-local and
+  ephemeral — the next `git.sync()` (`reset --hard`) discards it (accepted; AC-31/AC-33).
 - **server (run-executor) → repo clone → reviewer-core:** at run time the executor assembles the
   agent+skill document set (AC-10), reads each from the PR's repo clone through the existing git/clone
   read boundary (AC-11), applies the caps (AC-14/AC-15), and passes resolved strings into
@@ -319,6 +406,13 @@ one join relation for agent↔document, one for skill↔document, each carrying 
 **Document preview** (server → client): `{ path, content }` where `content` is the raw markdown of a
 validated path (rendered client-side, sanitized — AC-21). Rejects any path failing confinement (AC-8).
 
+**Document save** (client → server, new): request `{ path: string, content: string, repoId?: string }`;
+response echoes the saved document as `{ path: string, content: string }` (the `DocumentPreview` shape,
+so the pane can re-render immediately). The `path` is confined identically to AC-8/AC-13 before any
+write (AC-30); the request is rejected (nothing written) on confinement failure, a missing clone, or an
+unwritable file (AC-32). `repoId` scopes the write to a specific repo like preview. Lives in the
+vendored shared contracts alongside `DocumentPreview`.
+
 **Run trace** (server → client, existing `RunTrace`): `specs_read: string[]` populated with injected
 paths (AC-17); `prompt_assembly.specs` carries the **full** rendered untrusted block text — the
 complete, delimiter-wrapped Project-context that was sent to the model — which the drawer exposes
@@ -326,7 +420,7 @@ expandably (AC-25). Both fields already exist in the vendored `RunTrace` contrac
 field is required** for MVP; a per-document token breakdown remains out of scope (a [PROPOSAL]).
 
 ## Untrusted inputs
-Yes. Two untrusted surfaces:
+Yes. Untrusted surfaces:
 1. **Document contents injected into the prompt** — repo-controlled markdown. Treated as data via
    reviewer-core's existing `wrapUntrusted('spec-N', …)` under the `## Project context` heading with
    the `INJECTION_GUARD` system rule. No feature change needed here; the spec only requires the
@@ -334,6 +428,13 @@ Yes. Two untrusted surfaces:
 2. **Attached path strings** — attacker-influenceable. Confined to the repo clone root, `.md`-only,
    root-folder-only, symlink-resolved, at both attach and read time (AC-8/AC-13).
 3. **Document markdown rendered in the browser Preview** — sanitized to prevent stored XSS (AC-21).
+   This applies to **both** the Project Context page preview and the Agent/Skill Context-tab preview
+   drawer (AC-27); neither renders raw HTML or `javascript:` URLs.
+4. **Save request (path + content)** — attacker-influenceable. The **path** is confined identically
+   to attach/read (AC-30). The **content** becomes the document body on disk; on a later run it
+   re-enters the prompt through the same `wrapUntrusted` boundary as any repo file (AC-11) — editing
+   grants no new prompt trust. The save endpoint is workspace-scoped and rejects out-of-confinement
+   or unwritable targets (AC-30/AC-32).
 
 ## Assumptions
 - Assumed the configurable root-folder set defaults to exactly `specs`, `docs`, `insights` (from the
@@ -350,6 +451,18 @@ Yes. Two untrusted surfaces:
   read-only action; creating/uploading/editing docs is not (Non-goals).
 - Assumed disabled or injection-flagged skills do not contribute inherited documents, mirroring the
   existing skill-body gate — say so if wrong.
+- Assumed in-app editing (AC-28..AC-32) targets an **already-discovered** `.md` document and writes
+  directly to that file in the repo clone worktree — no new-file creation, upload, or deletion — say
+  so if wrong.
+- Assumed Edit mode appears **only on the Project Context page** document pane, not in the
+  Agent/Skill Context-tab preview drawer, which stays preview-only (AC-27) — say so if the Context
+  tabs should also be editable.
+- **Decided (not an assumption): a saved edit is clone-local and ephemeral** — written to the clone
+  worktree, read back on the next Preview/run, and discarded by the next repo resync (option (a),
+  see Decisions). The Edit UI warns about this (AC-33).
+- Assumed Context-tab Preview (AC-27) renders **sanitized markdown** exactly like the Project Context
+  page (reusing the same safe-markdown renderer), replacing the current plain-text `<pre>` rendering
+  — say so if plain text was intended there.
 
 ## Proposals (out of scope)
 - [PROPOSAL: a per-path token breakdown in the run trace (each injected doc with its own token
@@ -372,3 +485,29 @@ Yes. Two untrusted surfaces:
   (retained as a [PROPOSAL]).
 - **Budget caps → confirmed.** Per-document cap 20,000 chars (AC-14) and total Project-context block
   cap 40,000 chars (AC-15), both truncate-and-log and server-config-tunable.
+- **Editing scope revisited on 2026-07-07 (Amendment 1).** The original Non-goal "editing … repo
+  document files" is **narrowed**: editing an already-discovered `.md` document's content from the
+  Project Context page is now in scope (AC-28..AC-32); creating, uploading, and deleting remain out
+  of scope. Grounding: `GitClient` exposes `readFile` but no write, so a confined write path is new;
+  `guardPath` (`server/src/modules/project-context/path-guard.ts`) already enforces the exact
+  confinement the save needs and requires the target to already exist — matching "edit an existing
+  discovered doc".
+- **Edit persistence resolved on 2026-07-07 → option (a), clone-local ephemeral.** A saved edit is
+  written directly to the clone worktree file and lives only until the next `git.sync()`
+  (`git fetch` + `git reset --hard origin/<branch>`, `server/src/adapters/git/simple-git.ts:102`),
+  which restores the upstream content. This resync-clobber is **accepted, not a bug** (AC-31), and
+  the Edit UI shows an explicit ephemerality warning (AC-33). Rejected alternatives:
+    - **(b) DB persistence + re-apply after sync** — durable without touching git, but adds new
+      storage and apply-on-sync orchestration; unnecessary weight for this lesson.
+    - **(c) commit/push to the repo** — never requested; also a `reset --hard` would still discard a
+      local-only commit that is not on origin, so it would not actually survive resync without a real
+      push, expanding scope into git write access we deliberately avoid.
+- **Context-tab Preview behavior clarified on 2026-07-07 (Amendment 2, AC-27).** AC-20 left the row
+  Preview action's result unspecified. AC-27 now requires it to open a dismissible drawer showing the
+  document name, parent path, and **sanitized rendered markdown** (AC-21) — resolving the observed
+  implementation discrepancy where Context-tab previews render **plain text** in a `<pre>`
+  (`client/src/app/agents/[id]/_components/AgentEditor/_components/ContextTab/ContextTab.tsx:291`;
+  same in the skills ContextTab) while the Project Context page renders sanitized markdown via
+  `SafeMarkdown` (`client/src/app/project-context/_components/ProjectContextView.tsx:416`). AC-27
+  makes the two consistent. Edit mode (AC-28) is deliberately **not** added to this drawer — Project
+  Context page only.
