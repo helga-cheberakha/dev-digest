@@ -7,15 +7,16 @@
  * specs) and passes them in here as plain data.
  *
  * Untrusted regions — PR body (via the linked issue), linked-issue body,
- * Context-Folder spec text, and persisted intent text (NF-UNTRUSTED) — are
- * wrapped with `wrapUntrusted` from `platform/prompt.js` (NOT the
- * reviewer-core copy directly — this re-exports it) so they are treated as
- * DATA, never instructions. Blast radius and Smart Diff facts are
- * deterministic, server-computed structured data (symbol/file/line lists),
- * not free-form author text, so they are rendered as trusted context —
- * mirroring the onboarding prompt builder's split between untrusted
- * repo-authored regions and trusted deterministic analyzer facts
- * (`modules/onboarding/analyzers/prompt.ts`).
+ * Context-Folder spec text, persisted intent text, and the Blast radius /
+ * Smart Diff sections (NF-UNTRUSTED) — are wrapped with `wrapUntrusted` from
+ * `platform/prompt.js` (NOT the reviewer-core copy directly — this
+ * re-exports it) so they are treated as DATA, never instructions. Blast
+ * radius and Smart Diff are server-computed, deterministic in STRUCTURE, but
+ * they interpolate PR-author-controlled identifiers (file paths, symbol/
+ * function names) verbatim — an attacker can choose a file path or symbol
+ * name designed to look like an instruction, so those rendered blocks are
+ * wrapped like any other author-influenced content. Only the section
+ * headers/stats scaffolding stays outside the wrap.
  *
  * No diff hunks are ever accepted as input here (AC-2) — there is no such
  * field on `BriefFacts`, so hunk content structurally cannot leak into the
@@ -57,6 +58,9 @@ export interface BriefFacts {
 
 // ---- Output shape ----
 
+/** Core section kinds that can be degraded once specs are exhausted, in the order they are degraded. */
+export type DroppedCoreSection = 'issue' | 'smart-diff' | 'blast' | 'intent-truncated';
+
 export interface AssembledBriefPayload {
   /** The single user-message body to send to the LLM. */
   userMessage: string;
@@ -64,6 +68,14 @@ export interface AssembledBriefPayload {
   estimatedTokens: number;
   /** True if one or more spec sections were dropped to fit `BRIEF_TOKEN_BUDGET` (AC-3). */
   specsDropped: boolean;
+  /**
+   * Core (non-spec) sections that had to be dropped or truncated to fit
+   * `BRIEF_TOKEN_BUDGET` after all specs were already dropped, in the order
+   * they were degraded (reverse assembly priority: issue, smart-diff,
+   * blast, then — only as a last resort — a hard-sliced intent). Empty when
+   * dropping specs alone (or nothing at all) was enough.
+   */
+  droppedSections: DroppedCoreSection[];
 }
 
 // ---- Token estimation ----
@@ -87,7 +99,7 @@ function buildIntentSection(intent: Intent): string {
 }
 
 function buildBlastSection(blast: BlastRadius): string {
-  const lines = [`## Blast radius (deterministic)\n${blast.summary}`];
+  const lines = [blast.summary];
   if (blast.changed_symbols.length > 0) {
     lines.push(
       `Changed symbols:\n${blast.changed_symbols
@@ -105,11 +117,11 @@ function buildBlastSection(blast: BlastRadius): string {
         .join('\n')}`,
     );
   }
-  return lines.join('\n');
+  return `## Blast radius (deterministic)\n${wrapUntrusted('blast-radius', lines.join('\n'))}`;
 }
 
 function buildSmartDiffSection(smartDiff: SmartDiff): string {
-  const lines = [`## Smart Diff (deterministic)`];
+  const lines: string[] = [];
   for (const group of smartDiff.groups) {
     const fileLines = group.files
       .map((f) => `  - ${f.path} (+${f.additions}/-${f.deletions})`)
@@ -122,7 +134,7 @@ function buildSmartDiffSection(smartDiff: SmartDiff): string {
         smartDiff.split_suggestion.proposed_splits.map((p) => p.name).join(', '),
     );
   }
-  return lines.join('\n');
+  return `## Smart Diff (deterministic)\n${wrapUntrusted('smart-diff', lines.join('\n'))}`;
 }
 
 function buildIssueSection(issue: IssueMeta): string {
@@ -168,25 +180,43 @@ export function buildKnownPathSet(
 
 // ---- Assembly ----
 
+/**
+ * `kind` is fine-grained (not just 'core' | 'spec') so the truncation pass in
+ * `assembleBriefPayload` can degrade core sections individually, in REVERSE
+ * assembly-priority order, once specs are exhausted (M5 budget fix).
+ */
 interface PrioritySection {
-  /** 'specs' sections are the only ones ever dropped for the token budget (AC-3). */
-  kind: 'core' | 'spec';
+  kind: 'intent' | 'blast' | 'smart-diff' | 'issue' | 'spec';
   text: string;
 }
 
 function buildAllSections(facts: BriefFacts): PrioritySection[] {
   const sections: PrioritySection[] = [];
 
-  if (facts.intent) sections.push({ kind: 'core', text: buildIntentSection(facts.intent) });
-  if (facts.blast) sections.push({ kind: 'core', text: buildBlastSection(facts.blast) });
-  if (facts.smartDiff) sections.push({ kind: 'core', text: buildSmartDiffSection(facts.smartDiff) });
-  if (facts.linkedIssue) sections.push({ kind: 'core', text: buildIssueSection(facts.linkedIssue) });
+  if (facts.intent) sections.push({ kind: 'intent', text: buildIntentSection(facts.intent) });
+  if (facts.blast) sections.push({ kind: 'blast', text: buildBlastSection(facts.blast) });
+  if (facts.smartDiff) {
+    sections.push({ kind: 'smart-diff', text: buildSmartDiffSection(facts.smartDiff) });
+  }
+  if (facts.linkedIssue) sections.push({ kind: 'issue', text: buildIssueSection(facts.linkedIssue) });
   for (const spec of facts.specs ?? []) {
     sections.push({ kind: 'spec', text: buildSpecSection(spec) });
   }
 
   return sections;
 }
+
+/**
+ * Reverse of the assembly priority (intent > blast > smart-diff > issue >
+ * specs): once specs are exhausted, drop the LOWEST-priority core section
+ * first. Intent is deliberately excluded — as the highest-priority core
+ * fact it is never dropped outright, only hard-sliced as the final resort.
+ */
+const CORE_DEGRADE_ORDER: ReadonlyArray<Exclude<PrioritySection['kind'], 'intent' | 'spec'>> = [
+  'issue',
+  'smart-diff',
+  'blast',
+];
 
 const HEADER =
   '# Why+Risk Brief Generation\n' +
@@ -206,26 +236,68 @@ function renderMessage(sections: PrioritySection[]): string {
 /**
  * Assemble the single structured user message for the Brief LLM call, in
  * priority order (intent, blast, smart-diff, issue, specs), enforcing
- * `BRIEF_TOKEN_BUDGET` by dropping spec sections first — starting with the
- * lowest-priority (last) spec — until the estimate fits (AC-3).
+ * `BRIEF_TOKEN_BUDGET` (AC-3) in three passes:
+ *
+ * 1. Drop spec sections first, lowest-priority (last) spec first, until
+ *    specs are exhausted.
+ * 2. If STILL over budget, degrade core sections in REVERSE priority order
+ *    (issue, then smart-diff, then blast) — dropping each one entirely.
+ * 3. If STILL over budget with only intent left, hard-slice intent's text
+ *    to whatever char budget remains. Intent — the highest-priority core
+ *    fact — is never dropped outright, only shortened, so the final
+ *    estimate provably stays <= `BRIEF_TOKEN_BUDGET`.
  */
 export function assembleBriefPayload(facts: BriefFacts): AssembledBriefPayload {
   const sections = buildAllSections(facts);
 
   let specsDropped = false;
+  const droppedSections: DroppedCoreSection[] = [];
   let estimatedTokens = estimateTokens(renderMessage(sections));
 
+  // Pass 1: drop specs, lowest-priority (last) first.
   while (estimatedTokens > BRIEF_TOKEN_BUDGET) {
     const lastSpecIndex = sections.map((s) => s.kind).lastIndexOf('spec');
-    if (lastSpecIndex === -1) break; // nothing left to drop — return as-is
+    if (lastSpecIndex === -1) break; // specs exhausted
     sections.splice(lastSpecIndex, 1);
     specsDropped = true;
     estimatedTokens = estimateTokens(renderMessage(sections));
+  }
+
+  // Pass 2: specs exhausted but still over budget — drop core sections one
+  // at a time, in reverse assembly priority (issue, smart-diff, blast).
+  for (const kind of CORE_DEGRADE_ORDER) {
+    if (estimatedTokens <= BRIEF_TOKEN_BUDGET) break;
+    const index = sections.findIndex((s) => s.kind === kind);
+    if (index === -1) continue;
+    sections.splice(index, 1);
+    droppedSections.push(kind);
+    estimatedTokens = estimateTokens(renderMessage(sections));
+  }
+
+  // Pass 3: last resort — only intent (and possibly nothing) remains but
+  // the message is still over budget. Hard-slice intent's rendered text to
+  // the exact remaining char budget so the final estimate cannot exceed
+  // BRIEF_TOKEN_BUDGET, without ever dropping intent entirely.
+  if (estimatedTokens > BRIEF_TOKEN_BUDGET) {
+    const intentIndex = sections.findIndex((s) => s.kind === 'intent');
+    const intentSection = intentIndex !== -1 ? sections[intentIndex] : undefined;
+    if (intentIndex !== -1 && intentSection) {
+      const scaffold = renderMessage(sections.filter((_, i) => i !== intentIndex));
+      // renderMessage re-joins with '\n\n' once intent is spliced back in.
+      const charBudget = Math.max(0, BRIEF_TOKEN_BUDGET * 4 - scaffold.length - 2);
+      const original = intentSection.text;
+      if (original.length > charBudget) {
+        sections[intentIndex] = { kind: 'intent', text: original.slice(0, charBudget) };
+        droppedSections.push('intent-truncated');
+      }
+      estimatedTokens = estimateTokens(renderMessage(sections));
+    }
   }
 
   return {
     userMessage: renderMessage(sections),
     estimatedTokens,
     specsDropped,
+    droppedSections,
   };
 }

@@ -203,7 +203,7 @@ export interface PrBriefCardProps {
 /** PR Brief Card — risk banner (what/why) + latest-review metrics + Review Focus. */
 export function PrBriefCard({ prId, onOpenFile }: PrBriefCardProps) {
   const t = useTranslations("prBrief");
-  const { data: brief, isLoading, isError, error } = usePrBrief(prId);
+  const { data: brief, isLoading, isError, error, refetch } = usePrBrief(prId);
   const { data: reviews } = usePrReviews(prId);
   const regenerate = useRegenerateBrief(prId);
 
@@ -227,7 +227,7 @@ export function PrBriefCard({ prId, onOpenFile }: PrBriefCardProps) {
       <ErrorState
         title={t("unavailable")}
         body={(error as Error | undefined)?.message ?? t("unavailableHint")}
-        onRetry={() => regenerate.mutate()}
+        onRetry={() => void refetch()}
       />
     );
   }

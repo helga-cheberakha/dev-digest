@@ -234,4 +234,26 @@ describe("PrBriefCard", () => {
       expect(screen.getByRole("button", { name: "Regenerate" })).not.toBeDisabled(),
     );
   });
+
+  it("ErrorState retry calls the query's refetch (force=false), never a force=true regenerate", () => {
+    const refetch = vi.fn();
+    vi.mocked(usePrBrief).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error("network blip"),
+      refetch,
+    } as unknown as ReturnType<typeof usePrBrief>);
+    vi.mocked(usePrReviews).mockReturnValue({
+      data: [],
+    } as unknown as ReturnType<typeof usePrReviews>);
+
+    renderCard();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    // Idempotent refetch (no force:true POST), never the paid regenerate call.
+    expect(refetch).toHaveBeenCalledTimes(1);
+    expect(api.post).not.toHaveBeenCalled();
+  });
 });

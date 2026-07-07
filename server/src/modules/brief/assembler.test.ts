@@ -155,6 +155,64 @@ describe('assembleBriefPayload', () => {
     expect(userMessage).toContain('## Linked issue');
   });
 
+  it('M5: an over-budget fixture with zero specs and a bloated blast section degrades core sections in reverse priority (issue, smart-diff, blast) and never drops intent', () => {
+    // No specs at all — the spec-dropping pass has nothing to do, forcing
+    // straight into the core-section degrade pass.
+    const bloatedBlast: BlastRadius = {
+      changed_symbols: Array.from({ length: 1000 }, (_, i) => ({
+        name: `symbol${i}`,
+        file: `src/module${i}/file${i}.ts`,
+        kind: 'function',
+      })),
+      downstream: [],
+      summary: 'Massive blast radius spanning the whole codebase.',
+    };
+
+    const facts: BriefFacts = {
+      intent: intentFixture,
+      blast: bloatedBlast,
+      smartDiff: smartDiffFixture,
+      linkedIssue: issueFixture,
+      specs: [],
+    };
+
+    const { estimatedTokens, specsDropped, droppedSections, userMessage } =
+      assembleBriefPayload(facts);
+
+    // Confirms the fixture really was over budget pre-degrade (otherwise
+    // droppedSections would be empty and this test would prove nothing).
+    expect(droppedSections.length).toBeGreaterThan(0);
+    expect(estimatedTokens).toBeLessThanOrEqual(BRIEF_TOKEN_BUDGET);
+    expect(specsDropped).toBe(false); // there were no specs to drop
+    // Degraded in REVERSE assembly priority: issue first, then smart-diff,
+    // then (since the blast itself is what's oversized) blast too.
+    expect(droppedSections).toEqual(['issue', 'smart-diff', 'blast']);
+    expect(droppedSections).not.toContain('intent-truncated');
+
+    // Intent — the highest-priority core fact — always survives, untouched.
+    expect(userMessage).toContain('## Intent');
+    expect(userMessage).toContain(intentFixture.summary);
+    expect(userMessage).not.toContain('## Linked issue');
+    expect(userMessage).not.toContain('## Smart Diff');
+    expect(userMessage).not.toContain('## Blast radius');
+  });
+
+  it('M5: an intent section alone bigger than the whole budget is hard-sliced, never dropped', () => {
+    const hugeIntent: Intent = {
+      summary: 'x'.repeat(40000), // ~10000 tokens, alone over BRIEF_TOKEN_BUDGET
+      in_scope: [],
+      out_of_scope: [],
+    };
+
+    const facts: BriefFacts = { intent: hugeIntent };
+
+    const { estimatedTokens, droppedSections, userMessage } = assembleBriefPayload(facts);
+
+    expect(estimatedTokens).toBeLessThanOrEqual(BRIEF_TOKEN_BUDGET);
+    expect(droppedSections).toEqual(['intent-truncated']);
+    expect(userMessage).toContain('## Intent'); // intent section itself survives, shortened
+  });
+
   it('AC-3: a payload under budget is not truncated (specsDropped stays false)', () => {
     const facts: BriefFacts = {
       intent: intentFixture,
@@ -189,12 +247,18 @@ describe('assembleBriefPayload', () => {
     expect(userMessage).toContain('</untrusted>');
   });
 
-  it('trusted, deterministic blast/smart-diff sections are NOT wrapped as untrusted', () => {
+  it('blast/smart-diff sections ARE wrapped as untrusted — they interpolate PR-author-controlled file paths and symbol names', () => {
     const facts: BriefFacts = { blast: blastFixture, smartDiff: smartDiffFixture };
     const { userMessage } = assembleBriefPayload(facts);
 
-    expect(userMessage).not.toContain('<untrusted source="blast');
-    expect(userMessage).not.toContain('<untrusted source="smart-diff');
+    expect(userMessage).toContain('<untrusted source="blast-radius">');
+    expect(userMessage).toContain('<untrusted source="smart-diff">');
+    // Header/scaffolding stays outside the wrap; the identifier-bearing
+    // content itself (changed symbol name, file path) is delimited as data.
+    expect(userMessage).toContain('## Blast radius (deterministic)');
+    expect(userMessage).toContain('## Smart Diff (deterministic)');
+    expect(userMessage).toContain('handleWebhook');
+    expect(userMessage).toContain('src/webhooks/handler.ts');
   });
 
   it('assembles no sections for empty facts and returns a well-formed empty payload', () => {
