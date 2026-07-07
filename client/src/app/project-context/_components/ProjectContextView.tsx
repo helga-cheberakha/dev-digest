@@ -1,7 +1,9 @@
 /* ProjectContextView.tsx — two-pane Project Context screen (L05).
    Left: discovered document list with filter + folder-kind badges + per-row "≈ N tokens".
    Right: selected document pane — name, used-by-agents badge, token figure,
-          sanitized markdown preview, and attach/detach checkboxes per agent & skill.
+          Preview/Edit toggle (AC-28), sanitized markdown preview or plain-text editor,
+          ephemerality warning (Edit mode, AC-33), save status (aria-live, AC-30),
+          and attach/detach checkboxes per agent & skill.
    Empty state is shown (not an error) when no documents are found (AC-3). */
 "use client";
 
@@ -16,11 +18,12 @@ import {
   useSetAgentDocuments,
   useSkillDocuments,
   useSetSkillDocuments,
+  useSaveDocument,
 } from "../../../lib/hooks/project-context";
 import { useAgents } from "../../../lib/hooks/agents";
 import { useSkills } from "../../../lib/hooks/skills";
 import { useActiveRepo } from "../../../lib/repo-context";
-import { SafeMarkdown } from "./SafeMarkdown";
+import { SafeMarkdown } from "@/components/SafeMarkdown";
 import type { DiscoveredDocument } from "@devdigest/shared";
 
 // ---- Folder-kind badge palette (derived from design-system tokens) ----
@@ -151,6 +154,35 @@ export function ProjectContextView() {
   const [selectedPath, setSelectedPath] = React.useState<string | null>(null);
 
   const { data: preview, isLoading: previewLoading } = useDocumentPreview(selectedPath, repoId);
+
+  // ---- Preview / Edit toggle state ----
+  // Track which path is currently being edited.
+  // `isEditing` derives to true only when editingPath === the currently selected path.
+  // Selecting a different document automatically resets to Preview (no useEffect needed).
+  const [editingPath, setEditingPath] = React.useState<string | null>(null);
+  const [editContent, setEditContent] = React.useState("");
+  const isEditing = editingPath === selectedPath && selectedPath !== null;
+
+  const saveMutation = useSaveDocument();
+
+  // Auto-clear "Saved" status after ~2.5 s by resetting the mutation state.
+  const { isSuccess: saveIsSuccess, reset: saveReset } = saveMutation;
+  React.useEffect(() => {
+    if (!saveIsSuccess) return;
+    const id = setTimeout(saveReset, 2500);
+    return () => clearTimeout(id);
+  }, [saveIsSuccess, saveReset]);
+
+  // Derive the save-status announcement text for the aria-live region.
+  const saveStatusText = saveMutation.isPending
+    ? t("edit.saving")
+    : saveMutation.isSuccess
+      ? t("edit.saved")
+      : saveMutation.isError
+        ? t("edit.saveFailed", {
+            message: (saveMutation.error as Error)?.message ?? "Unknown error",
+          })
+        : "";
 
   const allDocs: DiscoveredDocument[] = discovery?.documents ?? [];
 
@@ -386,35 +418,159 @@ export function ProjectContextView() {
                 </div>
               </div>
 
-              {/* Preview (AC-21) */}
+              {/* Preview / Edit toggle (AC-28, AC-29, AC-33) */}
               <div style={{ marginBottom: 28 }}>
-                <h3
+                {/* Tab bar */}
+                <div
                   style={{
-                    fontSize: 12,
-                    fontWeight: 600,
-                    color: "var(--text-secondary)",
-                    textTransform: "uppercase",
-                    letterSpacing: "0.06em",
-                    marginBottom: 10,
+                    display: "flex",
+                    gap: 0,
+                    marginBottom: 12,
+                    borderBottom: "1px solid var(--border)",
                   }}
                 >
-                  {t("preview.title")}
-                </h3>
-                {previewLoading && <Skeleton height={120} />}
-                {!previewLoading && preview && (
-                  <div
+                  <button
+                    onClick={() => setEditingPath(null)}
+                    aria-pressed={!isEditing}
                     style={{
-                      background: "var(--bg-elevated)",
-                      border: "1px solid var(--border)",
-                      borderRadius: 8,
-                      padding: 16,
-                      maxHeight: 400,
-                      overflowY: "auto",
-                      fontSize: 13,
+                      padding: "4px 14px 8px",
+                      fontSize: 12,
+                      fontWeight: !isEditing ? 600 : 400,
+                      color: !isEditing ? "var(--text-primary)" : "var(--text-muted)",
+                      background: "none",
+                      border: "none",
+                      borderBottom: !isEditing
+                        ? "2px solid var(--accent-text)"
+                        : "2px solid transparent",
+                      cursor: "pointer",
                     }}
                   >
-                    <SafeMarkdown content={preview.content} />
+                    {t("preview.title")}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setEditContent(preview?.content ?? "");
+                      setEditingPath(selectedPath);
+                    }}
+                    aria-pressed={isEditing}
+                    style={{
+                      padding: "4px 14px 8px",
+                      fontSize: 12,
+                      fontWeight: isEditing ? 600 : 400,
+                      color: isEditing ? "var(--text-primary)" : "var(--text-muted)",
+                      background: "none",
+                      border: "none",
+                      borderBottom: isEditing
+                        ? "2px solid var(--accent-text)"
+                        : "2px solid transparent",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {t("edit.tabLabel")}
+                  </button>
+                </div>
+
+                {/* Ephemerality warning — visible only in Edit mode (AC-33) */}
+                {isEditing && (
+                  <div
+                    role="alert"
+                    style={{
+                      marginBottom: 10,
+                      padding: "6px 10px",
+                      fontSize: 12,
+                      color: "var(--warn)",
+                      background: "var(--warn-bg)",
+                      borderRadius: 6,
+                      border: "1px solid var(--warn)",
+                    }}
+                  >
+                    {t("edit.warning")}
                   </div>
+                )}
+
+                {/* Preview mode — sanitized markdown (AC-21) */}
+                {!isEditing && (
+                  <>
+                    {previewLoading && <Skeleton height={120} />}
+                    {!previewLoading && preview && (
+                      <div
+                        style={{
+                          background: "var(--bg-elevated)",
+                          border: "1px solid var(--border)",
+                          borderRadius: 8,
+                          padding: 16,
+                          maxHeight: 400,
+                          overflowY: "auto",
+                          fontSize: 13,
+                        }}
+                      >
+                        <SafeMarkdown content={preview.content} />
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* Edit mode — plain-text editor + save row (AC-28, AC-30) */}
+                {isEditing && (
+                  <>
+                    <textarea
+                      value={editContent}
+                      onChange={(e) => setEditContent(e.target.value)}
+                      aria-label={t("edit.editorLabel")}
+                      style={{
+                        width: "100%",
+                        minHeight: 280,
+                        fontSize: 13,
+                        fontFamily: "monospace",
+                        padding: 12,
+                        background: "var(--bg-elevated)",
+                        border: "1px solid var(--border)",
+                        borderRadius: 8,
+                        color: "var(--text-primary)",
+                        resize: "vertical",
+                        boxSizing: "border-box",
+                      }}
+                    />
+                    {/* Save row: button + aria-live status region */}
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        marginTop: 8,
+                      }}
+                    >
+                      <button
+                        onClick={() =>
+                          saveMutation.mutate({
+                            path: selectedDoc.path,
+                            content: editContent,
+                            repoId: repoId ?? undefined,
+                          })
+                        }
+                        disabled={saveMutation.isPending}
+                        style={{
+                          padding: "5px 16px",
+                          fontSize: 13,
+                          fontWeight: 600,
+                          background: "var(--accent-text)",
+                          color: "#fff",
+                          border: "none",
+                          borderRadius: 6,
+                          cursor: saveMutation.isPending ? "not-allowed" : "pointer",
+                          opacity: saveMutation.isPending ? 0.7 : 1,
+                        }}
+                      >
+                        {t("edit.save")}
+                      </button>
+                      <span
+                        aria-live="polite"
+                        style={{ fontSize: 12, color: "var(--text-muted)" }}
+                      >
+                        {saveStatusText}
+                      </span>
+                    </div>
+                  </>
                 )}
               </div>
 

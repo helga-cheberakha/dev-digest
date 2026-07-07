@@ -18,6 +18,7 @@ vi.mock("../../../lib/hooks/project-context", () => ({
   useSetAgentDocuments: vi.fn(),
   useSkillDocuments: vi.fn(),
   useSetSkillDocuments: vi.fn(),
+  useSaveDocument: vi.fn(),
 }));
 
 // ---- Mock: agents hook ----
@@ -43,6 +44,7 @@ import {
   useSetAgentDocuments,
   useSkillDocuments,
   useSetSkillDocuments,
+  useSaveDocument,
 } from "../../../lib/hooks/project-context";
 import { useAgents } from "../../../lib/hooks/agents";
 import { useSkills } from "../../../lib/hooks/skills";
@@ -126,6 +128,14 @@ function setDefaultMocks() {
   vi.mocked(useSetAgentDocuments).mockReturnValue({ mutate: vi.fn(), isPending: false } as any);
   vi.mocked(useSkillDocuments).mockReturnValue({ data: { paths: [] }, isLoading: false } as any);
   vi.mocked(useSetSkillDocuments).mockReturnValue({ mutate: vi.fn(), isPending: false } as any);
+  vi.mocked(useSaveDocument).mockReturnValue({
+    mutate: vi.fn(),
+    isPending: false,
+    isSuccess: false,
+    isError: false,
+    error: null,
+    reset: vi.fn(),
+  } as any);
 }
 
 // ---- Tests ----
@@ -298,5 +308,128 @@ describe("ProjectContextView", () => {
     expect(
       screen.getByText("Select a document from the list to preview it."),
     ).toBeInTheDocument();
+  });
+
+  // ---- Preview / Edit toggle tests (AC-28, AC-29, AC-33) ----
+
+  it("shows Preview and Edit tab buttons when a document is selected", () => {
+    renderWithIntl(<ProjectContextView />);
+
+    fireEvent.click(screen.getByText("api-contract.md"));
+
+    expect(screen.getByRole("button", { name: "Preview" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+  });
+
+  it("switching to Edit mode shows textarea seeded with document content and the ephemerality warning", () => {
+    renderWithIntl(<ProjectContextView />);
+
+    fireEvent.click(screen.getByText("api-contract.md"));
+
+    // Switch to Edit
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    // Textarea is visible and pre-seeded with the current preview content
+    // Use getByLabelText to distinguish the editor textarea from the filter input
+    const textarea = screen.getByLabelText("Edit document content");
+    expect(textarea).toBeInTheDocument();
+    expect(textarea).toHaveValue("# API Contract\n\nVersion 1.0");
+
+    // Ephemerality warning is rendered (AC-33)
+    const warning = screen.getByRole("alert");
+    expect(warning).toBeInTheDocument();
+    expect(warning).toHaveTextContent(/local to the review clone/i);
+  });
+
+  it("ephemerality warning is absent when in Preview mode (AC-33)", () => {
+    renderWithIntl(<ProjectContextView />);
+
+    fireEvent.click(screen.getByText("api-contract.md"));
+
+    // Default state is Preview — no alert, no editor textarea
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Edit document content")).not.toBeInTheDocument();
+  });
+
+  it("editing content and clicking Save calls useSaveDocument with the new content (AC-30)", () => {
+    const mockMutate = vi.fn();
+    vi.mocked(useSaveDocument).mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+      isSuccess: false,
+      isError: false,
+      error: null,
+      reset: vi.fn(),
+    } as any);
+
+    renderWithIntl(<ProjectContextView />);
+    fireEvent.click(screen.getByText("api-contract.md"));
+
+    // Switch to Edit
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    // Change the textarea value
+    const textarea = screen.getByLabelText("Edit document content");
+    fireEvent.change(textarea, { target: { value: "Updated content" } });
+
+    // Click Save
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(mockMutate).toHaveBeenCalledOnce();
+    expect(mockMutate).toHaveBeenCalledWith({
+      path: "specs/api-contract.md",
+      content: "Updated content",
+      repoId: "repo1",
+    });
+  });
+
+  it("switching back to Preview mode hides the textarea and ephemerality warning", () => {
+    renderWithIntl(<ProjectContextView />);
+    fireEvent.click(screen.getByText("api-contract.md"));
+
+    // Switch to Edit
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByLabelText("Edit document content")).toBeInTheDocument();
+
+    // Switch back to Preview
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+
+    // Editor textarea gone, warning gone
+    expect(screen.queryByLabelText("Edit document content")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("tab resets to Preview automatically when a different document is selected", () => {
+    renderWithIntl(<ProjectContextView />);
+
+    // Select first doc and switch to Edit
+    fireEvent.click(screen.getByText("api-contract.md"));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+
+    // Select a different document
+    fireEvent.click(screen.getByText("architecture.md"));
+
+    // Edit mode should have reset — no alert, no editor textarea
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Edit document content")).not.toBeInTheDocument();
+  });
+
+  it("Save button is disabled while the save is in flight (AC-30)", () => {
+    vi.mocked(useSaveDocument).mockReturnValue({
+      mutate: vi.fn(),
+      isPending: true,
+      isSuccess: false,
+      isError: false,
+      error: null,
+      reset: vi.fn(),
+    } as any);
+
+    renderWithIntl(<ProjectContextView />);
+    fireEvent.click(screen.getByText("api-contract.md"));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 });
