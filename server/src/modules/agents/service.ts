@@ -1,3 +1,5 @@
+import { stat } from 'node:fs/promises';
+import { and, asc, eq } from 'drizzle-orm';
 import type { Container } from '../../platform/container.js';
 import type {
   Agent,
@@ -8,6 +10,9 @@ import type {
   Provider,
   ReviewStrategy,
 } from '@devdigest/shared';
+import { repos } from '../../db/schema.js';
+import { ValidationError } from '../../platform/errors.js';
+import { guardPath } from '../project-context/path-guard.js';
 import { AgentsRepository } from './repository.js';
 import { toAgentDto, toAgentVersionDto } from './helpers.js';
 
@@ -182,5 +187,100 @@ export class AgentsService {
     } catch {
       return [];
     }
+  }
+
+  // ---- document attachment (AC-5, AC-8, AC-9) ------------------------------
+
+  /**
+   * Ordered document paths attached to an agent (workspace-scoped).
+   * Returns undefined when the agent does not exist in this workspace.
+   */
+  async getDocuments(workspaceId: string, agentId: string): Promise<string[] | undefined> {
+    const agent = await this.repo.getById(workspaceId, agentId);
+    if (!agent) return undefined;
+    return this.repo.documentsForAgent(agentId);
+  }
+
+  /**
+   * Replace the agent's attached document paths. Each path is validated via
+   * the path-guard before persisting. If any path is invalid the entire request
+   * is rejected and nothing is persisted (AC-8).
+   *
+   * Returns the persisted ordered paths, or undefined when the agent does not
+   * exist in this workspace.
+   */
+  async setDocuments(
+    workspaceId: string,
+    agentId: string,
+    paths: string[],
+    repoId?: string,
+  ): Promise<string[] | undefined> {
+    const agent = await this.repo.getById(workspaceId, agentId);
+    if (!agent) return undefined;
+
+    const cloneRoot = await this.resolveCloneRoot(workspaceId, repoId);
+
+    // Validate ALL paths first — reject the whole request if any fail (AC-8).
+    // After normalization, dedup post-normalization collisions (first wins).
+    const failures: string[] = [];
+    const seen = new Set<string>();
+    const normalizedPaths: string[] = [];
+    for (const path of paths) {
+      const result = await guardPath(path, cloneRoot);
+      if (!result.ok) {
+        failures.push(`"${path}": ${result.reason}`);
+      } else if (!seen.has(result.path)) {
+        seen.add(result.path);
+        normalizedPaths.push(result.path);
+      }
+    }
+
+    if (failures.length > 0) {
+      throw new ValidationError('Invalid document paths', failures);
+    }
+
+    await this.repo.setDocuments(agentId, normalizedPaths);
+    return this.repo.documentsForAgent(agentId);
+  }
+
+  /**
+   * Resolve the absolute clone root for the workspace's repo.
+   *
+   * When `repoId` is provided, resolves exactly that repo (workspace-scoped).
+   * When absent, uses a deterministic fallback: ORDER BY created_at and return
+   * the first repo whose clone directory exists on disk. If no clone exists,
+   * falls back to the oldest repo. Returns '' when no repo is configured.
+   */
+  private async resolveCloneRoot(workspaceId: string, repoId?: string): Promise<string> {
+    if (repoId) {
+      const [repo] = await this.container.db
+        .select({ owner: repos.owner, name: repos.name })
+        .from(repos)
+        .where(and(eq(repos.workspaceId, workspaceId), eq(repos.id, repoId)));
+      if (!repo) return '';
+      return this.container.git.clonePathFor({ owner: repo.owner, name: repo.name });
+    }
+
+    // Deterministic fallback: prefer the oldest repo that has a clone on disk.
+    const rows = await this.container.db
+      .select({ owner: repos.owner, name: repos.name })
+      .from(repos)
+      .where(eq(repos.workspaceId, workspaceId))
+      .orderBy(asc(repos.createdAt));
+
+    if (rows.length === 0) return '';
+
+    for (const row of rows) {
+      const clonePath = this.container.git.clonePathFor({ owner: row.owner, name: row.name });
+      try {
+        await stat(clonePath);
+        return clonePath;
+      } catch {
+        // clone not present on disk — try the next repo
+      }
+    }
+
+    // No clone found — fall back to the oldest repo's path (guardPath will handle it).
+    return this.container.git.clonePathFor({ owner: rows[0]!.owner, name: rows[0]!.name });
   }
 }

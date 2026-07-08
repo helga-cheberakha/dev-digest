@@ -10,7 +10,7 @@ const SYSTEM_PROMPT =
   'You are a concise PR intent classifier. Given a PR title, description, and list of ' +
   'changed files (hunk headers only), extract the PR\'s intent as a structured object. ' +
   'Be brief and precise. "summary" is one sentence. "in_scope" and "out_of_scope" are ' +
-  'short bullet phrases (3–5 each). "risk_areas" are notable risk signals (0–3 phrases).';
+  'short bullet phrases (3–5 each).';
 
 export class IntentService {
   constructor(
@@ -125,7 +125,6 @@ export class IntentService {
       summary: intent.summary,
       inScope: intent.in_scope,
       outOfScope: intent.out_of_scope,
-      riskAreas: intent.risk_areas ?? null,
       model: `${provider}/${model}`,
       tokensSaved,
     });

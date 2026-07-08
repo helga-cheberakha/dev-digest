@@ -202,6 +202,41 @@ export interface GitCommit {
   date: string;
 }
 
+/**
+ * Options for the `listDocs` directory-walk. All fields are optional so the
+ * caller can pass `{}` or omit the argument entirely.
+ */
+export interface ListDocsOptions {
+  /**
+   * Maximum number of entries to return before stopping the walk (default 500).
+   * The caller should treat a result that hits this cap as potentially truncated.
+   */
+  maxFiles?: number;
+  /**
+   * Directory names to skip during the recursive walk. When omitted, a built-in
+   * default set covering `node_modules`, `.git`, build outputs, etc. is used.
+   */
+  excludeDirs?: string[];
+  /**
+   * When set, only files whose relative path contains at least one of these
+   * directory segments are returned — and only those count toward `maxFiles`.
+   * Without this, a clone with many non-matching `.md` files could exhaust the
+   * cap before the caller's filter runs, silently dropping matching files.
+   */
+  includeSegments?: string[];
+}
+
+/**
+ * A single `.md` file discovered by `listDocs`. No content is read — only the
+ * path and size are returned (stat-only).
+ */
+export interface ListDocsEntry {
+  /** POSIX-normalised path relative to the clone root (forward slashes). */
+  path: string;
+  /** File size in bytes from `stat` — no file content is opened. */
+  sizeBytes: number;
+}
+
 export interface GitClient {
   clone(repo: RepoRef, url: string, opts?: CloneOptions): Promise<{ path: string }>;
   fetchPullHead(repo: RepoRef, n: number): Promise<void>;
@@ -224,7 +259,22 @@ export interface GitClient {
   blame(repo: RepoRef, path: string): Promise<BlameLine[]>;
   log(repo: RepoRef, path?: string): Promise<GitCommit[]>;
   readFile(repo: RepoRef, path: string): Promise<string>;
+  /**
+   * Write `content` (UTF-8) to `path` inside the clone worktree using a
+   * temp-file + rename strategy so a mid-write crash never leaves a partial
+   * file (AC-32). The caller (`ProjectContextService.saveDocument`) is
+   * responsible for path confinement via `guardPath` before calling this method.
+   */
+  writeFile(repo: RepoRef, path: string, content: string): Promise<void>;
   clonePathFor(repo: RepoRef): string;
+  /**
+   * Stat-only recursive walk of the clone returning only `.md` files. Never
+   * opens file content and never follows symlinks. Returns `[]` when the clone
+   * is missing (graceful degradation — callers must not throw on an empty list).
+   * Caps output at `opts.maxFiles` (default 500); a result at the cap should be
+   * treated as potentially truncated.
+   */
+  listDocs(repo: RepoRef, opts?: ListDocsOptions): Promise<ListDocsEntry[]>;
 }
 
 // ---------- CodeIndex (ripgrep + tree-sitter) ----------

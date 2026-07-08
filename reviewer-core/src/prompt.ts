@@ -113,12 +113,11 @@ export function assemblePrompt(parts: PromptParts): AssembledPrompt {
     userSections.push(`## PR description\n${wrapUntrusted('pr-description', prDescription)}`);
   }
   if (parts.intent) {
-    const { summary, in_scope, out_of_scope, risk_areas } = parts.intent;
+    const { summary, in_scope, out_of_scope } = parts.intent;
     const intentData = [
       `Summary: ${summary}`,
       `In scope: ${in_scope.join(', ')}`,
       `Out of scope: ${out_of_scope.join(', ')}`,
-      ...(risk_areas?.length ? [`Risk areas: ${risk_areas.join(', ')}`] : []),
     ].join('\n');
     userSections.push(
       `## Review scope\nSCOPING RULE: Focus your review on in-scope changes only. ` +

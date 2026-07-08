@@ -2,6 +2,8 @@
    All hooks build on `apiFetch`. Errors are normalized to ApiError so the
    error-UX taxonomy (toast/inline/full-screen) can branch on status. */
 
+import type { OnboardingArtifact } from "@devdigest/shared";
+
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:3001";
 
@@ -72,3 +74,48 @@ export const api = {
     apiFetch<T>(path, { method: "PATCH", body: body ? JSON.stringify(body) : undefined }),
   del: <T>(path: string) => apiFetch<T>(path, { method: "DELETE" }),
 };
+
+// ---- Onboarding Tour ----
+
+/** Stable query-key factory for the onboarding tour cache. */
+export const onboardingQueryKeys = {
+  tour: (repoId: string) => ["onboarding", repoId] as const,
+} as const;
+
+/**
+ * Fetch the cached onboarding artifact for a repo.
+ *
+ * Returns `null` — treated as a successful "no tour yet" state — when the
+ * server responds 404 (no generation has run). All other errors are re-thrown
+ * so TanStack Query puts the query into its error state (network failure, 5xx, etc.).
+ *
+ * This distinguishes "first-visit generate" from a genuine fetch error, letting
+ * the page render an explicit Generate affordance instead of an error message.
+ */
+export async function fetchOnboarding(
+  repoId: string,
+): Promise<OnboardingArtifact | null> {
+  try {
+    return await apiFetch<OnboardingArtifact>(`/repos/${repoId}/onboarding`);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+/**
+ * Trigger (or force-re-trigger) onboarding generation for a repo.
+ *
+ * Always sends a JSON body (`{}` at minimum) so `apiFetch` sets the
+ * `application/json` content-type header — which Fastify requires on POST
+ * routes that declare a body schema.
+ *
+ * @param body.force - When `true`, bypasses the SHA-match cache and generates
+ *   a fresh tour even when the repo HEAD has not changed (AC-15).
+ */
+export async function generateOnboarding(
+  repoId: string,
+  body: { force?: boolean },
+): Promise<OnboardingArtifact> {
+  return api.post<OnboardingArtifact>(`/repos/${repoId}/onboarding`, body);
+}

@@ -1,11 +1,15 @@
+import { stat } from 'node:fs/promises';
 import type { Skill, SkillVersion } from '@devdigest/shared';
+import { and, asc, eq } from 'drizzle-orm';
 import { unzipSync, strFromU8 } from 'fflate';
 import type { Container } from '../../platform/container.js';
+import { repos } from '../../db/schema.js';
 import { SkillsRepository } from './repository.js';
 import type { SkillStats } from './repository.js';
 import { toSkillDto, toSkillVersionDto } from './helpers.js';
 import { ValidationError } from '../../platform/errors.js';
 import { detectInjection } from './injection-detector.js';
+import { guardPath } from '../project-context/path-guard.js';
 
 export type { SkillStats };
 
@@ -126,6 +130,99 @@ export class SkillsService {
     if (!skill) return undefined;
     const row = await this.repo.restore(workspaceId, skillId, version);
     return row ? toSkillDto(row) : undefined;
+  }
+
+  // ---- document attachments ------------------------------------------------
+
+  /**
+   * Ordered document paths attached to a skill. Returns undefined when the skill
+   * is not found in this workspace (route maps to 404).
+   */
+  async getDocuments(workspaceId: string, skillId: string): Promise<string[] | undefined> {
+    const skill = await this.repo.getById(workspaceId, skillId);
+    if (!skill) return undefined;
+    return this.repo.documentsForSkill(skillId);
+  }
+
+  /**
+   * Replace the full ordered set of attached documents for a skill. Every path is
+   * validated via the path-guard (AC-8) before persisting. Post-normalization
+   * duplicates are silently dropped (first occurrence wins). Returns undefined
+   * when the skill is not found. Throws ValidationError if any path fails the guard.
+   *
+   * When `repoId` is provided the clone root is resolved to that specific repo
+   * (workspace-scoped); when absent a deterministic fallback is used (oldest repo
+   * that has a clone on disk).
+   */
+  async setDocuments(
+    workspaceId: string,
+    skillId: string,
+    paths: string[],
+    repoId?: string,
+  ): Promise<string[] | undefined> {
+    const skill = await this.repo.getById(workspaceId, skillId);
+    if (!skill) return undefined;
+
+    const cloneRoot = await this.resolveCloneRoot(workspaceId, repoId);
+
+    const seen = new Set<string>();
+    const validated: string[] = [];
+    for (const candidate of paths) {
+      const result = await guardPath(candidate, cloneRoot);
+      if (!result.ok) {
+        throw new ValidationError(
+          `Invalid document path "${candidate}": ${result.reason}`,
+        );
+      }
+      if (!seen.has(result.path)) {
+        seen.add(result.path);
+        validated.push(result.path);
+      }
+    }
+
+    await this.repo.setDocuments(skillId, validated);
+    return this.repo.documentsForSkill(skillId);
+  }
+
+  /**
+   * Resolve the absolute clone root for the workspace's repo.
+   *
+   * When `repoId` is provided, resolves exactly that repo (workspace-scoped).
+   * When absent, uses a deterministic fallback: ORDER BY created_at and return
+   * the first repo whose clone directory exists on disk. If no clone exists,
+   * falls back to the oldest repo. Returns '' when no repo is configured.
+   */
+  private async resolveCloneRoot(workspaceId: string, repoId?: string): Promise<string> {
+    if (repoId) {
+      const [repo] = await this.container.db
+        .select({ owner: repos.owner, name: repos.name })
+        .from(repos)
+        .where(and(eq(repos.workspaceId, workspaceId), eq(repos.id, repoId)));
+      if (!repo) return '';
+      return this.container.git.clonePathFor({ owner: repo.owner, name: repo.name });
+    }
+
+    // Deterministic fallback: prefer the oldest repo that has a clone on disk.
+    const rows = await this.container.db
+      .select({ owner: repos.owner, name: repos.name })
+      .from(repos)
+      .where(eq(repos.workspaceId, workspaceId))
+      .orderBy(asc(repos.createdAt));
+
+    if (rows.length === 0) return '';
+
+    for (const row of rows) {
+      const clonePath = this.container.git.clonePathFor({ owner: row.owner, name: row.name });
+      try {
+        await stat(clonePath);
+        return clonePath;
+      } catch {
+        // clone not present on disk — try the next repo
+      }
+    }
+
+    // No clone found — fall back to the oldest repo's path (guardPath will handle it).
+    return this.container.git.clonePathFor({ owner: rows[0]!.owner, name: rows[0]!.name });
   }
 
   /** Usage and finding stats for a skill. Returns undefined when not found. */

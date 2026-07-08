@@ -52,7 +52,6 @@ export const prIntent = pgTable('pr_intent', {
   summary: text('summary').notNull(),
   inScope: jsonb('in_scope').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
   outOfScope: jsonb('out_of_scope').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
-  riskAreas: jsonb('risk_areas').$type<string[]>(),
   model: text('model').notNull().default(''),
   tokensSaved: integer('tokens_saved'),
   createdAt: now(),
@@ -64,4 +63,5 @@ export const prBrief = pgTable('pr_brief', {
     .primaryKey()
     .references(() => pullRequests.id, { onDelete: 'cascade' }),
   json: jsonb('json').notNull(),
+  headSha: text('head_sha'),
 });

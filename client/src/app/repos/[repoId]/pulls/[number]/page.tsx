@@ -67,6 +67,19 @@ export default function PRDetailPage() {
 
   const tab = search.get("tab") ?? "overview";
   const focusFindingId = search.get("finding");
+  // AC-14 deep-link: `?file`/`?line` mirror the `?finding` pattern above —
+  // a Brief review-focus/risk `file_ref` click switches to the Files tab and
+  // sets both in ONE router.replace (see setParams/onOpenFile below) to
+  // avoid the double-navigation `navigateToFinding` already guards against
+  // (client/INSIGHTS.md 2026-06-25).
+  const focusFilePath = search.get("file");
+  const focusFileLineParam = search.get("line");
+  const focusFile = React.useMemo(() => {
+    if (!focusFilePath) return undefined;
+    const parsed = focusFileLineParam != null ? Number(focusFileLineParam) : undefined;
+    const line = parsed != null && Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+    return { path: focusFilePath, line };
+  }, [focusFilePath, focusFileLineParam]);
   const setParam = (key: string, val: string | null) => {
     const sp = new URLSearchParams(search.toString());
     if (val == null) sp.delete(key);
@@ -81,6 +94,12 @@ export default function PRDetailPage() {
       if (v == null) sp.delete(k); else sp.set(k, v);
     }
     router.replace(`/repos/${repoId}/pulls/${number}${sp.toString() ? `?${sp.toString()}` : ""}`);
+  };
+  // AC-14: a Review-Focus/Risk `file_ref` click (Overview tab) switches to
+  // Files changed and sets `?file`/`?line` in the SAME router.replace as the
+  // tab switch (setParams), then DiffTab scrolls to + highlights it.
+  const onOpenFile = (ref: { path: string; line?: number }) => {
+    setParams({ tab: "diff", file: ref.path, line: ref.line != null ? String(ref.line) : null });
   };
 
   // Drawer state from query (?compose, ?trace=runId, ?why=file:line) — deep-linkable.
@@ -168,7 +187,7 @@ export default function PRDetailPage() {
           <OverviewTab
             prId={prId}
             prBody={pr.body}
-            onWhy={(file, line) => setParam("why", `${file}:${line}`)}
+            onOpenFile={onOpenFile}
             onGoToBlast={() => setTab("blast")}
           />
         )}
@@ -209,6 +228,7 @@ export default function PRDetailPage() {
             allFindings={allFindings}
             onNavigateToFinding={(id) => setParams({ tab: "findings", finding: id })}
             canComment={pr.status === "open"}
+            focusFile={focusFile}
           />
         )}
 

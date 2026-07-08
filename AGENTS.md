@@ -31,6 +31,12 @@ user asks about FIRST — these are curated and may already answer it — then r
 
 ## Session workflow (optimized)
 
+0. **Pipeline preflight (multi-stage SDD runs only):** before the FIRST agent spawn, spend 30
+   seconds of bash verifying every external prerequisite a later stage needs — LLM/API keys for
+   any cross-model review stage (check non-empty WITHOUT printing values), external tools
+   (`which agent-browser`), `db:migrate` state, runner discovery globs for files the plan will
+   create. A missing key discovered at the stage that needs it stalls the pipeline
+   (docs/retros/RETRO-2026-07-07-why-risk-brief.md).
 1. Define scope — what exactly needs to change and which files are involved.
 2. Run **one** research agent with a specific file list; request full content + analysis + risks.
 3. `grep` for any remaining targeted lookups not covered by the agent.

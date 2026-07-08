@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
 /**
- * PR Brief building blocks: Intent, Blast radius, Risks, PR History,
- * Smart Diff. Composed into PrBrief.
+ * PR Brief building blocks: Intent, Blast radius, Risk, Smart Diff, and the
+ * Why+Risk Brief itself (`Brief`, persisted to pr_brief.json).
  */
 
 // ---- Intent ----
@@ -10,7 +10,6 @@ export const Intent = z.object({
   summary: z.string(),
   in_scope: z.array(z.string()),
   out_of_scope: z.array(z.string()),
-  risk_areas: z.array(z.string()).optional(),
 });
 export type Intent = z.infer<typeof Intent>;
 
@@ -58,35 +57,24 @@ export type BlastRadius = z.infer<typeof BlastRadius>;
 export const RiskSeverity = z.enum(['high', 'medium', 'low']);
 export type RiskSeverity = z.infer<typeof RiskSeverity>;
 
+export const RiskAreaKind = z.enum([
+  'security',
+  'dependency',
+  'performance',
+  'data',
+  'api_change',
+  'other',
+]);
+export type RiskAreaKind = z.infer<typeof RiskAreaKind>;
+
 export const Risk = z.object({
-  kind: z.string(),
+  kind: RiskAreaKind,
   title: z.string(),
   explanation: z.string(),
   severity: RiskSeverity,
   file_refs: z.array(z.string()),
 });
 export type Risk = z.infer<typeof Risk>;
-
-export const Risks = z.object({
-  risks: z.array(Risk),
-});
-export type Risks = z.infer<typeof Risks>;
-
-// ---- PR History ----
-export const PrHistoryItem = z.object({
-  pr_number: z.number().int(),
-  title: z.string(),
-  merged_at: z.string(),
-  author: z.string(),
-  files_overlap: z.array(z.string()),
-  notes: z.string(),
-});
-export type PrHistoryItem = z.infer<typeof PrHistoryItem>;
-
-export const PrHistory = z.object({
-  history: z.array(PrHistoryItem),
-});
-export type PrHistory = z.infer<typeof PrHistory>;
 
 // ---- Smart Diff ----
 export const SmartDiffRole = z.enum(['core', 'wiring', 'boilerplate']);
@@ -123,11 +111,18 @@ export const SmartDiff = z.object({
 });
 export type SmartDiff = z.infer<typeof SmartDiff>;
 
-// ---- Composed PR Brief (pr_brief.json) ----
-export const PrBrief = z.object({
-  intent: Intent,
-  blast: BlastRadius,
-  risks: Risks,
-  history: PrHistory,
+// ---- Why+Risk Brief (pr_brief.json) ----
+export const ReviewFocusItem = z.object({
+  label: z.string(),
+  file_refs: z.array(z.string()),
 });
-export type PrBrief = z.infer<typeof PrBrief>;
+export type ReviewFocusItem = z.infer<typeof ReviewFocusItem>;
+
+export const Brief = z.object({
+  what: z.string(),
+  why: z.string(),
+  risk_level: z.enum(['low', 'medium', 'high']),
+  risks: z.array(Risk),
+  review_focus: z.array(ReviewFocusItem),
+});
+export type Brief = z.infer<typeof Brief>;

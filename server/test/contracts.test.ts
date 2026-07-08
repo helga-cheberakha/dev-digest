@@ -5,8 +5,8 @@ import {
   Intent,
   BlastRadius,
   PriorPr,
-  Risks,
-  PrHistory,
+  Risk,
+  Brief,
   SmartDiff,
   Conformance,
   Onboarding,
@@ -66,7 +66,7 @@ describe('AI contracts parse fixtures', () => {
     expect(f.trifecta_components).toContain('exfil_path');
   });
 
-  it('Intent / BlastRadius / Risks / PrHistory', () => {
+  it('Intent / BlastRadius / Risk / Brief', () => {
     expect(() =>
       Intent.parse({ summary: 'x', in_scope: ['a'], out_of_scope: ['b'] }),
     ).not.toThrow();
@@ -85,22 +85,15 @@ describe('AI contracts parse fixtures', () => {
       }),
     ).not.toThrow();
     expect(() =>
-      Risks.parse({
-        risks: [{ kind: 'security', title: 't', explanation: 'e', severity: 'high', file_refs: [] }],
-      }),
+      Risk.parse({ kind: 'security', title: 't', explanation: 'e', severity: 'high', file_refs: [] }),
     ).not.toThrow();
     expect(() =>
-      PrHistory.parse({
-        history: [
-          {
-            pr_number: 401,
-            title: 't',
-            merged_at: '2026-03-18',
-            author: 'a',
-            files_overlap: [],
-            notes: 'n',
-          },
-        ],
+      Brief.parse({
+        what: 'w',
+        why: 'y',
+        risk_level: 'high',
+        risks: [{ kind: 'security', title: 't', explanation: 'e', severity: 'high', file_refs: [] }],
+        review_focus: [{ label: 'l', file_refs: ['a.ts'] }],
       }),
     ).not.toThrow();
   });

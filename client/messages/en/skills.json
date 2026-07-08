@@ -34,7 +34,18 @@
         "config": "Config",
         "preview": "Preview",
         "versions": "Versions",
-        "stats": "Stats"
+        "stats": "Stats",
+        "context": "Context"
+      },
+      "context": {
+        "filterPlaceholder": "Filter documents…",
+        "orderNote": "Order matters — drag to reorder.",
+        "untrustedNote": "Injected as an untrusted ## Project context block. Content comes from your repo and is never executed as instructions.",
+        "serializesAs": "Serializes as",
+        "noRepo": "No active repository — set one in Repos to browse project documents.",
+        "previewButton": "Preview",
+        "closePreview": "Close preview",
+        "drawerTokenEstimate": "≈ {count} tokens"
       },
       "config": {
         "title": "Configuration",

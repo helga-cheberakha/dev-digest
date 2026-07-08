@@ -1,81 +1,165 @@
-/* PrBriefCard — PR Brief Card (A3, L05).
-   Default-exported so the orchestrator can mount it in the PR-detail Overview
-   tab. Four blocks per §6: Intent · Blast · Risks · History. */
+/* PrBriefCard — Why+Risk Brief card (rework, L05). Default-exported so the
+   orchestrator can mount it in the PR-detail Overview tab. Renders: a
+   risk_level-coloured banner with what/why + Regenerate (AC-10/AC-15); a
+   metrics row from the latest completed review, or an AC-12 nudge when none
+   exists; a Review Focus list whose file_refs are clickable (AC-14, wired by
+   the caller via `onOpenFile` — navigation itself lands in T12). Fetches its
+   own Brief + Reviews and owns its own loading/error/skeleton states (m6). */
 "use client";
 
 import React from "react";
 import { useTranslations } from "next-intl";
-import { Icon, Badge, Chip, Skeleton } from "@devdigest/ui";
-import type { PrBrief, Risk } from "@devdigest/shared";
-import { usePrBrief } from "../../../../../../../lib/hooks/brief";
-import { BlastRadiusView } from "../BlastRadius";
-import { BLOCK_ICONS, MAX_RISK_FILE_REFS, SEV_COLOR } from "./constants";
+import { Icon, Badge, Button, Skeleton, ErrorState, SectionLabel, type IconName } from "@devdigest/ui";
+import type { Brief, ReviewRecord } from "@devdigest/shared";
+import { usePrBrief, useRegenerateBrief } from "../../../../../../../lib/hooks/brief";
+import { usePrReviews } from "../../../../../../../lib/hooks/reviews";
+import { formatCost } from "../../../../../../../lib/cost";
+import { RunReviewDropdown } from "../RunReviewDropdown";
+import { RISK_LEVEL_META, METRIC_ICONS, MAX_FILE_REFS } from "./constants";
 import { s } from "./styles";
 
-function Block({
-  icon,
-  title,
-  children,
-  right,
+/** Navigation target derived from a `review_focus[].file_refs` entry (AC-14). */
+interface FileRefTarget {
+  path: string;
+  line?: number;
+}
+
+/**
+ * Parses a `file_ref` (`"path"`, `"path:line"`, or `"path:start-end"`) into a
+ * navigable target. A range contributes its start line (m2); a suffix that
+ * isn't a recognised line/range falls back to treating the whole ref as a
+ * bare path (grounding already guarantees the path portion is a known file,
+ * but the suffix shape isn't validated there).
+ */
+function parseFileRef(ref: string): FileRefTarget {
+  const idx = ref.lastIndexOf(":");
+  if (idx === -1) return { path: ref };
+  const path = ref.slice(0, idx);
+  const suffix = ref.slice(idx + 1);
+  const match = suffix.match(/^(\d+)(?:-\d+)?$/);
+  if (!match) return { path: ref };
+  return { path, line: Number(match[1]) };
+}
+
+function formatTokens(tokensIn: number | null, tokensOut: number | null): string {
+  if (tokensIn == null && tokensOut == null) return "—";
+  return `${(tokensIn ?? 0).toLocaleString()} → ${(tokensOut ?? 0).toLocaleString()}`;
+}
+
+// ---- Banner: risk_level + what/why + Regenerate (AC-10/AC-15) -------------
+
+function Banner({
+  brief,
+  onRegenerate,
+  regenerating,
+  regenerateFailed,
 }: {
-  icon: keyof typeof Icon;
-  title: string;
-  children: React.ReactNode;
-  right?: React.ReactNode;
+  brief: Brief;
+  onRegenerate: () => void;
+  regenerating: boolean;
+  regenerateFailed: boolean;
 }) {
-  const I = Icon[icon];
+  const t = useTranslations("prBrief");
+  const meta = RISK_LEVEL_META[brief.risk_level];
+  const RiskIcon = Icon[meta.icon];
+
   return (
-    <section style={s.block}>
-      <div style={s.blockHeader}>
-        <I size={14} style={s.blockIcon} />
-        <span style={s.blockTitle}>{title}</span>
-        {right && <span style={s.blockRight}>{right}</span>}
+    <div style={s.banner(meta.color, meta.bg)}>
+      <div style={s.bannerHeader}>
+        <div style={s.bannerBadgeRow}>
+          <RiskIcon size={16} style={{ color: meta.color }} />
+          <Badge color={meta.color} bg="transparent">
+            {t(`riskLevel.${brief.risk_level}`)}
+          </Badge>
+        </div>
+        <Button kind="secondary" size="sm" icon="RefreshCw" loading={regenerating} onClick={onRegenerate}>
+          {regenerating ? t("regenerating") : t("regenerate")}
+        </Button>
       </div>
-      {children}
-    </section>
+      <p style={s.whatText}>{brief.what}</p>
+      <p style={s.whyText}>{brief.why}</p>
+      {regenerateFailed && <span style={s.regenerateError}>{t("regenerateError")}</span>}
+    </div>
   );
 }
 
-function IntentBlock({ intent }: { intent: PrBrief["intent"] }) {
+// ---- Metrics row from the latest completed review (AC-11) -----------------
+
+function MetricItem({ icon, label, value }: { icon: IconName; label: string; value: string }) {
+  const I = Icon[icon];
   return (
-    <div>
-      <p style={s.intentText}>{intent.summary}</p>
-      <div style={s.chipRow}>
-        {intent.in_scope.map((scope, i) => (
-          <Chip key={`in-${i}`} icon="Check" color="var(--ok)">
-            {scope}
-          </Chip>
-        ))}
-        {intent.out_of_scope.map((scope, i) => (
-          <Chip key={`out-${i}`} icon="Slash" color="var(--text-muted)">
-            {scope}
-          </Chip>
-        ))}
+    <div style={s.metricItem}>
+      <I size={16} style={s.metricIcon} />
+      <div style={s.metricCol}>
+        <span style={s.metricLabel}>{label}</span>
+        <span className="tnum" style={s.metricValue}>
+          {value}
+        </span>
       </div>
     </div>
   );
 }
 
-function RiskRow({ risk }: { risk: Risk }) {
-  const c = SEV_COLOR[risk.severity];
+function MetricsRow({ review }: { review: ReviewRecord }) {
+  const t = useTranslations("prBrief");
+  const findingsCount = review.findings.length;
+  const blockers = review.findings.filter((f) => f.severity === "CRITICAL" && !f.dismissed_at).length;
+
   return (
-    <div style={s.riskRow}>
-      <div style={s.riskHeader}>
-        <Badge color={c.color} bg={c.bg} icon="AlertTriangle">
-          {risk.severity}
-        </Badge>
-        <span style={s.riskTitle}>{risk.title}</span>
-        <span style={s.riskKind} className="mono">
-          {risk.kind}
-        </span>
-      </div>
-      <p style={s.riskExplanation}>{risk.explanation}</p>
-      {risk.file_refs.length > 0 && (
-        <div style={s.riskFileRefs}>
-          {risk.file_refs.slice(0, MAX_RISK_FILE_REFS).map((f, i) => (
-            <span key={i} className="mono" style={s.riskFileRef}>
-              {f}
-            </span>
+    <div style={s.metricsRow}>
+      <MetricItem icon={METRIC_ICONS.findings} label={t("metrics.findings")} value={String(findingsCount)} />
+      <MetricItem icon={METRIC_ICONS.blockers} label={t("metrics.blockers")} value={String(blockers)} />
+      <MetricItem
+        icon={METRIC_ICONS.score}
+        label={t("metrics.score")}
+        value={review.score != null ? String(review.score) : "—"}
+      />
+      <MetricItem icon={METRIC_ICONS.cost} label={t("metrics.cost")} value={formatCost(review.cost_usd)} />
+      <MetricItem
+        icon={METRIC_ICONS.tokens}
+        label={t("metrics.tokens")}
+        value={formatTokens(review.tokens_in, review.tokens_out)}
+      />
+    </div>
+  );
+}
+
+// ---- No completed review yet — nudge reusing Run Review (AC-12) -----------
+
+function ReviewNudge({ prId }: { prId: string }) {
+  const t = useTranslations("prBrief");
+  return (
+    <div style={s.nudge}>
+      <span style={s.nudgeText}>{t("reviewNotRun")}</span>
+      <RunReviewDropdown prId={prId} size="sm" />
+    </div>
+  );
+}
+
+// ---- Review Focus list (file_refs feed AC-14 via onOpenFile) --------------
+
+function ReviewFocusItemRow({
+  item,
+  onOpenFile,
+}: {
+  item: Brief["review_focus"][number];
+  onOpenFile?: (ref: FileRefTarget) => void;
+}) {
+  return (
+    <div style={s.focusItem}>
+      <span style={s.focusLabel}>{item.label}</span>
+      {item.file_refs.length > 0 && (
+        <div style={s.focusFileRefs}>
+          {item.file_refs.slice(0, MAX_FILE_REFS).map((ref) => (
+            <button
+              key={ref}
+              type="button"
+              className="mono"
+              style={s.focusFileRefBtn}
+              onClick={() => onOpenFile?.(parseFileRef(ref))}
+            >
+              {ref}
+            </button>
           ))}
         </div>
       )}
@@ -83,93 +167,83 @@ function RiskRow({ risk }: { risk: Risk }) {
   );
 }
 
-function HistoryRow({ item }: { item: PrBrief["history"]["history"][number] }) {
-  const t = useTranslations("brief");
+function ReviewFocusSection({
+  items,
+  onOpenFile,
+}: {
+  items: Brief["review_focus"];
+  onOpenFile?: (ref: FileRefTarget) => void;
+}) {
+  const t = useTranslations("prBrief");
   return (
-    <div style={s.historyRow}>
-      <Icon.GitMerge size={14} style={s.historyIcon} />
-      <div style={s.historyBody}>
-        <div style={s.historyTitleLine}>
-          <span className="mono" style={s.historyPrNum}>
-            #{item.pr_number}
-          </span>{" "}
-          <span style={s.historyTitle}>{item.title}</span>
+    <section style={s.focusSection}>
+      <SectionLabel icon="Target">{t("reviewFocus")}</SectionLabel>
+      {items.length === 0 ? (
+        <div style={s.muted}>{t("reviewFocusEmpty")}</div>
+      ) : (
+        <div style={s.focusList}>
+          {items.map((item, i) => (
+            <ReviewFocusItemRow key={`${item.label}-${i}`} item={item} onOpenFile={onOpenFile} />
+          ))}
         </div>
-        <div style={s.historyMeta}>
-          {item.author} · {item.notes}
-        </div>
-      </div>
-      <Badge mono>{t("overlap", { count: item.files_overlap.length })}</Badge>
-    </div>
+      )}
+    </section>
   );
 }
 
+// ---- Public component -------------------------------------------------------
+
 export interface PrBriefCardProps {
   prId: string;
-  /** Optional git-why hook wired by the PR-detail page (key `w`). */
-  onWhy?: (file: string, line: number) => void;
+  /** Called when a Review-Focus `file_ref` is clicked (AC-14 navigation; the
+   *  actual tab-switch + scroll/highlight is wired by the caller in T12). */
+  onOpenFile?: (ref: FileRefTarget) => void;
 }
 
-/** PR Brief Card — Intent + Blast + Risks + History. */
-export function PrBriefCard({ prId, onWhy }: PrBriefCardProps) {
-  const t = useTranslations("brief");
-  const { data: brief, isLoading, isError, error } = usePrBrief(prId);
+/** PR Brief Card — risk banner (what/why) + latest-review metrics + Review Focus. */
+export function PrBriefCard({ prId, onOpenFile }: PrBriefCardProps) {
+  const t = useTranslations("prBrief");
+  const { data: brief, isLoading, isError, error, refetch } = usePrBrief(prId);
+  const { data: reviews } = usePrReviews(prId);
+  const regenerate = useRegenerateBrief(prId);
+
+  const latestReview = React.useMemo(
+    () => (reviews ?? []).find((r) => r.kind === "review") ?? null,
+    [reviews],
+  );
 
   if (isLoading) {
     return (
       <div style={s.loadingStack}>
-        <Skeleton height={20} width={260} />
-        <Skeleton height={80} />
-        <Skeleton height={60} />
+        <Skeleton height={110} />
+        <Skeleton height={64} />
+        <Skeleton height={140} />
       </div>
     );
   }
+
   if (isError || !brief) {
     return (
-      <div style={s.errorState}>
-        {t("unavailable")} {(error as Error | undefined)?.message ?? t("unavailableHint")}
-      </div>
+      <ErrorState
+        title={t("unavailable")}
+        body={(error as Error | undefined)?.message ?? t("unavailableHint")}
+        onRetry={() => void refetch()}
+      />
     );
   }
 
-  const riskCount = brief.risks.risks.length;
   return (
     <div style={s.root}>
-      <Block icon={BLOCK_ICONS.intent} title={t("block.intent")}>
-        <IntentBlock intent={brief.intent} />
-      </Block>
+      <Banner
+        brief={brief}
+        onRegenerate={() => regenerate.mutate()}
+        regenerating={regenerate.isPending}
+        regenerateFailed={regenerate.isError}
+      />
 
-      <Block icon={BLOCK_ICONS.blast} title={t("block.blast")}>
-        <BlastRadiusView blast={brief.blast} onWhy={onWhy} />
-      </Block>
+      {latestReview ? <MetricsRow review={latestReview} /> : <ReviewNudge prId={prId} />}
 
-      <Block icon={BLOCK_ICONS.risks} title={t("block.risks")} right={<Badge mono>{riskCount}</Badge>}>
-        {riskCount === 0 ? (
-          <div style={s.muted}>{t("noRisks")}</div>
-        ) : (
-          <div style={s.risksList}>
-            {brief.risks.risks.map((r, i) => (
-              <RiskRow key={i} risk={r} />
-            ))}
-          </div>
-        )}
-      </Block>
-
-      <Block
-        icon={BLOCK_ICONS.history}
-        title={t("block.history")}
-        right={<Badge mono>{brief.history.history.length}</Badge>}
-      >
-        {brief.history.history.length === 0 ? (
-          <div style={s.muted}>{t("noHistory")}</div>
-        ) : (
-          <div>
-            {brief.history.history.map((h, i) => (
-              <HistoryRow key={i} item={h} />
-            ))}
-          </div>
-        )}
-      </Block>
+      <ReviewFocusSection items={brief.review_focus} onOpenFile={onOpenFile} />
     </div>
   );
 }

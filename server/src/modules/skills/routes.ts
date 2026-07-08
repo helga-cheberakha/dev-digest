@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { SkillType, SkillSource } from '@devdigest/shared';
+import { SkillType, SkillSource, DocumentAttachment } from '@devdigest/shared';
 import { getContext } from '../_shared/context.js';
 import { IdParams } from '../_shared/schemas.js';
 import { NotFoundError } from '../../platform/errors.js';
@@ -51,6 +51,8 @@ const ImportUrlBody = z.object({
  *   POST   /skills/:id/restore      → { version } → restore to that body version
  *   GET    /skills/:id/stats        → usage & finding stats
  *   POST   /skills/import           → { filename, content_base64 } → preview (no persist)
+ *   GET    /skills/:id/documents    → ordered attached document paths
+ *   POST   /skills/:id/documents    → replace full ordered set of attached documents
  */
 export default async function skillsRoutes(appBase: FastifyInstance) {
   const app = appBase.withTypeProvider<ZodTypeProvider>();
@@ -137,4 +139,35 @@ export default async function skillsRoutes(appBase: FastifyInstance) {
     if (!skillStats) throw new NotFoundError('Skill not found');
     return skillStats;
   });
+
+  // ---- document attachments (AC-6, AC-7, AC-8) ----------------------------
+
+  app.get('/skills/:id/documents', { schema: { params: IdParams } }, async (req) => {
+    const { workspaceId } = await getContext(app.container, req);
+    const docs = await service.getDocuments(workspaceId, req.params.id);
+    if (docs === undefined) throw new NotFoundError('Skill not found');
+    return { paths: docs } satisfies { paths: string[] };
+  });
+
+  /**
+   * Replace the full ordered set of attached document paths for a skill.
+   * Clone-root resolution and path-guard validation are delegated to the service
+   * (AC-8). The optional `repoId` from the request body is forwarded so the
+   * service can scope to the correct repo clone.
+   */
+  app.post(
+    '/skills/:id/documents',
+    { schema: { params: IdParams, body: DocumentAttachment } },
+    async (req) => {
+      const { workspaceId } = await getContext(app.container, req);
+      const docs = await service.setDocuments(
+        workspaceId,
+        req.params.id,
+        req.body.paths,
+        req.body.repoId,
+      );
+      if (docs === undefined) throw new NotFoundError('Skill not found');
+      return { paths: docs } satisfies { paths: string[] };
+    },
+  );
 }

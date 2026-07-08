@@ -1,6 +1,7 @@
 import { simpleGit, type SimpleGit } from 'simple-git';
-import { join } from 'node:path';
-import { mkdir, readFile, access, rm } from 'node:fs/promises';
+import { join, relative, sep } from 'node:path';
+import { mkdir, readFile, writeFile, rename, access, rm, readdir, stat } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
 import { constants } from 'node:fs';
 import type {
   GitClient,
@@ -9,8 +10,32 @@ import type {
   UnifiedDiff,
   BlameLine,
   GitCommit,
+  ListDocsOptions,
+  ListDocsEntry,
 } from '@devdigest/shared';
 import { parseUnifiedDiff } from './diff-parser.js';
+
+/**
+ * Default cap on the number of `.md` files returned by `listDocs`. Matches
+ * `MAX_DISCOVERED_FILES` in the project-context module constants (T2).
+ */
+const LIST_DOCS_MAX_FILES = 500;
+
+/**
+ * Directory names skipped during `listDocs` walk — mirrors the repo-intel
+ * `EXCLUDED_DIRS` list but defined locally so the adapter stays independent of
+ * the feature module.
+ */
+const LIST_DOCS_EXCLUDED_DIRS: ReadonlySet<string> = new Set([
+  'node_modules',
+  '.git',
+  'dist',
+  'build',
+  'coverage',
+  '.next',
+  'out',
+  'vendor',
+]);
 
 /**
  * Depth fetched by `sync()`. Deeper than the shallow clone (CLONE_DEPTH=1) so the
@@ -128,6 +153,89 @@ export class SimpleGitClient implements GitClient {
 
   async readFile(repo: RepoRef, path: string): Promise<string> {
     return readFile(join(this.clonePathFor(repo), path), 'utf8');
+  }
+
+  /**
+   * Write `content` (UTF-8) to `path` inside the clone worktree.
+   * Uses a temp-file + rename strategy (both in the same directory) so
+   * a mid-write crash never leaves a partial file (AC-32).
+   * Path confinement is the caller's responsibility (`guardPath` in the service).
+   */
+  async writeFile(repo: RepoRef, path: string, content: string): Promise<void> {
+    const dest = join(this.clonePathFor(repo), path);
+    // Write to a temp file in the same directory so the subsequent rename is
+    // atomic within the same filesystem — avoids a partial file on crash.
+    const tmpPath = `${dest}.tmp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    await writeFile(tmpPath, content, 'utf8');
+    await rename(tmpPath, dest);
+  }
+
+  /**
+   * Stat-only recursive walk returning every `.md` file under the clone.
+   * Mirrors the repo-intel `walkDir` pattern: never follows symlinks (avoids
+   * loops and clone-escape); skips excluded dirs; caps at `opts.maxFiles`.
+   * Returns `[]` when the clone directory is missing — callers must not throw.
+   */
+  async listDocs(repo: RepoRef, opts?: ListDocsOptions): Promise<ListDocsEntry[]> {
+    const maxFiles = opts?.maxFiles ?? LIST_DOCS_MAX_FILES;
+    const excludeSet: ReadonlySet<string> = opts?.excludeDirs
+      ? new Set(opts.excludeDirs)
+      : LIST_DOCS_EXCLUDED_DIRS;
+    const includeSet: ReadonlySet<string> | null = opts?.includeSegments
+      ? new Set(opts.includeSegments)
+      : null;
+
+    const cloneRoot = this.clonePathFor(repo);
+    if (!(await this.exists(cloneRoot))) return [];
+
+    const results: ListDocsEntry[] = [];
+
+    const walk = async (dir: string): Promise<void> => {
+      if (results.length >= maxFiles) return;
+
+      let entries: Dirent[];
+      try {
+        entries = (await readdir(dir, { withFileTypes: true })) as Dirent[];
+      } catch {
+        // Unreadable directory (permissions, partial clone) — skip cleanly.
+        return;
+      }
+
+      for (const entry of entries) {
+        if (results.length >= maxFiles) break;
+
+        // Never follow symlinks: avoids loops and clone-root escapes (AC-13).
+        if (entry.isSymbolicLink()) continue;
+
+        const name = entry.name;
+
+        if (entry.isDirectory()) {
+          if (excludeSet.has(name)) continue;
+          await walk(join(dir, name));
+          continue;
+        }
+
+        if (!entry.isFile()) continue;
+        if (!name.endsWith('.md')) continue;
+
+        const full = join(dir, name);
+        let size: number;
+        try {
+          size = (await stat(full)).size;
+        } catch {
+          continue; // unreadable file — skip
+        }
+
+        // Posix-style relative path (matches `pr_files.path` convention).
+        const relPath = relative(cloneRoot, full).split(sep).join('/');
+        // Only matching files count toward maxFiles (see ListDocsOptions).
+        if (includeSet && !relPath.split('/').some((s) => includeSet.has(s))) continue;
+        results.push({ path: relPath, sizeBytes: size });
+      }
+    };
+
+    await walk(cloneRoot);
+    return results;
   }
 }
 

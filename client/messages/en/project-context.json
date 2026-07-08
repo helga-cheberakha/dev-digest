@@ -1,0 +1,43 @@
+{
+  "title": "Project Context",
+  "subtitle": "Markdown files discovered in your repo's specs, docs, and insights folders.",
+  "refresh": "Refresh document list",
+  "truncatedNote": "List capped at 500 files",
+  "filter": {
+    "placeholder": "Filter documents…",
+    "resultsCount": "{count} documents"
+  },
+  "emptyState": {
+    "title": "No documents found",
+    "body": "No markdown files were discovered under specs/, docs/, or insights/ in the repo. Make sure the repo is synced."
+  },
+  "document": {
+    "tokens": "≈ {count} tokens",
+    "usedByAgents": "Used by {count} agents",
+    "usedByNone": "Not attached to any agent"
+  },
+  "preview": {
+    "title": "Preview",
+    "noSelection": "Select a document from the list to preview it.",
+    "loading": "Loading preview…",
+    "error": "Could not load preview."
+  },
+  "edit": {
+    "tabLabel": "Edit",
+    "editorLabel": "Edit document content",
+    "warning": "Edits are local to the review clone and may be overwritten on the next sync.",
+    "save": "Save",
+    "saving": "Saving…",
+    "saved": "Saved",
+    "saveFailed": "Save failed: {message}"
+  },
+  "attach": {
+    "title": "Attach to agents & skills",
+    "agentsSection": "Agents",
+    "skillsSection": "Skills",
+    "noAgents": "No agents",
+    "noSkills": "No skills",
+    "attach": "Attach to {name}",
+    "detach": "Detach from {name}"
+  }
+}

@@ -10,6 +10,8 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 ## Codebase Patterns
 
+- **2026-07-07** — `run.ts` `loadFlows()` discovers ONLY files matching `*.flow.json` in `e2e/specs/` (existing convention: `NN-name.flow.json`). A spec file named without the `.flow.json` suffix is silently never executed — the runner still reports "N/N flows passed" with no error. When adding a flow, match the glob and the `NN-` numbering, and eyeball the runner's flow count once. Evidence: `e2e/run.ts` (`loadFlows`), `e2e/specs/08-brief-review-focus-click.flow.json`.
+
 ## Tool & Library Notes
 
 ## Recurring Errors & Fixes

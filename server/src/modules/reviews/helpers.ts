@@ -29,6 +29,16 @@ export interface ReviewDto {
   grounding?: string | null;
   created_at: string;
   findings: ReviewDtoFinding[];
+  tokens_in: number | null;
+  tokens_out: number | null;
+  cost_usd: number | null;
+}
+
+/** The `agent_runs` metrics attached to a review's `run_id` (AC-11). */
+export interface ReviewRunMetrics {
+  tokensIn: number | null;
+  tokensOut: number | null;
+  costUsd: number | null;
 }
 
 export function findingRowToDto(row: FindingRow): ReviewDtoFinding {
@@ -56,6 +66,7 @@ export function reviewToDto(
   review: ReviewRow,
   findings: FindingRow[],
   agentName?: string | null,
+  runMetrics?: ReviewRunMetrics | null,
 ): ReviewDto {
   return {
     id: review.id,
@@ -70,6 +81,9 @@ export function reviewToDto(
     model: review.model,
     created_at: review.createdAt.toISOString(),
     findings: findings.map(findingRowToDto),
+    tokens_in: runMetrics?.tokensIn ?? null,
+    tokens_out: runMetrics?.tokensOut ?? null,
+    cost_usd: runMetrics?.costUsd ?? null,
   };
 }
 

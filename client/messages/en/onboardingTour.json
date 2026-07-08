@@ -1,0 +1,54 @@
+{
+  "page": {
+    "crumb": "Onboarding Tour",
+    "title": "Onboarding for",
+    "meta": "Generated from index of {filesIndexed} files · last refreshed {timeAgo}",
+    "regenerate": "Regenerate",
+    "share": "Share link",
+    "shared": "Link copied!",
+    "generate": {
+      "title": "No onboarding tour yet",
+      "body": "Generate a guided onboarding tour to explore the architecture, critical paths, and how to get started with this repo.",
+      "cta": "Generate tour"
+    },
+    "error": "Could not load the onboarding tour.",
+    "degraded": "Index degraded — tour may be incomplete.",
+    "degradedReason": "Reason: {reason}",
+    "narrativeUnavailable": "Narrative unavailable — showing a deterministic skeleton."
+  },
+  "nav": {
+    "title": "On this page",
+    "architecture": "Architecture overview",
+    "criticalPaths": "Critical paths",
+    "howToRun": "How to run locally",
+    "readingPath": "Guided reading path",
+    "firstTasks": "First tasks"
+  },
+  "architecture": {
+    "title": "Architecture overview",
+    "diagramAriaLabel": "Architecture diagram",
+    "noDiagram": "No diagram data available."
+  },
+  "criticalPaths": {
+    "title": "Critical paths",
+    "open": "Open",
+    "openAriaLabel": "Open {file} in new tab"
+  },
+  "howToRun": {
+    "title": "How to run locally",
+    "copyAriaLabel": "Copy command",
+    "copied": "Copied!"
+  },
+  "readingPath": {
+    "title": "Guided reading path",
+    "openAriaLabel": "Open {file} in new tab"
+  },
+  "firstTasks": {
+    "title": "First tasks",
+    "empty": "No first tasks identified — no gaps detected.",
+    "complexity": "Complexity: {value}",
+    "gap": "Gap: {value}",
+    "suggestedPath": "Suggested path: {value}",
+    "pattern": "Pattern pointer: {value}"
+  }
+}

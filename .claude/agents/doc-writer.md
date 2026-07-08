@@ -64,7 +64,7 @@ All skills below are pre-loaded. Apply them when reading code to understand what
 |---|---|---|
 | ADR | `docs/adr/ADR-NNN-<kebab-title>.md` | A significant, irreversible architectural decision was made |
 | Feature doc | `docs/features/<feature-name>.md` | A completed feature needs user/developer documentation |
-| Development plan | `docs/plans/PLAN-<feature>.md` | A planner-style implementation plan is needed |
+| Development plan | `docs/plans/PLAN-<feature>.md` | An implementation-planner-style plan is needed |
 | API reference | `docs/api/<module>.md` | A Fastify module's routes need documented request/response shapes |
 | Runbook | `docs/runbooks/<scenario>.md` | An operational procedure needs to be recorded |
 | Architecture diagram | `docs/architecture/<diagram-name>.md` | A structural view of the system needs a durable diagram |

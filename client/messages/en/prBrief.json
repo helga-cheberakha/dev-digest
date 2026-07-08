@@ -1,0 +1,27 @@
+{
+  "riskLevel": {
+    "high": "High risk",
+    "medium": "Medium risk",
+    "low": "Low risk"
+  },
+  "metrics": {
+    "findings": "Findings",
+    "blockers": "Blockers",
+    "score": "Score",
+    "cost": "Cost",
+    "tokens": "Tokens"
+  },
+  "reviewNotRun": "Review not run yet",
+  "runReview": "Run Review",
+  "reviewFocus": "Review Focus",
+  "reviewFocusEmpty": "No review focus areas flagged.",
+  "riskAreas": "Risk Areas",
+  "noRisks": "No notable risks flagged.",
+  "regenerate": "Regenerate",
+  "regenerating": "Regenerating…",
+  "regenerateError": "Regeneration failed — try again.",
+  "openFile": "Open {path}",
+  "unavailable": "Brief not available",
+  "unavailableHint": "Try regenerating the brief.",
+  "retry": "Retry"
+}

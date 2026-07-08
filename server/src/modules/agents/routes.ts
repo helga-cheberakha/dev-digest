@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { CiFailOn, Provider, ReviewStrategy } from '@devdigest/shared';
+import { CiFailOn, DocumentAttachment, Provider, ReviewStrategy } from '@devdigest/shared';
 import { getContext } from '../_shared/context.js';
 import { IdParams } from '../_shared/schemas.js';
 import { NotFoundError } from '../../platform/errors.js';
@@ -175,4 +175,33 @@ export default async function agentsRoutes(appBase: FastifyInstance) {
     await getContext(app.container, req);
     return service.listModels(req.params.id);
   });
+
+  // ---- document attachment (AC-5, AC-8, AC-9) ------------------------------
+
+  /**
+   * GET /agents/:id/documents → ordered list of attached document paths.
+   * POST /agents/:id/documents → replace the full ordered set (body: DocumentAttachment).
+   *
+   * Registered after all existing /:id/* routes (no shadowing risk — `documents`
+   * is a literal segment, not a catch-all param).
+   */
+
+  app.get('/agents/:id/documents', { schema: { params: IdParams } }, async (req) => {
+    const { workspaceId } = await getContext(app.container, req);
+    const agent = await service.get(workspaceId, req.params.id);
+    if (!agent) throw new NotFoundError('Agent not found');
+    const paths = await service.getDocuments(workspaceId, req.params.id);
+    return { paths: paths ?? [] };
+  });
+
+  app.post(
+    '/agents/:id/documents',
+    { schema: { params: IdParams, body: DocumentAttachment } },
+    async (req) => {
+      const { workspaceId } = await getContext(app.container, req);
+      const paths = await service.setDocuments(workspaceId, req.params.id, req.body.paths, req.body.repoId);
+      if (paths === undefined) throw new NotFoundError('Agent not found');
+      return { paths };
+    },
+  );
 }

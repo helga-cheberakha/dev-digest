@@ -54,7 +54,6 @@ export async function upsertIntent(db: Db, prId: string, intent: Intent): Promis
       summary: intent.summary,
       inScope: intent.in_scope,
       outOfScope: intent.out_of_scope,
-      riskAreas: intent.risk_areas ?? null,
       model: '',
     })
     .onConflictDoUpdate({
@@ -63,7 +62,6 @@ export async function upsertIntent(db: Db, prId: string, intent: Intent): Promis
         summary: intent.summary,
         inScope: intent.in_scope,
         outOfScope: intent.out_of_scope,
-        riskAreas: intent.risk_areas ?? null,
         updatedAt: new Date(),
       },
     });
@@ -76,6 +74,5 @@ export async function getIntent(db: Db, prId: string): Promise<Intent | undefine
     summary: row.summary,
     in_scope: row.inScope,
     out_of_scope: row.outOfScope,
-    risk_areas: row.riskAreas ?? undefined,
   };
 }
