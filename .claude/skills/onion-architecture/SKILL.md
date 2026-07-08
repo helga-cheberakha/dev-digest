@@ -1,7 +1,7 @@
 ---
 name: onion-architecture
 description: "Onion / ports-and-adapters layering for the DevDigest backend (server/ + reviewer-core/). Use when adding or reviewing a backend module — placing routes/services/repositories/adapters, deciding where a DB query or an external SDK call (LLM, GitHub, git, ripgrep, ast-grep) may live, wiring DI in platform/container.ts, defining a new port in @devdigest/shared, or keeping reviewer-core pure. Enforces the dependency rule (imports point inward) and ships a dependency-cruiser gate. NOT for the client/ frontend (use frontend-architecture) or React code."
-version: "1.0.0"
+version: "1.1.0"
 ---
 
 # Onion Architecture — DevDigest backend
@@ -80,6 +80,24 @@ Apply in order:
 6. **Cross-module need?** Reach the other capability through `container.*` (e.g.
    `container.repoIntel.*`, `container.agentsRepo`), never by importing another
    `modules/<other>/` internal file.
+
+## Reviewing with this skill (scope & severity)
+
+This skill is an **additional lens**, not the whole review. Layer placement is one class of
+defect; a review that names every violated rule but misses a real bug has failed the author.
+
+- **Keep hunting functional bugs.** After the layering pass, re-read the code for state and
+  data-flow errors — a flag inserted but never updated, a "pending" query that will re-send
+  what was already sent, a retry that double-fires. These matter more to the author than any
+  import edge, and they are exactly what a layering-focused read tends to tunnel past.
+- **Calibrate severity like `code-review-conventions` does.** CRITICAL is reserved for
+  verified functional bugs, security holes, or data loss. Pure layering drift — an import
+  pointing the wrong way with **no runtime defect** — is HIGH at most: it trips the gate
+  ratchet, it does not break the user.
+- **End every review with the gate.** Analysis names the rule a change would trip; the gate
+  proves it. Every review of `server/` or `reviewer-core/` code must close by telling the
+  author to run `cd server && npm run depcruise` (or `npm run depcruise:all` when
+  reviewer-core is touched) before merging.
 
 ## Adding a new external dependency (the canonical move)
 
