@@ -1,7 +1,7 @@
 ---
 name: onion-architecture
 description: "Onion / ports-and-adapters layering for the DevDigest backend (server/ + reviewer-core/). Use when adding or reviewing a backend module — placing routes/services/repositories/adapters, deciding where a DB query or an external SDK call (LLM, GitHub, git, ripgrep, ast-grep) may live, wiring DI in platform/container.ts, defining a new port in @devdigest/shared, or keeping reviewer-core pure. Enforces the dependency rule (imports point inward) and ships a dependency-cruiser gate. NOT for the client/ frontend (use frontend-architecture) or React code."
-version: "1.1.0"
+version: "1.2.0"
 ---
 
 # Onion Architecture — DevDigest backend
@@ -80,6 +80,29 @@ Apply in order:
 6. **Cross-module need?** Reach the other capability through `container.*` (e.g.
    `container.repoIntel.*`, `container.agentsRepo`), never by importing another
    `modules/<other>/` internal file.
+
+## The rule judges the import *closure*, not the first hop
+
+A violation is rarely sitting in the file you were asked to review. Layering gets laundered
+through innocent-looking local helpers: `service.ts` imports `./helpers/render.ts` (pure by
+its name), which imports `./stats.ts`, which quietly queries `db/schema`. Every file in that
+chain is part of the service's dependency closure — and the dependency rule judges the
+closure. A service whose helper's helper opens a DB connection *is* a service that queries
+the DB.
+
+So when reviewing, do not declare a file clean until you have walked its **relative** imports
+at least two hops out:
+
+1. List the file's imports. Package/SDK/node imports (`drizzle-orm`, `octokit`, `node:fs`,
+   `process.env` access) **end** a chain — classify them by the layer map right there.
+2. Relative imports (`./`, `../`) **continue** the chain — open each one (or grep it for
+   `^import` and `process.env`) and repeat.
+3. Attribute what you find to the entry point: report the full chain
+   (`service.ts → render.ts → stats.ts → db/schema`), not just the leaf, so the author sees
+   why their "clean" file is implicated.
+
+`dependency-cruiser` sees the whole graph and will catch these edges — but a diff reviewer
+who stops at hop one approves laundered I/O long before the gate runs.
 
 ## Reviewing with this skill (scope & severity)
 
