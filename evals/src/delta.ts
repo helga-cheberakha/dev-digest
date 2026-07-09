@@ -52,6 +52,25 @@ function metricRow(label: string, a: Stats, b: Stats): void {
   console.log(`      ${label}: ${a.mean.toFixed(0)} -> ${b.mean.toFixed(0)}  ${col}(${sign}${d.toFixed(0)})${RESET}`);
 }
 
+/**
+ * Full nodeids encode the eval file path (e.g. `agents/architecture-reviewer/...eval.ts > agent:x
+ * > case name`), so two labeled runs coming from DIFFERENT eval files (a strict agent vs a
+ * relaxed variant defined in its own `-lite.eval.ts`) never share a full nodeid — the union in the
+ * old by-nodeid diff just listed every row once per side with a `—` on the other, useless for
+ * exactly the A/B this tool exists for. Key by the trailing case name instead, which two variants
+ * of the same task share on purpose. A short id that collides across multiple full nodeids on one
+ * side (two different files defining a same-named case) keeps the first one seen and is noted.
+ */
+function byShortId(tests: Record<string, NodeAggregate>): Map<string, NodeAggregate> {
+  const out = new Map<string, NodeAggregate>();
+  for (const [id, agg] of Object.entries(tests)) {
+    const shortId = id.split(" > ").slice(-1)[0];
+    if (!out.has(shortId)) out.set(shortId, agg);
+    else console.error(`  ${DIM}(duplicate case name '${shortId}' across files — keeping first)${RESET}`);
+  }
+  return out;
+}
+
 function main(): void {
   const [labelA, labelB] = process.argv.slice(2);
   if (!labelA || !labelB) {
@@ -63,11 +82,12 @@ function main(): void {
   console.log(`A = ${labelA}  sha ${a.git_sha}${a.dirty ? "-dirty" : ""}  (${a.times} runs)`);
   console.log(`B = ${labelB}  sha ${b.git_sha}${b.dirty ? "-dirty" : ""}  (${b.times} runs)`);
 
-  const nodeids = [...new Set([...Object.keys(a.tests), ...Object.keys(b.tests)])].sort();
-  for (const id of nodeids) {
-    const ta = a.tests[id];
-    const tb = b.tests[id];
-    const shortId = id.split(" > ").slice(-1)[0];
+  const testsA = byShortId(a.tests);
+  const testsB = byShortId(b.tests);
+  const shortIds = [...new Set([...testsA.keys(), ...testsB.keys()])].sort();
+  for (const shortId of shortIds) {
+    const ta = testsA.get(shortId);
+    const tb = testsB.get(shortId);
     rateRow("\n  ", shortId, ta?.pass, tb?.pass);
 
     const practiceTexts = [...new Set([...Object.keys(ta?.practices ?? {}), ...Object.keys(tb?.practices ?? {})])];
