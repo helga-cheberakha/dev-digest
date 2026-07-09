@@ -51,14 +51,14 @@ place allowed to know both a port and its concrete adapter, because its job is t
 Full table with allowed/forbidden imports per layer and real file references:
 → **[layer-map.md](layer-map.md)**. Summary:
 
-| Layer | Path | May import | Must NOT import |
-|-------|------|-----------|-----------------|
-| Core | `reviewer-core/src/**` | itself, shared contract **types** | any I/O: `fastify`, `drizzle-orm`, `octokit`, `simple-git`, `postgres`, `src/adapters/**`, `db/**` |
-| Ports | `@devdigest/shared` (`src/vendor/shared/**`) | other shared types | anything concrete |
-| Application | `modules/*/service.ts`, `run-executor.ts` | ports, `container`, own `repository`/`helpers` | `src/adapters/**` (concrete SDKs) |
-| Infrastructure | `src/adapters/**`, `db/**`, `modules/*/repository*.ts` | ports, drivers/SDKs, `db/schema` | `modules/**` (a feature) |
-| Composition root | `platform/container.ts` | everything (binds ports↔adapters) | — |
-| Transport | `modules/*/routes.ts` + plugins | own `service`, `_shared`, contracts | `src/adapters/**`, `db/schema` (go through the service) |
+| Layer            | Path                                                   | May import                                     | Must NOT import                                                                                    |
+|------------------|--------------------------------------------------------|------------------------------------------------|----------------------------------------------------------------------------------------------------|
+| Core             | `reviewer-core/src/**`                                 | itself, shared contract **types**              | any I/O: `fastify`, `drizzle-orm`, `octokit`, `simple-git`, `postgres`, `src/adapters/**`, `db/**` |
+| Ports            | `@devdigest/shared` (`src/vendor/shared/**`)           | other shared types                             | anything concrete                                                                                  |
+| Application      | `modules/*/service.ts`, `run-executor.ts`              | ports, `container`, own `repository`/`helpers` | `src/adapters/**` (concrete SDKs)                                                                  |
+| Infrastructure   | `src/adapters/**`, `db/**`, `modules/*/repository*.ts` | ports, drivers/SDKs, `db/schema`               | `modules/**` (a feature)                                                                           |
+| Composition root | `platform/container.ts`                                | everything (binds ports↔adapters)              | —                                                                                                  |
+| Transport        | `modules/*/routes.ts` + plugins                        | own `service`, `_shared`, contracts            | `src/adapters/**`, `db/schema` (go through the service)                                            |
 
 ## Decision framework (placing a change)
 

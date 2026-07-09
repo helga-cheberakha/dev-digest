@@ -26,3 +26,6 @@ test-results/
 
 # pr-self-review local gate state (per-dev, regenerated each run)
 .pr-self-review.json
+
+# skill-creator iteration scratch (benchmarks, grading, blind-eval snapshots)
+.claude/skills/*-workspace/
