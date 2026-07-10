@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Verdict, Finding } from './findings.js';
+import { Verdict, Finding, Severity, FindingCategory } from './findings.js';
 import { EvalRun, EvalOwnerKind, Conformance, Provider, CiFailOn } from './knowledge.js';
 
 /**
@@ -42,6 +42,8 @@ export const EvalRunRecord = z.object({
   citation_accuracy: z.number().nullable(),
   duration_ms: z.number().int().nullable(),
   cost_usd: z.number().nullable(),
+  batch_id: z.string().nullable(),
+  agent_version: z.number().int().nullable(),
 });
 export type EvalRunRecord = z.infer<typeof EvalRunRecord>;
 
@@ -273,3 +275,93 @@ export const HookScanResult = z.object({
   findings: z.array(Finding),
 });
 export type HookScanResult = z.infer<typeof HookScanResult>;
+
+// ===========================================================================
+// Eval Pipeline — region-level expectations, actual outputs, batch aggregates
+// ===========================================================================
+
+/** Narrowed finding shape for eval payloads (grounding fields + severity). */
+export const FindingLite = Finding.pick({
+  id: true,
+  severity: true,
+  category: true,
+  title: true,
+  file: true,
+  start_line: true,
+  end_line: true,
+});
+export type FindingLite = z.infer<typeof FindingLite>;
+
+/** A line-range region inside a file, optionally scoped to severity/category. */
+export const EvalRegion = z.object({
+  file: z.string(),
+  start_line: z.number().int(),
+  end_line: z.number().int(),
+  severity: Severity.optional(),
+  category: FindingCategory.optional(),
+});
+export type EvalRegion = z.infer<typeof EvalRegion>;
+
+/**
+ * The expected output stored on an eval case.
+ * `expectation` is stored explicitly — must_find/must_not_flag is NOT inferred
+ * from an empty vs non-empty `regions` array.
+ */
+export const EvalExpectedOutput = z.object({
+  expectation: z.enum(['must_find', 'must_not_flag']),
+  regions: z.array(EvalRegion),
+});
+export type EvalExpectedOutput = z.infer<typeof EvalExpectedOutput>;
+
+/** Metadata stored on an eval case when seeded from a real finding. */
+export const EvalInputMeta = z.object({
+  source_finding_id: z.string(),
+  pr_number: z.number().int().optional(),
+});
+export type EvalInputMeta = z.infer<typeof EvalInputMeta>;
+
+/**
+ * The actual output recorded in `eval_runs.actual_output` after execution.
+ * No `agent_version` here — it lives in `eval_runs.agent_version` (real column).
+ */
+export const EvalActualOutput = z.object({
+  findings: z.array(FindingLite),
+  grounding: z.object({
+    kept: z.number().int(),
+    produced: z.number().int(),
+  }),
+  error: z.string().optional(),
+});
+export type EvalActualOutput = z.infer<typeof EvalActualOutput>;
+
+/** Seed payload for `POST /eval-cases/from-finding`. */
+export const EvalCaseFromFinding = z.object({
+  finding_id: z.string(),
+});
+export type EvalCaseFromFinding = z.infer<typeof EvalCaseFromFinding>;
+
+/** Aggregate metrics for a batch run (one `batch_id` across N cases). */
+export const EvalRunBatch = z.object({
+  batch_id: z.string(),
+  ran_at: z.string(),
+  agent_version: z.number().int().nullable(),
+  recall: z.number(),
+  precision: z.number(),
+  citation_accuracy: z.number(),
+  traces_passed: z.number().int(),
+  traces_total: z.number().int(),
+});
+export type EvalRunBatch = z.infer<typeof EvalRunBatch>;
+
+/** Side-by-side comparison of two batch runs. */
+export const EvalCompare = z.object({
+  a: EvalRunBatch,
+  b: EvalRunBatch,
+  prompt_diff: z.unknown(),
+  delta: z.object({
+    recall: z.number(),
+    precision: z.number(),
+    citation_accuracy: z.number(),
+  }),
+});
+export type EvalCompare = z.infer<typeof EvalCompare>;
