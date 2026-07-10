@@ -9,6 +9,7 @@ import {
   PERFORMANCE_REVIEWER_PROMPT,
   TEST_QUALITY_REVIEWER_PROMPT,
 } from './seed-prompts.js';
+import { seedEvalCases } from './seed-eval.js';
 
 /** Default provider/model for the built-in reviewer agents. */
 const DEFAULT_PROVIDER = 'openrouter' as const;
@@ -491,6 +492,15 @@ Flag tests where mocking undermines the test's validity.
         await db.insert(t.agentSkills).values({ agentId: tqRow!.id, skillId: skillIds[name]!, order: i }).onConflictDoNothing();
       }
     }
+  }
+
+  // ---- Eval cases for General Reviewer (AC-17: ≥8 cases, no floor-warning) ----
+  const [generalReviewer] = await db
+    .select()
+    .from(t.agents)
+    .where(and(eq(t.agents.workspaceId, workspaceId), eq(t.agents.name, 'General Reviewer')));
+  if (generalReviewer) {
+    await seedEvalCases(db, workspaceId, generalReviewer.id);
   }
 
   return { workspaceId, userId };

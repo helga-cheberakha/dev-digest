@@ -55,7 +55,11 @@
     "invalidJson": "invalid JSON",
     "lastRunPassed": "Last run passed",
     "lastRunFailed": "Last run failed",
-    "resultSummary": "recall {recall}% · precision {precision}% · citation {citation}% · {duration}s"
+    "resultSummary": "recall {recall}% · precision {precision}% · citation {citation}% · {duration}s",
+    "neverRun": "Never run",
+    "cancel": "Cancel",
+    "runOnSave": "Run on save",
+    "jsonInvalidHint": "Fix the JSON to enable Save — must match expectation + regions[] shape"
   },
   "evalsTab": {
     "metricsTitle": "Eval metrics",
