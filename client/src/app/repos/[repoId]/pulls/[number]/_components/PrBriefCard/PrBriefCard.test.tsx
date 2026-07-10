@@ -131,12 +131,12 @@ const REVIEW: ReviewRecord = {
   cost_usd: 0.1234,
 };
 
-function renderCard(onOpenFile?: (ref: { path: string; line?: number }) => void) {
+function renderCard() {
   const qc = new QueryClient();
   return render(
     <QueryClientProvider client={qc}>
       <NextIntlClientProvider locale="en" messages={{ prBrief: prBriefMessages, prReview: prReviewMessages }}>
-        <PrBriefCard prId={PR_ID} onOpenFile={onOpenFile} />
+        <PrBriefCard prId={PR_ID} />
       </NextIntlClientProvider>
     </QueryClientProvider>,
   );

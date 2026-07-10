@@ -14,7 +14,6 @@ import { usePrBrief, useRegenerateBrief } from "../../../../../../../lib/hooks/b
 import { usePrReviews } from "../../../../../../../lib/hooks/reviews";
 import { formatCost } from "../../../../../../../lib/cost";
 import { RunReviewDropdown } from "../RunReviewDropdown";
-import type { FileRefTarget } from "@/lib/parseFileRef";
 import { RISK_LEVEL_META, METRIC_ICONS } from "./constants";
 import { s } from "./styles";
 
@@ -117,9 +116,6 @@ function ReviewNudge({ prId }: { prId: string }) {
 
 export interface PrBriefCardProps {
   prId: string;
-  /** Retained for caller API compatibility while T5 removes it from OverviewTab.
-   *  Review Focus rendering has moved to a standalone component. */
-  onOpenFile?: (ref: FileRefTarget) => void;
 }
 
 /** PR Brief Card — risk banner (what/why) + latest-review metrics. */
