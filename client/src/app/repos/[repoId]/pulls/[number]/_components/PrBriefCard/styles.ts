@@ -70,29 +70,6 @@ export const s = {
   } satisfies CSSProperties,
   nudgeText: { fontSize: 13, color: "var(--text-muted)" } satisfies CSSProperties,
 
-  // ---- Review Focus list (feeds AC-14 via onOpenFile) ----
-  focusSection: { display: "flex", flexDirection: "column", gap: 10 } satisfies CSSProperties,
-  focusList: { display: "flex", flexDirection: "column", gap: 8 } satisfies CSSProperties,
-  focusItem: {
-    border: "1px solid var(--border)",
-    borderRadius: 7,
-    padding: "10px 12px",
-    display: "flex",
-    flexDirection: "column",
-    gap: 6,
-  } satisfies CSSProperties,
-  focusLabel: { fontSize: 13, color: "var(--text-primary)", lineHeight: 1.5 } satisfies CSSProperties,
-  focusFileRefs: { display: "flex", flexWrap: "wrap", gap: 6 } satisfies CSSProperties,
-  focusFileRefBtn: {
-    fontSize: 11,
-    padding: "2px 6px",
-    borderRadius: 4,
-    border: "1px solid var(--border)",
-    background: "var(--bg-elevated)",
-    color: "var(--text-secondary)",
-    cursor: "pointer",
-  } satisfies CSSProperties,
-
   // ---- shared states ----
   muted: { fontSize: 13, color: "var(--text-muted)" } satisfies CSSProperties,
   loadingStack: { display: "flex", flexDirection: "column", gap: 12 } satisfies CSSProperties,

@@ -63,15 +63,10 @@ const BRIEF: Brief = {
       title: "Possible secret in diff",
       explanation: "Looks like a hard-coded API key in the diff.",
       severity: "high",
-      file_refs: ["src/mw/ratelimit.ts"],
+      file_refs: [],
     },
   ],
-  review_focus: [
-    {
-      label: "Check the rate limiter's window boundary logic.",
-      file_refs: ["src/mw/ratelimit.ts:12-20", "src/api/public.ts"],
-    },
-  ],
+  review_focus: [],
 };
 
 const REVIEW: ReviewRecord = {
@@ -93,7 +88,7 @@ const REVIEW: ReviewRecord = {
       severity: "CRITICAL",
       category: "security",
       title: "Blocker finding",
-      file: "src/mw/ratelimit.ts",
+      file: "src/main.ts",
       start_line: 1,
       end_line: 2,
       rationale: "r",
@@ -107,7 +102,7 @@ const REVIEW: ReviewRecord = {
       severity: "CRITICAL",
       category: "bug",
       title: "Dismissed finding (not a blocker)",
-      file: "src/mw/ratelimit.ts",
+      file: "src/main.ts",
       start_line: 5,
       end_line: 6,
       rationale: "r",
@@ -121,7 +116,7 @@ const REVIEW: ReviewRecord = {
       severity: "WARNING",
       category: "style",
       title: "Warning finding",
-      file: "src/mw/ratelimit.ts",
+      file: "src/main.ts",
       start_line: 9,
       end_line: 9,
       rationale: "r",
@@ -157,12 +152,11 @@ describe("PrBriefCard", () => {
     } as unknown as ReturnType<typeof usePrBrief>);
   });
 
-  it("renders the risk banner + what/why and all five review metrics, and parses review_focus file_refs (AC-10, AC-11, m2)", () => {
+  it("renders the risk banner + what/why and all five review metrics (AC-10, AC-11)", () => {
     vi.mocked(usePrReviews).mockReturnValue({
       data: [REVIEW],
     } as unknown as ReturnType<typeof usePrReviews>);
-    const onOpenFile = vi.fn();
-    renderCard(onOpenFile);
+    renderCard();
 
     // AC-10: banner colour-by-risk_level (asserted via the translated label,
     // not CSS) + what/why text.
@@ -184,14 +178,6 @@ describe("PrBriefCard", () => {
 
     // No-review nudge must NOT render alongside a completed review.
     expect(screen.queryByText("Review not run yet")).not.toBeInTheDocument();
-
-    // m2: a "path:12-20" ref invokes onOpenFile with line = 12 (range start).
-    fireEvent.click(screen.getByText("src/mw/ratelimit.ts:12-20"));
-    expect(onOpenFile).toHaveBeenCalledWith({ path: "src/mw/ratelimit.ts", line: 12 });
-
-    // m2: a bare path ref invokes onOpenFile with no line.
-    fireEvent.click(screen.getByText("src/api/public.ts"));
-    expect(onOpenFile).toHaveBeenLastCalledWith({ path: "src/api/public.ts" });
   });
 
   it("shows the AC-12 nudge with a Run Review action when no completed review exists", () => {
