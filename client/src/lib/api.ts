@@ -6,6 +6,7 @@ import type {
   OnboardingArtifact,
   EvalCase,
   EvalCaseInput,
+  EvalCaseListItem,
   EvalRunResult,
   EvalRunBatch,
   EvalCompare,
@@ -166,9 +167,9 @@ export async function createEvalCase(input: EvalCaseInput): Promise<EvalCase> {
   return api.post<EvalCase>(`/eval-cases`, input);
 }
 
-/** List all eval cases for an agent. */
-export async function fetchEvalCases(agentId: string): Promise<EvalCase[]> {
-  return api.get<EvalCase[]>(`/agents/${agentId}/eval-cases`);
+/** List all eval cases for an agent, each augmented with the latest run outcome. */
+export async function fetchEvalCases(agentId: string): Promise<EvalCaseListItem[]> {
+  return api.get<EvalCaseListItem[]>(`/agents/${agentId}/eval-cases`);
 }
 
 /**

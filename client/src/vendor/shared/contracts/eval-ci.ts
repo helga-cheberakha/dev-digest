@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Verdict, Finding, Severity, FindingCategory } from './findings.js';
-import { EvalRun, EvalOwnerKind, Conformance } from './knowledge.js';
+import { EvalRun, EvalOwnerKind, Conformance, EvalCase } from './knowledge.js';
 
 /**
  * A4 — Eval / CI / Compose / Conformance API contracts (L06).
@@ -336,3 +336,23 @@ export const EvalCompare = z.object({
   }),
 });
 export type EvalCompare = z.infer<typeof EvalCompare>;
+
+// ===========================================================================
+// Eval — case list item (case + latest run outcome, for UI badges)
+// ===========================================================================
+
+/**
+ * An eval case row augmented with the latest run outcome.
+ * Returned by GET /agents/:id/eval-cases so the UI can render pass/fail
+ * badges without a second round-trip.
+ */
+export const EvalCaseListItem = EvalCase.extend({
+  latest_run: z.object({
+    pass: z.boolean().nullable(),
+    recall: z.number().nullable(),
+    precision: z.number().nullable(),
+    citation_accuracy: z.number().nullable(),
+    ran_at: z.string(),
+  }).nullable(),
+});
+export type EvalCaseListItem = z.infer<typeof EvalCaseListItem>;

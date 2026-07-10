@@ -28,6 +28,7 @@ export function FindingCard({
   focused,
   defaultExpanded,
   onAction,
+  onCreateEvalCase,
   pending,
   repoFullName,
   headSha,
@@ -36,6 +37,7 @@ export function FindingCard({
   focused?: boolean;
   defaultExpanded?: boolean;
   onAction?: (action: FindingActionKind, reply?: string) => void;
+  onCreateEvalCase?: (findingId: string) => void;
   pending?: boolean;
   repoFullName?: string | null;
   headSha?: string | null;
@@ -108,6 +110,15 @@ export function FindingCard({
               onClick={() => onAction?.("dismiss")}
             >
               {t("finding.dismiss")}
+            </Button>
+            <Button
+              kind="ghost"
+              size="sm"
+              disabled={!muted}
+              aria-label={t("finding.turnIntoEvalCaseAria")}
+              onClick={() => onCreateEvalCase?.(f.id)}
+            >
+              {t("finding.turnIntoEvalCase")}
             </Button>
           </div>
         </div>

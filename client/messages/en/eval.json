@@ -28,7 +28,12 @@
       "cost": "Cost"
     },
     "pass": "pass",
-    "fail": "fail"
+    "fail": "fail",
+    "runAll": "Run all agents",
+    "noAgents": "No agents configured.",
+    "recentRunsAll": "Recent eval runs · all agents",
+    "noRecentRuns": "No recent eval runs across all agents.",
+    "noBatches": "No runs yet."
   },
   "caseEditor": {
     "newCase": "New eval case",

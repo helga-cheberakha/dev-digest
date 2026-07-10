@@ -104,6 +104,40 @@
     "untrustedNote": "Injected as an untrusted ## Project context block",
     "drawerTokenEstimate": "≈ {count} tokens"
   },
+  "evals": {
+    "casesHeading": "Eval cases",
+    "newCase": "New eval case",
+    "runAll": "Run all evals",
+    "running": "Running…",
+    "batchResult": "Recall {recall}% · Precision {precision}% · Citation {citation}%",
+    "passed": "passed",
+    "failed": "failed",
+    "neverRun": "never run",
+    "emptyCases": "No eval cases yet. Create one to assert expected findings on a sample diff.",
+    "history": "Run history",
+    "noHistory": "No batch runs yet. Click «Run all evals» to create the first one.",
+    "compare": "Compare",
+    "clearCompare": "Clear",
+    "compareHeading": "Batch comparison",
+    "deltaRecall": "Δ Recall",
+    "deltaPrecision": "Δ Precision",
+    "deltaCitation": "Δ Citation",
+    "promptDiff": "Prompt changes",
+    "promptBefore": "Before",
+    "promptAfter": "After",
+    "promote": "Promote v{version}",
+    "promoting": "Promoting…",
+    "promoted": "Promoted",
+    "table": {
+      "ranAt": "Ran at",
+      "version": "Version",
+      "recall": "Recall",
+      "precision": "Precision",
+      "citation": "Citation",
+      "passedOf": "Passed",
+      "compare": "Compare"
+    }
+  },
   "mount": {
     "body": "Mount point for {owner}. The Agent Editor shell + tab routing are wired by A2 — {owner} renders this tab."
   }

@@ -58,3 +58,43 @@ describe("FindingCard (smoke, both themes)", () => {
     expect(onAction).toHaveBeenCalledWith("dismiss");
   });
 });
+
+// Queries use the aria-label value, which becomes the accessible name per ARIA spec.
+const EVAL_BTN_NAME = /turn this finding into an eval case/i;
+
+describe("FindingCard — eval case button", () => {
+  it("renders 'Turn into eval case' disabled for a decision-less finding", () => {
+    renderWithIntl(
+      <FindingCard f={FINDING} defaultExpanded onCreateEvalCase={() => {}} />,
+    );
+    const btn = screen.getByRole("button", { name: EVAL_BTN_NAME });
+    expect(btn).toBeDisabled();
+  });
+
+  it("enables the button once the finding is accepted", () => {
+    const accepted: typeof FINDING = { ...FINDING, accepted_at: "2024-01-01T00:00:00Z" };
+    renderWithIntl(
+      <FindingCard f={accepted} defaultExpanded onCreateEvalCase={() => {}} />,
+    );
+    expect(screen.getByRole("button", { name: EVAL_BTN_NAME })).toBeEnabled();
+  });
+
+  it("enables the button once the finding is dismissed", () => {
+    const dismissed: typeof FINDING = { ...FINDING, dismissed_at: "2024-01-01T00:00:00Z" };
+    renderWithIntl(
+      <FindingCard f={dismissed} defaultExpanded onCreateEvalCase={() => {}} />,
+    );
+    expect(screen.getByRole("button", { name: EVAL_BTN_NAME })).toBeEnabled();
+  });
+
+  it("fires onCreateEvalCase with the finding id when clicked", () => {
+    const onCreateEvalCase = vi.fn();
+    const accepted: typeof FINDING = { ...FINDING, accepted_at: "2024-01-01T00:00:00Z" };
+    renderWithIntl(
+      <FindingCard f={accepted} defaultExpanded onCreateEvalCase={onCreateEvalCase} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: EVAL_BTN_NAME }));
+    expect(onCreateEvalCase).toHaveBeenCalledTimes(1);
+    expect(onCreateEvalCase).toHaveBeenCalledWith("f1");
+  });
+});

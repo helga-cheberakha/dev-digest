@@ -1,13 +1,16 @@
 /* FindingsPanel — hide-low-confidence + j/k navigation + FindingCard list,
-   wiring the accept/dismiss action hook (A2). */
+   wiring the accept/dismiss action hook (A2) and eval-case draft flow (TC3). */
 "use client";
 
 import React from "react";
 import { useTranslations } from "next-intl";
+import { useMutation } from "@tanstack/react-query";
 import { Toggle, EmptyState } from "@devdigest/ui";
-import type { FindingRecord } from "@devdigest/shared";
+import type { FindingRecord, EvalCaseInput } from "@devdigest/shared";
 import { FindingCard } from "../FindingCard";
 import { useFindingAction } from "../../../../../../../lib/hooks/reviews";
+import { draftEvalCaseFromFinding } from "../../../../../../../lib/api";
+import { EvalCaseModal } from "@/components/EvalCaseModal";
 import { KEY_TO_ACTION } from "./constants";
 import { visibleFindings } from "./helpers";
 import { s } from "./styles";
@@ -30,6 +33,12 @@ export function FindingsPanel({
   const action = useFindingAction();
   const [hideLow, setHideLow] = React.useState(false);
   const [focusIdx, setFocusIdx] = React.useState(0);
+  const [draft, setDraft] = React.useState<EvalCaseInput | null>(null);
+
+  const draftMutation = useMutation({
+    mutationFn: draftEvalCaseFromFinding,
+    onSuccess: (data) => setDraft(data),
+  });
 
   const shown = React.useMemo(() => visibleFindings(findings, hideLow), [findings, hideLow]);
 
@@ -86,10 +95,19 @@ export function FindingsPanel({
               repoFullName={repoFullName}
               headSha={headSha}
               onAction={(act) => action.mutate({ findingId: f.id, action: act, prId })}
+              onCreateEvalCase={(findingId) => draftMutation.mutate(findingId)}
             />
           ))
         )}
       </div>
+
+      {draft && (
+        <EvalCaseModal
+          initial={draft}
+          onSaved={() => setDraft(null)}
+          onClose={() => setDraft(null)}
+        />
+      )}
     </div>
   );
 }
