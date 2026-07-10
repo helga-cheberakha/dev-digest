@@ -10,14 +10,14 @@ import type { EvalRun } from '../../vendor/shared/contracts/knowledge.js';
 import * as scoring from './scoring.js';
 import type { AggregateCase } from './scoring.js';
 import { runCase } from './run.js';
-import type * as t from '../../db/schema.js';
+import type { EvalCaseRow } from './repository.js';
 
 /**
  * A persisted eval case row augmented with the case's most recent run outcome.
  * Returned by listCases so the UI can render pass/fail badges without a
  * second round-trip.
  */
-export type CaseWithLatestRun = typeof t.evalCases.$inferSelect & {
+export type CaseWithLatestRun = EvalCaseRow & {
   latestRun: {
     ranAt: Date;
     pass: boolean | null;
@@ -123,7 +123,7 @@ export async function createCase(
   container: Container,
   workspaceId: string,
   input: EvalCaseInput,
-): Promise<typeof t.evalCases.$inferSelect> {
+): Promise<EvalCaseRow> {
   const parseResult = EvalExpectedOutput.safeParse(input.expected_output);
   if (!parseResult.success) {
     throw new ValidationError('Invalid expected_output', parseResult.error.issues);

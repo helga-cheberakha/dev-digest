@@ -2,6 +2,9 @@ import { and, desc, eq, isNotNull, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client.js';
 import * as t from '../../db/schema.js';
 
+/** The full persisted shape of an eval_cases row. Used by the service layer. */
+export type EvalCaseRow = typeof t.evalCases.$inferSelect;
+
 type InsertCaseValues = Omit<typeof t.evalCases.$inferInsert, 'id'>;
 type InsertRunValues = Omit<typeof t.evalRuns.$inferInsert, 'id' | 'caseId' | 'ranAt'>;
 

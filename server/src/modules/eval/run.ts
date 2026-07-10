@@ -3,7 +3,7 @@ import type { AgentRow } from '../../db/rows.js';
 import type { Finding } from '@devdigest/shared';
 import { reviewPullRequest } from '@devdigest/reviewer-core';
 import { parseUnifiedDiff } from '../../adapters/git/diff-parser.js';
-import { REVIEW_STRATEGY } from '../reviews/constants.js';
+import { REVIEW_STRATEGY } from './constants.js';
 
 /**
  * Minimal eval-case input required by runCase. The caller (service or test)
