@@ -14,6 +14,13 @@ interface BlastRadiusSectionProps {
   onGoToBlast: () => void;
 }
 
+const cardStyle: React.CSSProperties = {
+  border: "1px solid var(--border)",
+  borderRadius: 8,
+  background: "var(--bg-elevated)",
+  padding: 18,
+};
+
 const btnStyle: React.CSSProperties = {
   fontSize: 12,
   padding: "3px 10px",
@@ -48,7 +55,7 @@ export function BlastRadiusSection({ prId, onGoToBlast }: BlastRadiusSectionProp
   const counts = blastCounts(blast);
 
   return (
-    <section>
+    <section style={cardStyle}>
       <SectionLabel
         icon="Zap"
         right={
