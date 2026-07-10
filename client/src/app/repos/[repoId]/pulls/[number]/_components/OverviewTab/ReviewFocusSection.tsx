@@ -65,6 +65,7 @@ export function ReviewFocusSection({ items, onOpenFile }: ReviewFocusSectionProp
                 {item.file_refs.slice(0, MAX_FILE_REFS).map((ref) => (
                   <button
                     key={ref}
+                    type="button"
                     style={fileRefBtnStyle}
                     onClick={() => onOpenFile?.(parseFileRef(ref))}
                   >

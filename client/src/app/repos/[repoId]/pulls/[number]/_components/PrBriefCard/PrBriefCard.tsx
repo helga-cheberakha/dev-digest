@@ -2,7 +2,7 @@
    orchestrator can mount it in the PR-detail Overview tab. Renders: a
    risk_level-coloured banner with what/why + Regenerate (AC-10/AC-15); a
    metrics row from the latest completed review, or an AC-12 nudge when none
-   exists. Review Focus has moved to a standalone component (see ReviewFocusCard).
+   exists. Review Focus has moved to a standalone component (see ReviewFocusSection).
    Fetches its own Brief + Reviews and owns its own loading/error/skeleton states (m6). */
 "use client";
 

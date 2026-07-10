@@ -7,7 +7,6 @@ export const s = {
     borderRadius: 8,
     background: "var(--bg-elevated)",
     padding: 18,
-    marginBottom: 16,
   } satisfies CSSProperties,
   summary: {
     fontStyle: "italic",
