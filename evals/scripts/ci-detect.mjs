@@ -60,9 +60,13 @@ const skippedAgents = agentNames.filter((n) => !hasEvals("agents", n));
 
 // The workflow tier measures the LIVE harness, so anything that changes it re-triggers it:
 // the root or .claude CLAUDE.md, any agent definition, the workflow cases, or the engine itself.
+// CLAUDE.md is a symlink -> AGENTS.md at the repo root, so an edit to it shows up in
+// `git diff --name-only` as "AGENTS.md", never as "CLAUDE.md" (the symlink target only
+// changes if the link itself is repointed). Match both so the trigger actually fires.
 const runWorkflow = changed.some(
   (f) =>
     f === "CLAUDE.md" ||
+    f === "AGENTS.md" ||
     f === ".claude/CLAUDE.md" ||
     /^\.claude\/agents\/.+\.md$/.test(f) ||
     /^evals\/workflow\//.test(f) ||
