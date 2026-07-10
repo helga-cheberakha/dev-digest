@@ -130,3 +130,5 @@ Structure the final output in exactly this order, with these headings:
 5. **Summary** — 3-5 bullet takeaways a developer can act on today, ordered by tier
 
 Do not omit a section even if empty — state "none found" explicitly so the report reads as complete rather than partial.
+
+<!-- CI trigger test: harness-evals workflow (skill tier) -->

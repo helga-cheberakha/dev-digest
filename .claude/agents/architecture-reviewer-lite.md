@@ -280,3 +280,5 @@ Phase 4 step 1)
   verdict is mechanical, not a judgment call — `GATE: FAIL` if the Findings section contains any
   CRITICAL or HIGH severity entry, `GATE: PASS` otherwise. Never omit this section, and never
   soften a FAIL because findings feel minor in context — severity was already decided in Phase 4.
+
+<!-- CI trigger test: harness-evals workflow (agent tier + workflow tier) -->
