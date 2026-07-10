@@ -5,15 +5,9 @@ import { SectionLabel, Badge, Icon } from "@devdigest/ui";
 import { useTranslations } from "next-intl";
 import type { ReviewFocusItem } from "@devdigest/shared";
 import { parseFileRef, type FileRefTarget } from "@/lib/parseFileRef";
+import { cardStyle } from "@/lib/cardStyle";
 
 const MAX_FILE_REFS = 6;
-
-const cardStyle: React.CSSProperties = {
-  border: "1px solid var(--border)",
-  borderRadius: 8,
-  background: "var(--bg-elevated)",
-  padding: 18,
-};
 
 const fileRefBtnStyle: React.CSSProperties = {
   fontFamily: "monospace",

@@ -2,9 +2,10 @@
    composed-`PrBrief` fixtures (deleted contract) to the new `Brief` shape.
    Covers AC-10 (banner colour-by-risk_level + what/why), AC-11 (all five
    review metrics), AC-12 (no-review nudge + Run Review button), AC-15
-   (Regenerate posts force=true + disables in flight), and the m2 file_ref
-   parsing branch (range -> start line, bare path -> no line). `fireEvent`
-   only — `userEvent` is not installed (client/INSIGHTS.md 2026-07-06). */
+   (Regenerate posts force=true + disables in flight). The m2 file_ref
+   parsing branch (range -> start line, bare path -> no line) moved with
+   Review Focus to ReviewFocusSection.test.tsx. `fireEvent` only —
+   `userEvent` is not installed (client/INSIGHTS.md 2026-07-06). */
 import React from "react";
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";

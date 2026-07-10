@@ -8,18 +8,12 @@ import { blastCounts } from "../BlastRadius/helpers";
 import { STAT_ICONS } from "../BlastRadius/constants";
 import { PriorPrsAccordion } from "./PriorPrsAccordion";
 import { BlastGraphLightbox } from "./BlastGraphLightbox";
+import { cardStyle } from "@/lib/cardStyle";
 
 interface BlastRadiusSectionProps {
   prId: string | null;
   onGoToBlast: () => void;
 }
-
-const cardStyle: React.CSSProperties = {
-  border: "1px solid var(--border)",
-  borderRadius: 8,
-  background: "var(--bg-elevated)",
-  padding: 18,
-};
 
 const btnStyle: React.CSSProperties = {
   fontSize: 12,
