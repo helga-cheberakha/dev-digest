@@ -335,6 +335,68 @@ describe('(b) createCase', () => {
 });
 
 // ---------------------------------------------------------------------------
+// (b-2) createCase: owner_id not in caller's workspace → NotFoundError, no row
+// ---------------------------------------------------------------------------
+
+describe('(b-2) createCase: owner_id from a different workspace → NotFoundError', () => {
+  it('getById returns undefined → NotFoundError, insertCase not called', async () => {
+    const insertCaseSpy = vi.fn();
+    const container = makeContainer({
+      insertCase: insertCaseSpy,
+      // getById returns undefined — agent does not exist in this workspace
+      getById: async () => undefined,
+    });
+
+    const input = {
+      owner_kind: 'agent' as const,
+      owner_id: 'foreign-agent-id',
+      name: 'My case',
+      input_diff: '+foo',
+      input_files: null,
+      input_meta: null,
+      expected_output: { expectation: 'must_find', regions: [] },
+      notes: null,
+    };
+
+    await expect(createCase(container, WS, input)).rejects.toThrow(NotFoundError);
+    expect(insertCaseSpy).not.toHaveBeenCalled();
+  });
+
+  it('valid agent in workspace → insertCase IS called (control: check the guard passes)', async () => {
+    const insertCaseSpy = vi.fn().mockResolvedValue({
+      id: 'new-case',
+      workspaceId: WS,
+      ownerKind: 'agent',
+      ownerId: AGENT_ID,
+      name: 'Valid',
+      inputDiff: '',
+      inputFiles: null,
+      inputMeta: null,
+      expectedOutput: { expectation: 'must_find', regions: [] },
+      notes: null,
+    });
+    const container = makeContainer({
+      insertCase: insertCaseSpy,
+      getById: async () => BASE_AGENT, // agent exists in this workspace
+    });
+
+    const input = {
+      owner_kind: 'agent' as const,
+      owner_id: AGENT_ID,
+      name: 'Valid',
+      input_diff: '',
+      input_files: null,
+      input_meta: null,
+      expected_output: { expectation: 'must_find', regions: [] },
+      notes: null,
+    };
+
+    await createCase(container, WS, input);
+    expect(insertCaseSpy).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // (c) cross-workspace findingId → 404 NotFoundError
 // ---------------------------------------------------------------------------
 

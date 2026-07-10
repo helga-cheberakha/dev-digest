@@ -7,7 +7,7 @@ import React, { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { Badge, Icon, Skeleton } from "@devdigest/ui";
-import type { EvalCase, EvalCaseInput, EvalRunBatch, EvalCompare } from "@devdigest/shared";
+import type { EvalCaseInput, EvalRunBatch, EvalCompare, EvalCaseListItem, EvalRun } from "@devdigest/shared";
 import { EvalCaseModal } from "@/components/EvalCaseModal";
 import {
   fetchEvalCases,
@@ -19,19 +19,8 @@ import {
 } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
-// Local augmentation types — until EvalCaseListItem lands in @devdigest/shared (TC7)
+// Local helper types
 // ---------------------------------------------------------------------------
-
-type LatestRun = {
-  pass: boolean | null;
-  recall: number | null;
-  precision: number | null;
-  citation_accuracy: number | null;
-  ran_at: string;
-} | null;
-
-/** Augmented EvalCase row — `latest_run` is added by the list endpoint (TC7). */
-type EvalCaseListItem = EvalCase & { latest_run?: LatestRun };
 
 /** Narrowed expected_output shape from EvalExpectedOutput in eval-ci.ts. */
 type ExpectedOutput = {
@@ -88,7 +77,7 @@ export function EvalsTab({
   // ── Queries ──────────────────────────────────────────────────────────────────
   const { data: cases, isLoading: casesLoading } = useQuery({
     queryKey: evalQueryKeys.cases(agentId),
-    queryFn: () => fetchEvalCases(agentId) as Promise<EvalCaseListItem[]>,
+    queryFn: () => fetchEvalCases(agentId),
   });
 
   const { data: batches, isLoading: batchesLoading } = useQuery({
@@ -102,7 +91,7 @@ export function EvalsTab({
 
   // batch run
   const [runningBatch, setRunningBatch] = useState(false);
-  const [lastBatchResult, setLastBatchResult] = useState<EvalRunBatch | null>(null);
+  const [lastBatchResult, setLastBatchResult] = useState<EvalRun | null>(null);
 
   // compare: up to 2 selected batch_ids
   const [selectedBatches, setSelectedBatches] = useState<string[]>([]);
@@ -195,7 +184,7 @@ export function EvalsTab({
 
   // ── Status icon ───────────────────────────────────────────────────────────────
 
-  function statusIcon(latestRun: LatestRun | undefined) {
+  function statusIcon(latestRun: EvalCaseListItem["latest_run"] | undefined) {
     if (latestRun === undefined || latestRun === null) {
       return (
         <span
@@ -605,17 +594,7 @@ export function EvalsTab({
                         }}
                       >
                         {toPromptText(
-                          (
-                            compareData.prompt_diff as
-                              | { before?: unknown; a?: unknown }
-                              | null
-                          )?.before ??
-                            (
-                              compareData.prompt_diff as
-                                | { before?: unknown; a?: unknown }
-                                | null
-                            )?.a ??
-                            compareData.prompt_diff,
+                          (compareData.prompt_diff as { old?: string | null; new?: string | null } | null)?.old
                         )}
                       </pre>
                     </div>
@@ -644,16 +623,7 @@ export function EvalsTab({
                         }}
                       >
                         {toPromptText(
-                          (
-                            compareData.prompt_diff as
-                              | { after?: unknown; b?: unknown }
-                              | null
-                          )?.after ??
-                            (
-                              compareData.prompt_diff as
-                                | { after?: unknown; b?: unknown }
-                                | null
-                            )?.b,
+                          (compareData.prompt_diff as { old?: string | null; new?: string | null } | null)?.new
                         )}
                       </pre>
                     </div>

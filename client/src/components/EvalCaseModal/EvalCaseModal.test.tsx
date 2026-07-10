@@ -241,4 +241,57 @@ describe("EvalCaseModal", () => {
     });
     expect(createEvalCase).not.toHaveBeenCalled();
   });
+
+  it("last-run status shows 'Never run' when latest_run is null (edit mode)", async () => {
+    vi.mocked(fetchEvalCases).mockResolvedValue([
+      {
+        id: "case-1",
+        owner_kind: "agent",
+        owner_id: "agent-1",
+        name: "stripe-key-leak",
+        input_diff: "diff",
+        input_files: null,
+        input_meta: null,
+        expected_output: { expectation: "must_find", regions: [] },
+        notes: null,
+        latest_run: null,
+      },
+    ] as ReturnType<typeof fetchEvalCases> extends Promise<infer T> ? T : never);
+
+    renderModal({ caseId: "case-1" });
+
+    // "Never run" appears as soon as edit mode is active (even before fetch resolves)
+    // and stays after the fetch since latest_run is null
+    expect(await screen.findByText("Never run")).toBeInTheDocument();
+  });
+
+  it("last-run status renders pass/fail and metrics when latest_run is non-null (edit mode)", async () => {
+    vi.mocked(fetchEvalCases).mockResolvedValue([
+      {
+        id: "case-1",
+        owner_kind: "agent",
+        owner_id: "agent-1",
+        name: "stripe-key-leak",
+        input_diff: "diff",
+        input_files: null,
+        input_meta: null,
+        expected_output: { expectation: "must_find", regions: [] },
+        notes: null,
+        latest_run: {
+          pass: true,
+          recall: 0.9,
+          precision: 0.85,
+          citation_accuracy: 0.8,
+          ran_at: "2026-07-10T12:00:00Z",
+        },
+      },
+    ] as ReturnType<typeof fetchEvalCases> extends Promise<infer T> ? T : never);
+
+    renderModal({ caseId: "case-1" });
+
+    // After the query resolves, the status line should show pass status + real metrics
+    expect(
+      await screen.findByText(/last run passed.*recall 90%.*precision 85%.*citation 80%/i),
+    ).toBeInTheDocument();
+  });
 });

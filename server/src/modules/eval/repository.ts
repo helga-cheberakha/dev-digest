@@ -147,6 +147,10 @@ export class EvalRepository {
    * Rows with `batch_id IS NULL` are defensively excluded — they are orphan
    * legacy runs that were never part of a batch execution.
    * Ordered newest batch first.
+   *
+   * NOTE: `recall`, `precision`, and `citationAccuracy` use SQL `avg()` — a
+   * macro-average over per-row stored values. Use `batchRunsWithExpectedForOwner`
+   * + `scoring.aggregate` when you need TRUE pooled aggregation.
    */
   async batchesForOwner(workspaceId: string, ownerId: string) {
     return this.db
@@ -175,6 +179,42 @@ export class EvalRepository {
       )
       .groupBy(t.evalRuns.batchId, t.evalRuns.agentVersion)
       .orderBy(desc(sql`max(${t.evalRuns.ranAt})`));
+  }
+
+  /**
+   * Return ALL individual run rows (with their case's `expected_output`) for
+   * every batch owned by `ownerId`, scoped by workspace.
+   *
+   * Rows with `batch_id IS NULL` are excluded (same rule as `batchesForOwner`).
+   * Ordered by `ran_at` ascending so that JS-side grouping produces a stable
+   * insertion-order map keyed by `batch_id`.
+   *
+   * Used by the analytics layer to compute TRUE pooled recall / precision /
+   * citation_accuracy from the raw stored data — `scoring.scoreCase` +
+   * `scoring.aggregate` are applied per-batch in JS, matching the formula
+   * used during live batch execution in `service.runBatch`.
+   */
+  async batchRunsWithExpectedForOwner(workspaceId: string, ownerId: string) {
+    return this.db
+      .select({
+        batchId: t.evalRuns.batchId,
+        ranAt: t.evalRuns.ranAt,
+        agentVersion: t.evalRuns.agentVersion,
+        pass: t.evalRuns.pass,
+        caseName: t.evalCases.name,
+        actualOutput: t.evalRuns.actualOutput,
+        expectedOutput: t.evalCases.expectedOutput,
+      })
+      .from(t.evalRuns)
+      .innerJoin(t.evalCases, eq(t.evalRuns.caseId, t.evalCases.id))
+      .where(
+        and(
+          eq(t.evalCases.workspaceId, workspaceId),
+          eq(t.evalCases.ownerId, ownerId),
+          isNotNull(t.evalRuns.batchId),
+        ),
+      )
+      .orderBy(t.evalRuns.ranAt);
   }
 
   /**

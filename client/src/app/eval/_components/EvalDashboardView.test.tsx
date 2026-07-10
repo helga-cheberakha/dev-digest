@@ -151,14 +151,14 @@ function setDefaultMocks() {
   });
 
   vi.mocked(runEvalBatch).mockResolvedValue({
-    batch_id: "batch-x",
-    ran_at: "2026-07-11T00:00:00Z",
-    agent_version: 1,
     recall: 0.8,
     precision: 0.9,
     citation_accuracy: 0.7,
     traces_passed: 8,
     traces_total: 10,
+    duration_ms: 1200,
+    cost_usd: null,
+    per_trace: [],
   });
 }
 

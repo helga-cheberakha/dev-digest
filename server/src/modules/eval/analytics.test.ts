@@ -13,30 +13,50 @@ import type { Container } from '../../platform/container.js';
 // Mock-container factory
 // ---------------------------------------------------------------------------
 
-/** Minimal BatchRow shape as returned by batchesForOwner. */
-function makeBatchRow(overrides: {
+/**
+ * A per-run row as returned by the new `batchRunsWithExpectedForOwner` method.
+ * Each batch can have multiple rows (one per eval_runs row).
+ *
+ * The analytics layer groups these by batchId and computes TRUE pooled metrics
+ * via scoring.scoreCase + scoring.aggregate.
+ */
+function makeAggRunRow(overrides: {
   batchId: string;
   ranAt?: Date;
   agentVersion?: number | null;
-  recall?: number;
-  precision?: number;
-  citationAccuracy?: number;
-  tracesPassed?: number;
-  tracesTotal?: number;
+  pass?: boolean | null;
+  caseName?: string;
+  findings?: Array<{
+    id: string;
+    severity: 'CRITICAL' | 'WARNING' | 'SUGGESTION';
+    category: 'bug' | 'security' | 'perf' | 'style' | 'test';
+    title: string;
+    file: string;
+    start_line: number;
+    end_line: number;
+  }>;
+  grounding?: { kept: number; produced: number };
+  expectation?: 'must_find' | 'must_not_flag';
+  expectedRegions?: Array<{ file: string; start_line: number; end_line: number }>;
 }) {
   return {
     batchId: overrides.batchId,
     ranAt: overrides.ranAt ?? new Date('2024-01-01T00:00:00.000Z'),
     agentVersion: overrides.agentVersion ?? null,
-    recall: overrides.recall ?? 0.8,
-    precision: overrides.precision ?? 0.8,
-    citationAccuracy: overrides.citationAccuracy ?? 0.8,
-    tracesPassed: overrides.tracesPassed ?? 8,
-    tracesTotal: overrides.tracesTotal ?? 10,
+    pass: overrides.pass ?? true,
+    caseName: overrides.caseName ?? 'Test Case',
+    actualOutput: {
+      findings: overrides.findings ?? [],
+      grounding: overrides.grounding ?? { kept: 0, produced: 0 },
+    },
+    expectedOutput: {
+      expectation: overrides.expectation ?? 'must_find',
+      regions: overrides.expectedRegions ?? [],
+    },
   };
 }
 
-/** Minimal run row as returned by runsForBatch. */
+/** Minimal run row as returned by runsForBatch (unchanged from before). */
 function makeRunRow(caseId: string, caseName: string, pass: boolean | null) {
   return { caseId, caseName, pass };
 }
@@ -62,7 +82,7 @@ function makeCaseRow(
 }
 
 type MockEvalRepo = {
-  batchesForOwner: ReturnType<typeof vi.fn>;
+  batchRunsWithExpectedForOwner: ReturnType<typeof vi.fn>;
   runsForBatch: ReturnType<typeof vi.fn>;
   listCases: ReturnType<typeof vi.fn>;
   recentRuns: ReturnType<typeof vi.fn>;
@@ -77,7 +97,8 @@ function makeContainer(
   agentsRepo: Partial<MockAgentsRepo> = {},
 ): Container {
   const repo: MockEvalRepo = {
-    batchesForOwner: evalRepo.batchesForOwner ?? vi.fn().mockResolvedValue([]),
+    batchRunsWithExpectedForOwner:
+      evalRepo.batchRunsWithExpectedForOwner ?? vi.fn().mockResolvedValue([]),
     runsForBatch: evalRepo.runsForBatch ?? vi.fn().mockResolvedValue([]),
     listCases: evalRepo.listCases ?? vi.fn().mockResolvedValue([]),
     recentRuns: evalRepo.recentRuns ?? vi.fn().mockResolvedValue([]),
@@ -89,31 +110,56 @@ function makeContainer(
 }
 
 // ---------------------------------------------------------------------------
+// Helpers for fixture region/finding construction
+// ---------------------------------------------------------------------------
+
+/** A region covering a single line in file 'f'. */
+const region = (line: number) => ({ file: 'f', start_line: line, end_line: line });
+
+/** A FindingLite covering a single line in file 'f'. */
+const finding = (line: number) => ({
+  id: `finding-${line}`,
+  severity: 'WARNING' as const,
+  category: 'bug' as const,
+  title: 'Test finding',
+  file: 'f',
+  start_line: line,
+  end_line: line,
+});
+
+// ---------------------------------------------------------------------------
 // compare — delta calculation and prompt text
 // ---------------------------------------------------------------------------
 
 describe('EvalAnalytics.compare', () => {
   it('returns correct deltas (b − a) and exposes both prompt versions', async () => {
-    const rowA = makeBatchRow({
+    // BatchA: 2 expected regions, 1 matched → recall=0.5; grounding kept=2, produced=4 → citation=0.5
+    const rowA = makeAggRunRow({
       batchId: 'batch-a',
       ranAt: new Date('2024-01-01T00:00:00Z'),
       agentVersion: 1,
-      recall: 0.6,
-      precision: 0.7,
-      citationAccuracy: 0.8,
+      pass: true,
+      findings: [finding(1)],              // 1 actual matching region(1)
+      grounding: { kept: 2, produced: 4 }, // citation = 2/4 = 0.5
+      expectation: 'must_find',
+      expectedRegions: [region(1), region(2)], // 2 expected; 1 matched
     });
-    const rowB = makeBatchRow({
+
+    // BatchB: 5 expected regions, 4 matched → recall=0.8; grounding kept=4, produced=5 → citation=0.8
+    const rowB = makeAggRunRow({
       batchId: 'batch-b',
       ranAt: new Date('2024-01-02T00:00:00Z'),
       agentVersion: 2,
-      recall: 0.8,
-      precision: 0.65,
-      citationAccuracy: 0.9,
+      pass: true,
+      findings: [finding(1), finding(2), finding(3), finding(4)], // 4 actuals
+      grounding: { kept: 4, produced: 5 },                        // citation = 4/5 = 0.8
+      expectation: 'must_find',
+      expectedRegions: [region(1), region(2), region(3), region(4), region(5)], // 5 expected; 4 matched
     });
 
     const container = makeContainer(
       {
-        batchesForOwner: vi.fn().mockResolvedValue([rowB, rowA]), // newest first
+        batchRunsWithExpectedForOwner: vi.fn().mockResolvedValue([rowA, rowB]), // oldest first
       },
       {
         getVersion: vi.fn().mockImplementation(async (_agentId: string, version: number) => ({
@@ -130,10 +176,11 @@ describe('EvalAnalytics.compare', () => {
     expect(result.a.batch_id).toBe('batch-a');
     expect(result.b.batch_id).toBe('batch-b');
 
+    // batchA: recall=0.5, citation=0.5; batchB: recall=0.8, citation=0.8
     // delta = b − a
-    expect(result.delta.recall).toBeCloseTo(0.2, 10);
-    expect(result.delta.precision).toBeCloseTo(-0.05, 10);
-    expect(result.delta.citation_accuracy).toBeCloseTo(0.1, 10);
+    expect(result.delta.recall).toBeCloseTo(0.3, 10);
+    expect(result.delta.precision).toBeCloseTo(0.0, 10);    // both precision=1.0 (all actuals match)
+    expect(result.delta.citation_accuracy).toBeCloseTo(0.3, 10);
 
     // Both prompt versions must be present in prompt_diff
     expect((result.prompt_diff as { old: string; new: string }).old).toBe('System prompt v1');
@@ -141,12 +188,12 @@ describe('EvalAnalytics.compare', () => {
   });
 
   it('uses null for prompt when agent_version is null', async () => {
-    const rowA = makeBatchRow({ batchId: 'b-a', agentVersion: null });
-    const rowB = makeBatchRow({ batchId: 'b-b', agentVersion: null });
+    const rowA = makeAggRunRow({ batchId: 'b-a', agentVersion: null });
+    const rowB = makeAggRunRow({ batchId: 'b-b', agentVersion: null });
 
     const getVersion = vi.fn();
     const container = makeContainer(
-      { batchesForOwner: vi.fn().mockResolvedValue([rowB, rowA]) },
+      { batchRunsWithExpectedForOwner: vi.fn().mockResolvedValue([rowA, rowB]) },
       { getVersion },
     );
 
@@ -169,18 +216,28 @@ describe('EvalAnalytics.dashboard — floor-warning', () => {
     const caseIds = Array.from({ length: 7 }, (_, i) => `case-${i}`);
     const cases = caseIds.map((id, i) => makeCaseRow(id, `Case ${i}`, 'must_find'));
 
-    const rowNewest = makeBatchRow({ batchId: 'b-newer', ranAt: new Date('2024-02-01T00:00:00Z') });
-    const rowOlder = makeBatchRow({ batchId: 'b-older', ranAt: new Date('2024-01-01T00:00:00Z') });
+    // Two batches (newest-first by ranAt)
+    const rowsNewer = [
+      makeAggRunRow({ batchId: 'b-newer', ranAt: new Date('2024-02-01T00:00:00Z') }),
+    ];
+    const rowsOlder = [
+      makeAggRunRow({ batchId: 'b-older', ranAt: new Date('2024-01-01T00:00:00Z') }),
+    ];
 
     // All cases pass in both batches — no flip
     const olderRuns = caseIds.map((id, i) => makeRunRow(id, `Case ${i}`, true));
     const newerRuns = caseIds.map((id, i) => makeRunRow(id, `Case ${i}`, true));
 
     const container = makeContainer({
-      batchesForOwner: vi.fn().mockResolvedValue([rowNewest, rowOlder]),
-      runsForBatch: vi.fn().mockImplementation(async (_ws: string, _owner: string, batchId: string) =>
-        batchId === 'b-newer' ? newerRuns : olderRuns,
-      ),
+      batchRunsWithExpectedForOwner: vi
+        .fn()
+        .mockResolvedValue([...rowsOlder, ...rowsNewer]),
+      runsForBatch: vi
+        .fn()
+        .mockImplementation(
+          async (_ws: string, _owner: string, batchId: string) =>
+            batchId === 'b-newer' ? newerRuns : olderRuns,
+        ),
       listCases: vi.fn().mockResolvedValue(cases),
     });
 
@@ -203,18 +260,29 @@ describe('EvalAnalytics.dashboard — regression alert', () => {
     const caseIds = Array.from({ length: 8 }, (_, i) => `case-${i}`);
     const cases = caseIds.map((id, i) => makeCaseRow(id, `Case ${i}`, 'must_find'));
 
-    const rowNewest = makeBatchRow({ batchId: 'b-newer', ranAt: new Date('2024-02-01T00:00:00Z') });
-    const rowOlder = makeBatchRow({ batchId: 'b-older', ranAt: new Date('2024-01-01T00:00:00Z') });
+    const rowsNewer = [
+      makeAggRunRow({ batchId: 'b-newer', ranAt: new Date('2024-02-01T00:00:00Z') }),
+    ];
+    const rowsOlder = [
+      makeAggRunRow({ batchId: 'b-older', ranAt: new Date('2024-01-01T00:00:00Z') }),
+    ];
 
     // case-5 flips from pass=true to pass=false between older → newer
     const olderRuns = caseIds.map((id, i) => makeRunRow(id, `Case ${i}`, true));
-    const newerRuns = caseIds.map((id, i) => makeRunRow(id, `Case ${i}`, id === 'case-5' ? false : true));
+    const newerRuns = caseIds.map((id, i) =>
+      makeRunRow(id, `Case ${i}`, id === 'case-5' ? false : true),
+    );
 
     const container = makeContainer({
-      batchesForOwner: vi.fn().mockResolvedValue([rowNewest, rowOlder]),
-      runsForBatch: vi.fn().mockImplementation(async (_ws: string, _owner: string, batchId: string) =>
-        batchId === 'b-newer' ? newerRuns : olderRuns,
-      ),
+      batchRunsWithExpectedForOwner: vi
+        .fn()
+        .mockResolvedValue([...rowsOlder, ...rowsNewer]),
+      runsForBatch: vi
+        .fn()
+        .mockImplementation(
+          async (_ws: string, _owner: string, batchId: string) =>
+            batchId === 'b-newer' ? newerRuns : olderRuns,
+        ),
       listCases: vi.fn().mockResolvedValue(cases),
     });
 
@@ -232,18 +300,27 @@ describe('EvalAnalytics.dashboard — regression alert', () => {
       ...Array.from({ length: 7 }, (_, i) => makeCaseRow(`c${i + 2}`, `Case ${i + 2}`, 'must_find')),
     ];
 
-    const rowNewest = makeBatchRow({ batchId: 'b-newer', ranAt: new Date('2024-02-01T00:00:00Z') });
-    const rowOlder = makeBatchRow({ batchId: 'b-older', ranAt: new Date('2024-01-01T00:00:00Z') });
+    const rowsNewer = [
+      makeAggRunRow({ batchId: 'b-newer', ranAt: new Date('2024-02-01T00:00:00Z') }),
+    ];
+    const rowsOlder = [
+      makeAggRunRow({ batchId: 'b-older', ranAt: new Date('2024-01-01T00:00:00Z') }),
+    ];
 
     const olderRuns = cases.map((c) => makeRunRow(c.id, c.name, true));
     // c1 (the must_not_flag case) now fails — it started flagging something it shouldn't
     const newerRuns = cases.map((c) => makeRunRow(c.id, c.name, c.id === 'c1' ? false : true));
 
     const container = makeContainer({
-      batchesForOwner: vi.fn().mockResolvedValue([rowNewest, rowOlder]),
-      runsForBatch: vi.fn().mockImplementation(async (_ws: string, _owner: string, batchId: string) =>
-        batchId === 'b-newer' ? newerRuns : olderRuns,
-      ),
+      batchRunsWithExpectedForOwner: vi
+        .fn()
+        .mockResolvedValue([...rowsOlder, ...rowsNewer]),
+      runsForBatch: vi
+        .fn()
+        .mockImplementation(
+          async (_ws: string, _owner: string, batchId: string) =>
+            batchId === 'b-newer' ? newerRuns : olderRuns,
+        ),
       listCases: vi.fn().mockResolvedValue(cases),
     });
 
@@ -272,8 +349,12 @@ describe('EvalAnalytics.dashboard — tie-breaking (alphabetical-first case)', (
     );
     const cases = [c1, c2, ...extra];
 
-    const rowNewest = makeBatchRow({ batchId: 'b-newer', ranAt: new Date('2024-02-01T00:00:00Z') });
-    const rowOlder = makeBatchRow({ batchId: 'b-older', ranAt: new Date('2024-01-01T00:00:00Z') });
+    const rowsNewer = [
+      makeAggRunRow({ batchId: 'b-newer', ranAt: new Date('2024-02-01T00:00:00Z') }),
+    ];
+    const rowsOlder = [
+      makeAggRunRow({ batchId: 'b-older', ranAt: new Date('2024-01-01T00:00:00Z') }),
+    ];
 
     const olderRuns = cases.map((c) => makeRunRow(c.id, c.name, true));
     // Both c-z and c-a flip to false
@@ -282,10 +363,15 @@ describe('EvalAnalytics.dashboard — tie-breaking (alphabetical-first case)', (
     );
 
     const container = makeContainer({
-      batchesForOwner: vi.fn().mockResolvedValue([rowNewest, rowOlder]),
-      runsForBatch: vi.fn().mockImplementation(async (_ws: string, _owner: string, batchId: string) =>
-        batchId === 'b-newer' ? newerRuns : olderRuns,
-      ),
+      batchRunsWithExpectedForOwner: vi
+        .fn()
+        .mockResolvedValue([...rowsOlder, ...rowsNewer]),
+      runsForBatch: vi
+        .fn()
+        .mockImplementation(
+          async (_ws: string, _owner: string, batchId: string) =>
+            batchId === 'b-newer' ? newerRuns : olderRuns,
+        ),
       listCases: vi.fn().mockResolvedValue(cases),
     });
 
@@ -306,11 +392,11 @@ describe('EvalAnalytics.dashboard — tie-breaking (alphabetical-first case)', (
 describe('EvalAnalytics.dashboard — single batch', () => {
   it('returns null alert when owner has only one batch and ≥8 cases', async () => {
     const cases = Array.from({ length: 8 }, (_, i) => makeCaseRow(`c-${i}`, `Case ${i}`));
-    const singleBatch = makeBatchRow({ batchId: 'b-only' });
+    // Only one batch
+    const singleBatchRows = [makeAggRunRow({ batchId: 'b-only' })];
 
-    // Only one batch — no comparison possible
     const container = makeContainer({
-      batchesForOwner: vi.fn().mockResolvedValue([singleBatch]),
+      batchRunsWithExpectedForOwner: vi.fn().mockResolvedValue(singleBatchRows),
       listCases: vi.fn().mockResolvedValue(cases),
     });
 
@@ -325,7 +411,7 @@ describe('EvalAnalytics.dashboard — single batch', () => {
     const cases = Array.from({ length: 8 }, (_, i) => makeCaseRow(`c-${i}`, `Case ${i}`));
 
     const container = makeContainer({
-      batchesForOwner: vi.fn().mockResolvedValue([]),
+      batchRunsWithExpectedForOwner: vi.fn().mockResolvedValue([]),
       listCases: vi.fn().mockResolvedValue(cases),
     });
 
@@ -337,45 +423,152 @@ describe('EvalAnalytics.dashboard — single batch', () => {
 });
 
 // ---------------------------------------------------------------------------
-// history — mapping
+// history — mapping and pooled aggregation
 // ---------------------------------------------------------------------------
 
 describe('EvalAnalytics.history', () => {
-  it('maps DB rows to EvalRunBatch DTOs in newest-first order', async () => {
-    const row1 = makeBatchRow({
-      batchId: 'b1',
-      ranAt: new Date('2024-01-02T12:00:00Z'),
-      agentVersion: 3,
-      recall: 0.9,
-      precision: 0.85,
-      citationAccuracy: 0.95,
-      tracesPassed: 9,
-      tracesTotal: 10,
-    });
-    const row2 = makeBatchRow({
-      batchId: 'b2',
-      ranAt: new Date('2024-01-01T12:00:00Z'),
-      agentVersion: 2,
-      recall: 0.7,
-      precision: 0.75,
-      citationAccuracy: 0.8,
-      tracesPassed: 7,
-      tracesTotal: 10,
-    });
+  it('maps per-run rows to EvalRunBatch DTOs in newest-first order', async () => {
+    // batch b1 (newer): 1 run, 10 expected, 9 matched → recall = 9/10 = 0.9
+    const b1Rows = [
+      makeAggRunRow({
+        batchId: 'b1',
+        ranAt: new Date('2024-01-02T12:00:00Z'),
+        agentVersion: 3,
+        pass: true,
+        findings: Array.from({ length: 9 }, (_, i) => finding(i + 1)), // lines 1-9
+        grounding: { kept: 9, produced: 9 },
+        expectation: 'must_find',
+        expectedRegions: Array.from({ length: 10 }, (_, i) => region(i + 1)), // lines 1-10
+      }),
+    ];
+
+    // batch b2 (older): 1 empty run → recall=1 (vacuously, 0 expected), citation=1
+    const b2Rows = [
+      makeAggRunRow({
+        batchId: 'b2',
+        ranAt: new Date('2024-01-01T12:00:00Z'),
+        agentVersion: 2,
+        pass: true,
+      }),
+    ];
 
     const container = makeContainer({
-      batchesForOwner: vi.fn().mockResolvedValue([row1, row2]),
+      batchRunsWithExpectedForOwner: vi.fn().mockResolvedValue([...b2Rows, ...b1Rows]),
     });
 
     const analytics = new EvalAnalytics(container);
     const result = await analytics.history('ws', 'agent-id');
 
     expect(result).toHaveLength(2);
+
+    // b1 must be first (newest by ranAt)
     expect(result[0]!.batch_id).toBe('b1');
     expect(result[0]!.agent_version).toBe(3);
-    expect(result[0]!.recall).toBe(0.9);
+    expect(result[0]!.recall).toBeCloseTo(0.9, 10);
     expect(result[0]!.ran_at).toBe('2024-01-02T12:00:00.000Z');
+
     expect(result[1]!.batch_id).toBe('b2');
+  });
+
+  it('pooled aggregation: recall differs from macro-average when cases have different numbers of expected regions', async () => {
+    // Two cases in one batch that would give different pooled vs macro-average:
+    //   Case 1: 3 expected, all 3 matched  → per-case recall = 3/3 = 1.0
+    //   Case 2: 1 expected, 0 matched      → per-case recall = 0/1 = 0.0
+    //
+    //   Pooled  recall = (3+0) / (3+1) = 3/4 = 0.75
+    //   Macro   recall = (1.0 + 0.0) / 2  = 0.5
+    //
+    // The test would FAIL under the old SQL avg() formula (would produce 0.5).
+
+    const run1 = makeAggRunRow({
+      batchId: 'pooled-test',
+      ranAt: new Date('2024-01-01T00:00:00Z'),
+      agentVersion: 1,
+      pass: true,
+      caseName: 'Case 1 — 3 of 3 matched',
+      findings: [finding(1), finding(2), finding(3)], // match all 3 expected
+      grounding: { kept: 3, produced: 3 },
+      expectation: 'must_find',
+      expectedRegions: [region(1), region(2), region(3)],
+    });
+
+    const run2 = makeAggRunRow({
+      batchId: 'pooled-test',
+      ranAt: new Date('2024-01-01T00:00:01Z'),
+      agentVersion: 1,
+      pass: false,
+      caseName: 'Case 2 — 0 of 1 matched',
+      findings: [],               // no actuals → misses the expected region
+      grounding: { kept: 0, produced: 0 },
+      expectation: 'must_find',
+      expectedRegions: [region(10)], // different file line (won't intersect findings)
+    });
+
+    const container = makeContainer({
+      batchRunsWithExpectedForOwner: vi.fn().mockResolvedValue([run1, run2]),
+      listCases: vi.fn().mockResolvedValue([]),
+    });
+
+    const analytics = new EvalAnalytics(container);
+    const result = await analytics.history('ws', 'agent-id');
+
+    expect(result).toHaveLength(1);
+    const batch = result[0]!;
+
+    // Pooled recall = 3/4 = 0.75
+    expect(batch.recall).toBeCloseTo(0.75, 10);
+
+    // Explicitly verify this differs from the macro-average (0.5)
+    const macroAvgRecall = (1.0 + 0.0) / 2;
+    expect(batch.recall).not.toBeCloseTo(macroAvgRecall, 5);
+
+    // Traces: both runs counted
+    expect(batch.traces_total).toBe(2);
+    expect(batch.traces_passed).toBe(1); // only run1 passed
+  });
+
+  it('errored runs (pass=null) are counted in traces_total but excluded from pooled metrics', async () => {
+    // 1 successful run: 2 expected, 2 matched → recall=1.0
+    const successRun = makeAggRunRow({
+      batchId: 'b-err',
+      ranAt: new Date('2024-01-01T00:00:00Z'),
+      agentVersion: 1,
+      pass: true,
+      findings: [finding(1), finding(2)],
+      grounding: { kept: 2, produced: 2 },
+      expectation: 'must_find',
+      expectedRegions: [region(1), region(2)],
+    });
+
+    // 1 errored run: pass=null; stores empty findings / error field
+    const errorRun = {
+      batchId: 'b-err',
+      ranAt: new Date('2024-01-01T00:00:01Z'),
+      agentVersion: 1,
+      pass: null,
+      caseName: 'Errored Case',
+      actualOutput: { findings: [], grounding: { kept: 0, produced: 0 }, error: 'LLM timeout' },
+      expectedOutput: { expectation: 'must_find', regions: [region(99)] },
+    };
+
+    const container = makeContainer({
+      batchRunsWithExpectedForOwner: vi.fn().mockResolvedValue([successRun, errorRun]),
+      listCases: vi.fn().mockResolvedValue([]),
+    });
+
+    const analytics = new EvalAnalytics(container);
+    const result = await analytics.history('ws', 'agent-id');
+
+    const batch = result[0]!;
+
+    // traces_total includes both the successful run and the errored run
+    expect(batch.traces_total).toBe(2);
+    // traces_passed counts only pass=true
+    expect(batch.traces_passed).toBe(1);
+
+    // Pooled metrics derived from the successful run ONLY (errored run excluded):
+    // recall = 2/2 = 1.0 (not affected by the errored run's expected region)
+    expect(batch.recall).toBeCloseTo(1.0, 10);
   });
 });
 
@@ -385,11 +578,13 @@ describe('EvalAnalytics.history', () => {
 
 describe('EvalAnalytics.dashboard — shape', () => {
   it('agent dashboard: sets owner_kind="agent", owner_id, and empty recent_runs', async () => {
-    const batch = makeBatchRow({ batchId: 'b', recall: 0.9, precision: 0.9, citationAccuracy: 0.9 });
+    const batchRows = [
+      makeAggRunRow({ batchId: 'b', pass: true }),
+    ];
     const cases = Array.from({ length: 10 }, (_, i) => makeCaseRow(`c-${i}`, `Case ${i}`));
 
     const container = makeContainer({
-      batchesForOwner: vi.fn().mockResolvedValue([batch]),
+      batchRunsWithExpectedForOwner: vi.fn().mockResolvedValue(batchRows),
       listCases: vi.fn().mockResolvedValue(cases),
     });
 
@@ -403,12 +598,20 @@ describe('EvalAnalytics.dashboard — shape', () => {
   });
 
   it('agent dashboard: trend is chronological (oldest first)', async () => {
-    const older = makeBatchRow({ batchId: 'b-old', ranAt: new Date('2024-01-01T00:00:00Z') });
-    const newer = makeBatchRow({ batchId: 'b-new', ranAt: new Date('2024-02-01T00:00:00Z') });
+    const olderRow = makeAggRunRow({
+      batchId: 'b-old',
+      ranAt: new Date('2024-01-01T00:00:00Z'),
+      pass: true,
+    });
+    const newerRow = makeAggRunRow({
+      batchId: 'b-new',
+      ranAt: new Date('2024-02-01T00:00:00Z'),
+      pass: true,
+    });
 
     const container = makeContainer({
-      // batchesForOwner returns newest-first
-      batchesForOwner: vi.fn().mockResolvedValue([newer, older]),
+      // Provide older row first — history should sort newest-first, trend reverses to oldest-first
+      batchRunsWithExpectedForOwner: vi.fn().mockResolvedValue([olderRow, newerRow]),
       listCases: vi.fn().mockResolvedValue(
         Array.from({ length: 8 }, (_, i) => makeCaseRow(`c-${i}`, `Case ${i}`)),
       ),

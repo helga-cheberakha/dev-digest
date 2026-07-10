@@ -8,6 +8,10 @@
  * interfaces but must NOT import adapters or db/schema directly.
  */
 import type { Container } from '../../platform/container.js';
+import {
+  EvalExpectedOutput,
+  EvalActualOutput,
+} from '../../vendor/shared/contracts/eval-ci.js';
 import type {
   EvalRunBatch,
   EvalCompare,
@@ -15,12 +19,14 @@ import type {
   EvalTrendPoint,
   EvalRunRecord,
 } from '../../vendor/shared/contracts/eval-ci.js';
+import { scoreCase, aggregate } from './scoring.js';
+import type { AggregateCase } from './scoring.js';
 
 // ---------------------------------------------------------------------------
 // Internal type helpers
 // ---------------------------------------------------------------------------
 
-type BatchRow = Awaited<ReturnType<Container['evalRepo']['batchesForOwner']>>[number];
+type AggRunRow = Awaited<ReturnType<Container['evalRepo']['batchRunsWithExpectedForOwner']>>[number];
 type RecentRunRow = Awaited<ReturnType<Container['evalRepo']['recentRuns']>>[number];
 
 /**
@@ -33,19 +39,109 @@ function toIso(v: unknown): string {
   return String(v);
 }
 
-function batchRowToDto(row: BatchRow): EvalRunBatch {
-  return {
-    // batchesForOwner filters out NULL batch_ids via isNotNull(), so the
-    // non-null assertion is safe — TypeScript cannot narrow through the SQL DSL.
-    batch_id: row.batchId!,
-    ran_at: toIso(row.ranAt),
-    agent_version: row.agentVersion ?? null,
-    recall: row.recall ?? 0,
-    precision: row.precision ?? 0,
-    citation_accuracy: row.citationAccuracy ?? 0,
-    traces_passed: row.tracesPassed ?? 0,
-    traces_total: row.tracesTotal ?? 0,
-  };
+/**
+ * Group per-run rows by batch_id and compute TRUE pooled recall / precision /
+ * citation_accuracy via `scoring.scoreCase` + `scoring.aggregate`.
+ *
+ * This matches the formula used during live batch execution in `service.runBatch`:
+ *   recall = sum(matchedExpected) / sum(totalExpected)
+ *   precision = sum(nonNoiseActuals) / sum(totalActuals)
+ *   citation_accuracy = sum(kept) / sum(produced)
+ *
+ * Runs with `pass: null` (failed with an LLM/runtime error) are counted in
+ * `tracesTotal` and `tracesPassed` but excluded from the pooled metric
+ * computation — matching the `successCases`-only accumulation in `runBatch`.
+ */
+function aggregateRunRows(runRows: AggRunRow[]): EvalRunBatch[] {
+  // Group by batchId, preserving insertion order (rows ordered by ranAt asc).
+  const batchMap = new Map<string, AggRunRow[]>();
+  for (const row of runRows) {
+    const bid = row.batchId!; // batchRunsWithExpectedForOwner excludes NULL batch_ids
+    const bucket = batchMap.get(bid);
+    if (bucket) {
+      bucket.push(row);
+    } else {
+      batchMap.set(bid, [row]);
+    }
+  }
+
+  const batches: EvalRunBatch[] = [];
+
+  for (const [batchId, runs] of batchMap) {
+    // Batch-level metadata
+    let maxRanAt: unknown = runs[0]!.ranAt;
+    const agentVersion = runs[0]!.agentVersion ?? null;
+    let tracesPassed = 0;
+    let tracesTotal = 0;
+
+    // Pooled aggregation accumulators (successful runs only)
+    const aggregateCases: AggregateCase[] = [];
+    let totalKept = 0;
+    let totalProduced = 0;
+
+    for (const run of runs) {
+      // Update max ranAt
+      const runDate = run.ranAt;
+      if (runDate instanceof Date && maxRanAt instanceof Date && runDate > maxRanAt) {
+        maxRanAt = runDate;
+      }
+
+      tracesTotal++;
+      if (run.pass === true) tracesPassed++;
+
+      // Skip errored runs for pooled metric computation (pass: null = error).
+      // This matches `runBatch`'s `successCases`-only accumulation.
+      if (run.pass === null) continue;
+
+      const actualParsed = EvalActualOutput.safeParse(run.actualOutput);
+      const expectedParsed = EvalExpectedOutput.safeParse(run.expectedOutput);
+
+      // Defensively skip any malformed stored rows
+      if (!actualParsed.success || !expectedParsed.success) continue;
+
+      const actualRegions = actualParsed.data.findings.map((f) => ({
+        file: f.file,
+        start_line: f.start_line,
+        end_line: f.end_line,
+        severity: f.severity,
+        category: f.category,
+      }));
+
+      const caseScore = scoreCase({
+        expectation: expectedParsed.data.expectation,
+        expectedRegions: expectedParsed.data.regions,
+        actualRegions,
+      });
+
+      aggregateCases.push({
+        name: run.caseName,
+        score: caseScore,
+        expected: expectedParsed.data.regions,
+        actual: actualRegions,
+      });
+
+      totalKept += actualParsed.data.grounding.kept;
+      totalProduced += actualParsed.data.grounding.produced;
+    }
+
+    const result = aggregate(aggregateCases, { kept: totalKept, produced: totalProduced });
+
+    batches.push({
+      batch_id: batchId,
+      ran_at: toIso(maxRanAt),
+      agent_version: agentVersion,
+      recall: result.recall,
+      precision: result.precision,
+      citation_accuracy: result.citation_accuracy,
+      traces_passed: tracesPassed,
+      traces_total: tracesTotal,
+    });
+  }
+
+  // Sort newest first (ISO strings sort lexicographically in UTC)
+  batches.sort((a, b) => (b.ran_at > a.ran_at ? 1 : b.ran_at < a.ran_at ? -1 : 0));
+
+  return batches;
 }
 
 function recentRunRowToRecord(row: RecentRunRow): EvalRunRecord {
@@ -154,15 +250,19 @@ export class EvalAnalytics {
    * Returns one aggregate per distinct batch_id for the given agent,
    * newest batch first.
    *
-   * Uses SQL-level aggregation from `batchesForOwner` (avg recall/precision/
-   * citation_accuracy, sum of pass counts). This is a "mean of per-case values"
-   * approximation rather than a true pooled (sum-of-numerators) calculation
-   * — acceptable because individual run rows do not retain the raw
-   * matchedExpected / totalExpected counters needed for strict pooling.
+   * Fetches per-run rows (with each case's stored `expected_output` and
+   * `actual_output`) via `batchRunsWithExpectedForOwner`, then computes
+   * TRUE pooled recall / precision / citation_accuracy in JS using the same
+   * `scoring.scoreCase` + `scoring.aggregate` functions used during live batch
+   * execution — guaranteeing that reading a batch back via history produces
+   * EXACTLY the same metrics as `POST /agents/:id/eval-runs` returned.
    */
   async history(workspaceId: string, agentId: string): Promise<EvalRunBatch[]> {
-    const rows = await this.container.evalRepo.batchesForOwner(workspaceId, agentId);
-    return rows.map(batchRowToDto);
+    const runRows = await this.container.evalRepo.batchRunsWithExpectedForOwner(
+      workspaceId,
+      agentId,
+    );
+    return aggregateRunRows(runRows);
   }
 
   /**

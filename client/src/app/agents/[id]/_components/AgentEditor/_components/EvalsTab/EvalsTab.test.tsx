@@ -61,6 +61,7 @@ import {
   fetchEvalCases,
   fetchEvalBatches,
   runEvalBatch,
+  fetchEvalCompare,
 } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
@@ -127,15 +128,16 @@ const CASE_NEVER_RUN = {
   latest_run: null,
 };
 
+// EvalRun shape — matches the real server response for POST /agents/:id/eval-runs
 const BATCH_RESULT = {
-  batch_id: "batch-1",
-  ran_at: "2026-07-10T12:00:00Z",
-  agent_version: 1,
   recall: 0.75,
   precision: 0.8,
   citation_accuracy: 0.7,
   traces_passed: 2,
   traces_total: 3,
+  duration_ms: 1500,
+  cost_usd: null,
+  per_trace: [],
 };
 
 // ---------------------------------------------------------------------------
@@ -171,6 +173,30 @@ beforeEach(() => {
   ] as ReturnType<typeof fetchEvalCases> extends Promise<infer T> ? T : never);
   vi.mocked(fetchEvalBatches).mockResolvedValue([]);
   vi.mocked(runEvalBatch).mockResolvedValue(BATCH_RESULT);
+  vi.mocked(fetchEvalCompare).mockResolvedValue({
+    a: {
+      batch_id: "batch-a",
+      ran_at: "2026-07-09T10:00:00Z",
+      agent_version: 1,
+      recall: 0.7,
+      precision: 0.7,
+      citation_accuracy: 0.7,
+      traces_passed: 7,
+      traces_total: 10,
+    },
+    b: {
+      batch_id: "batch-b",
+      ran_at: "2026-07-10T10:00:00Z",
+      agent_version: 2,
+      recall: 0.8,
+      precision: 0.8,
+      citation_accuracy: 0.8,
+      traces_passed: 8,
+      traces_total: 10,
+    },
+    prompt_diff: { old: "old prompt text", new: "new prompt text" },
+    delta: { recall: 0.1, precision: 0.1, citation_accuracy: 0.1 },
+  });
 });
 
 afterEach(() => {
@@ -263,5 +289,48 @@ describe("EvalsTab — Run all evals button", () => {
     fireEvent.click(screen.getByRole("button", { name: /new eval case/i }));
 
     expect(screen.getByRole("dialog", { name: "eval-case-modal" })).toBeInTheDocument();
+  });
+});
+
+describe("EvalsTab — compare panel prompt diff", () => {
+  it("renders real old/new prompt text from prompt_diff in the correct before/after panes", async () => {
+    // Provide two history batches so the compare buttons appear
+    vi.mocked(fetchEvalBatches).mockResolvedValue([
+      {
+        batch_id: "batch-b",
+        ran_at: "2026-07-10T10:00:00Z",
+        agent_version: 2,
+        recall: 0.8,
+        precision: 0.8,
+        citation_accuracy: 0.8,
+        traces_passed: 8,
+        traces_total: 10,
+      },
+      {
+        batch_id: "batch-a",
+        ran_at: "2026-07-09T10:00:00Z",
+        agent_version: 1,
+        recall: 0.7,
+        precision: 0.7,
+        citation_accuracy: 0.7,
+        traces_passed: 7,
+        traces_total: 10,
+      },
+    ]);
+
+    renderEvalsTab();
+    await screen.findByText("stripe-key-leak");
+
+    // Both compare buttons appear (one per batch row, both show "Compare" initially)
+    const firstCompareBtn = (await screen.findAllByRole("button", { name: /^compare$/i }))[0]!;
+    fireEvent.click(firstCompareBtn);
+
+    // After selecting one batch, the other batch's button still shows "Compare"
+    const secondCompareBtn = screen.getByRole("button", { name: /^compare$/i });
+    fireEvent.click(secondCompareBtn);
+
+    // Wait for fetchEvalCompare to resolve and the compare panel to render
+    expect(await screen.findByText("old prompt text")).toBeInTheDocument();
+    expect(screen.getByText("new prompt text")).toBeInTheDocument();
   });
 });

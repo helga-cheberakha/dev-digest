@@ -129,6 +129,14 @@ export async function createCase(
     throw new ValidationError('Invalid expected_output', parseResult.error.issues);
   }
 
+  // Verify the target agent belongs to the caller's workspace.
+  // Without this check a client could create an orphaned case referencing a
+  // nonexistent or foreign-workspace agent id.
+  const agent = await container.agentsRepo.getById(workspaceId, input.owner_id);
+  if (!agent) {
+    throw new NotFoundError('Agent not found in workspace');
+  }
+
   return container.evalRepo.insertCase({
     workspaceId,
     ownerKind: input.owner_kind,

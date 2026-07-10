@@ -26,6 +26,7 @@ import {
   EvalExpectedOutput,
   type EvalCase,
   type EvalCaseInput,
+  type EvalCaseListItem,
 } from "@devdigest/shared";
 import {
   createEvalCase,
@@ -33,7 +34,6 @@ import {
   fetchEvalCases,
   evalQueryKeys,
 } from "@/lib/api";
-import { formatCost } from "@/lib/cost";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -127,18 +127,8 @@ export function EvalCaseModal({
     enabled: isEditing,
   });
 
-  // The EvalCase schema does not include run-result fields yet (TC7 lands
-  // later). We access them via a type-cast and gracefully fall back.
-  type EvalCaseWithRun = EvalCase & {
-    last_run_pass?: boolean | null;
-    last_run_recall?: number | null;
-    last_run_precision?: number | null;
-    last_run_citation?: number | null;
-    last_run_duration_ms?: number | null;
-    last_run_cost_usd?: number | null;
-  };
-  const matchedCase = isEditing
-    ? (cases?.find((c) => c.id === caseId) as EvalCaseWithRun | undefined)
+  const matchedCase: EvalCaseListItem | undefined = isEditing
+    ? cases?.find((c) => c.id === caseId)
     : undefined;
 
   const lastRunStatusLine = buildLastRunLine(matchedCase, t);
@@ -356,34 +346,17 @@ export function EvalCaseModal({
 // Last-run status builder (separated for clarity)
 // ---------------------------------------------------------------------------
 
-type LastRunCase = {
-  last_run_pass?: boolean | null;
-  last_run_recall?: number | null;
-  last_run_precision?: number | null;
-  last_run_citation?: number | null;
-  last_run_duration_ms?: number | null;
-  last_run_cost_usd?: number | null;
-};
-
 function buildLastRunLine(
-  c: LastRunCase | undefined,
+  c: EvalCaseListItem | undefined,
   t: ReturnType<typeof useTranslations<"eval.caseEditor">>,
 ): string {
-  if (!c) return t("neverRun");
+  if (!c || c.latest_run == null) return t("neverRun");
 
-  const hasRunData =
-    c.last_run_pass !== undefined && c.last_run_pass !== null;
-  if (!hasRunData) return t("neverRun");
+  const lr = c.latest_run;
+  const statusLabel = lr.pass ? t("lastRunPassed") : t("lastRunFailed");
+  const recall = ((lr.recall ?? 0) * 100).toFixed(0);
+  const precision = ((lr.precision ?? 0) * 100).toFixed(0);
+  const citation = ((lr.citation_accuracy ?? 0) * 100).toFixed(0);
 
-  const statusLabel = c.last_run_pass ? t("lastRunPassed") : t("lastRunFailed");
-  const recall = ((c.last_run_recall ?? 0) * 100).toFixed(0);
-  const precision = ((c.last_run_precision ?? 0) * 100).toFixed(0);
-  const citation = ((c.last_run_citation ?? 0) * 100).toFixed(0);
-  const duration =
-    c.last_run_duration_ms != null
-      ? (c.last_run_duration_ms / 1000).toFixed(1)
-      : "?";
-  const cost = formatCost(c.last_run_cost_usd ?? null);
-
-  return `${statusLabel} · ${t("resultSummary", { recall, precision, citation, duration })} · ${cost}`;
+  return `${statusLabel} · recall ${recall}% · precision ${precision}% · citation ${citation}%`;
 }

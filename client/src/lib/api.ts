@@ -8,6 +8,7 @@ import type {
   EvalCaseInput,
   EvalCaseListItem,
   EvalRunResult,
+  EvalRun,
   EvalRunBatch,
   EvalCompare,
   EvalDashboard,
@@ -186,8 +187,8 @@ export async function runEvalCase(caseId: string): Promise<EvalRunResult> {
  *
  * Sends `{}` so Fastify sets `application/json` on the body-schema route.
  */
-export async function runEvalBatch(agentId: string): Promise<EvalRunBatch> {
-  return api.post<EvalRunBatch>(`/agents/${agentId}/eval-runs`, {});
+export async function runEvalBatch(agentId: string): Promise<EvalRun> {
+  return api.post<EvalRun>(`/agents/${agentId}/eval-runs`, {});
 }
 
 /** List batch-run history for an agent (newest first). */
