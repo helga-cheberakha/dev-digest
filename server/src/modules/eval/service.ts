@@ -347,7 +347,20 @@ export async function runBatch(
   }
 
   // Pooled aggregate over successfully-scored cases only.
-  return scoring.aggregate(successCases, { kept: totalKept, produced: totalProduced });
+  // recall/precision/citation_accuracy are pooled purely over the cases that scored —
+  // errored cases have no valid findings data to contribute to that math.
+  const batchResult = scoring.aggregate(successCases, { kept: totalKept, produced: totalProduced });
+
+  // AC-6: traces_total must equal ALL cases attempted in the batch (including per-case
+  // LLM errors persisted with pass: null), not just the successfully-scored ones.
+  // scoring.aggregate derives traces_total from cases.length of the array it receives;
+  // we override it here to reflect the full batch count.
+  // traces_passed is already correct: errored cases are absent from successCases so
+  // they are never counted as passed.
+  return {
+    ...batchResult,
+    traces_total: cases.length,
+  };
 }
 
 // ---------------------------------------------------------------------------

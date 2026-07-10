@@ -490,8 +490,9 @@ describe('(e) mid-batch error resilience', () => {
     expect(insertRunCalls[2]!.caseId).toBe('case-3');
     expect(insertRunCalls[2]!.values.pass).toBe(true);
 
-    // Aggregate covers the 2 successful cases
-    expect(result.traces_total).toBe(2);
+    // AC-6: traces_total = N (all cases attempted), not N-1 (successful only).
+    expect(result.traces_total).toBe(3);
+    // traces_passed counts only pass === true (both successful cases passed).
     expect(result.traces_passed).toBe(2);
   });
 });
@@ -579,6 +580,58 @@ describe('(g) runBatch: shared batchId and agentVersion across all rows', () => 
     // All rows share the same agentVersion
     expect(new Set(agentVersions).size).toBe(1);
     expect(agentVersions[0]).toBe(BASE_AGENT.version);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (h) AC-6: traces_total = N regardless of per-case LLM errors
+// ---------------------------------------------------------------------------
+
+describe('(h) AC-6 traces_total = N: errored cases count toward total, not toward passed', () => {
+  beforeEach(() => {
+    vi.mocked(runModule.runCase).mockReset();
+  });
+
+  it('4 cases, 1 errors, 1 fails scoring, 2 pass → traces_total: 4, traces_passed: 2', async () => {
+    // case1, case3: succeed with pass=true (empty expected + empty findings → 0===0 pass)
+    // case2: LLM error → persisted with pass: null, NOT counted in traces_passed
+    // case4: has expected regions but runCase returns no findings → pass: false
+    const case1 = makeCase('case-1');
+    const case2 = makeCase('case-2');
+    const case3 = makeCase('case-3');
+    const case4 = makeCase('case-4', {
+      expectedOutput: {
+        expectation: 'must_find',
+        regions: [
+          {
+            file: 'src/auth.ts',
+            start_line: 10,
+            end_line: 20,
+            severity: 'WARNING',
+            category: 'security',
+          },
+        ],
+      },
+    });
+
+    vi.mocked(runModule.runCase)
+      .mockResolvedValueOnce(MOCK_RUN_OUTPUT)        // case1: empty findings → pass=true
+      .mockRejectedValueOnce(new Error('LLM error')) // case2: throws  → pass=null
+      .mockResolvedValueOnce(MOCK_RUN_OUTPUT)        // case3: empty findings → pass=true
+      .mockResolvedValueOnce(MOCK_RUN_OUTPUT);       // case4: empty findings → expected not met → pass=false
+
+    const container = makeContainer({
+      listCases: async () => [case1, case2, case3, case4],
+      getById: async () => BASE_AGENT,
+      linkedSkills: async () => [],
+    });
+
+    const result = await runBatch(container, WS, AGENT_ID);
+
+    // AC-6: traces_total must equal ALL N cases attempted (successful + errored).
+    expect(result.traces_total).toBe(4);
+    // traces_passed: only cases 1 and 3 actually passed; case2 (error) and case4 (fail) do not.
+    expect(result.traces_passed).toBe(2);
   });
 });
 
