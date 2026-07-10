@@ -73,3 +73,5 @@ Before closing a session verify:
 - Stack, commands, architecture, how to run → read `README.md`
 - Working inside a package → read that package's AGENTS.md: `server/AGENTS.md`, `client/AGENTS.md`, `reviewer-core/AGENTS.md`, `e2e/AGENTS.md`
 - Agent prompt templates → read `docs/agent-prompts/`
+
+<!-- CI trigger test: harness-evals workflow (workflow tier via AGENTS.md) -->
