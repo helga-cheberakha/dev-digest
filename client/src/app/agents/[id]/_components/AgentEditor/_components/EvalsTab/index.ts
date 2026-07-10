@@ -1,1 +1,1 @@
-export { EvalsTab } from "./EvalsTab.js";
+export { EvalsTab } from "./EvalsTab";

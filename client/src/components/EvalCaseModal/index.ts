@@ -1,2 +1,2 @@
-export { EvalCaseModal } from "./EvalCaseModal.js";
-export type { EvalCaseModalProps } from "./EvalCaseModal.js";
+export { EvalCaseModal } from "./EvalCaseModal";
+export type { EvalCaseModalProps } from "./EvalCaseModal";
