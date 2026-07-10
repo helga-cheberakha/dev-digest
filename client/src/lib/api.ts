@@ -2,7 +2,16 @@
    All hooks build on `apiFetch`. Errors are normalized to ApiError so the
    error-UX taxonomy (toast/inline/full-screen) can branch on status. */
 
-import type { OnboardingArtifact } from "@devdigest/shared";
+import type {
+  OnboardingArtifact,
+  EvalCase,
+  EvalCaseInput,
+  EvalRunResult,
+  EvalRunBatch,
+  EvalCompare,
+  EvalDashboard,
+  Agent,
+} from "@devdigest/shared";
 
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:3001";
@@ -118,4 +127,109 @@ export async function generateOnboarding(
   body: { force?: boolean },
 ): Promise<OnboardingArtifact> {
   return api.post<OnboardingArtifact>(`/repos/${repoId}/onboarding`, body);
+}
+
+// ---- Eval Pipeline ----
+
+/** Stable query-key factory for the eval pipeline cache. */
+export const evalQueryKeys = {
+  cases: (agentId: string) => ["eval-cases", agentId] as const,
+  batches: (agentId: string) => ["eval-batches", agentId] as const,
+  compare: (agentId: string, a: string, b: string) =>
+    ["eval-compare", agentId, a, b] as const,
+  dashboard: (agentId?: string) => ["eval-dashboard", agentId] as const,
+} as const;
+
+/**
+ * Draft an eval case from an existing finding.
+ *
+ * Hits `POST /findings/:id/eval-case`. The returned EvalCaseInput is NEVER
+ * persisted — it is a preview that the caller may edit before calling
+ * `createEvalCase`. Do not confuse with `createEvalCase` which always writes
+ * a DB row.
+ *
+ * Sends `{}` so Fastify sets `application/json` on the body-schema route.
+ */
+export async function draftEvalCaseFromFinding(
+  findingId: string,
+): Promise<EvalCaseInput> {
+  return api.post<EvalCaseInput>(`/findings/${findingId}/eval-case`, {});
+}
+
+/**
+ * Persist an eval case (new DB row).
+ *
+ * Used for both a manually-authored case AND saving a (possibly-edited)
+ * finding-derived draft returned by `draftEvalCaseFromFinding`.
+ */
+export async function createEvalCase(input: EvalCaseInput): Promise<EvalCase> {
+  return api.post<EvalCase>(`/eval-cases`, input);
+}
+
+/** List all eval cases for an agent. */
+export async function fetchEvalCases(agentId: string): Promise<EvalCase[]> {
+  return api.get<EvalCase[]>(`/agents/${agentId}/eval-cases`);
+}
+
+/**
+ * Run a single eval case and persist the result.
+ *
+ * Sends `{}` so Fastify sets `application/json` on the body-schema route.
+ */
+export async function runEvalCase(caseId: string): Promise<EvalRunResult> {
+  return api.post<EvalRunResult>(`/eval-cases/${caseId}/run`, {});
+}
+
+/**
+ * Run all eval cases for an agent as a batch.
+ *
+ * Sends `{}` so Fastify sets `application/json` on the body-schema route.
+ */
+export async function runEvalBatch(agentId: string): Promise<EvalRunBatch> {
+  return api.post<EvalRunBatch>(`/agents/${agentId}/eval-runs`, {});
+}
+
+/** List batch-run history for an agent (newest first). */
+export async function fetchEvalBatches(agentId: string): Promise<EvalRunBatch[]> {
+  return api.get<EvalRunBatch[]>(`/agents/${agentId}/eval-batches`);
+}
+
+/** Compare two batch runs for an agent side-by-side. */
+export async function fetchEvalCompare(
+  agentId: string,
+  batchIdA: string,
+  batchIdB: string,
+): Promise<EvalCompare> {
+  return api.get<EvalCompare>(
+    `/agents/${agentId}/eval-compare?a=${encodeURIComponent(batchIdA)}&b=${encodeURIComponent(batchIdB)}`,
+  );
+}
+
+/**
+ * Fetch the eval dashboard aggregate.
+ *
+ * Pass `agentId` to scope to a single agent; omit for the workspace-wide view.
+ */
+export async function fetchEvalDashboard(agentId?: string): Promise<EvalDashboard> {
+  const qs = agentId ? `?agentId=${encodeURIComponent(agentId)}` : "";
+  return api.get<EvalDashboard>(`/eval/dashboard${qs}`);
+}
+
+/**
+ * Promote a past agent version by restoring its system_prompt.
+ *
+ * Client-side compose: fetches the version snapshot via
+ * `GET /agents/:id/versions/:version`, then writes the snapshot's
+ * `system_prompt` back with `PUT /agents/:id`. No new server route.
+ */
+export async function promoteVersion(
+  agentId: string,
+  version: number,
+): Promise<Agent> {
+  const snapshot = await api.get<{ config: { system_prompt: string } }>(
+    `/agents/${agentId}/versions/${version}`,
+  );
+  return api.put<Agent>(`/agents/${agentId}`, {
+    system_prompt: snapshot.config.system_prompt,
+  });
 }
