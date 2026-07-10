@@ -1,6 +1,6 @@
 ---
 name: engineering-insights
-description: Captures non-obvious engineering insights into the touched module's INSIGHTS.md (client, server, reviewer-core, e2e). Use during a session the moment you hit something a future agent would otherwise relearn — a gotcha, a working approach, a dead-end antipattern, a codebase convention, a tool/library quirk, a recurring error+fix, or an open question — and again at session end, on "wrap up" / "retro", or when /engineering-insights is invoked. Reads the existing file first, never duplicates, writes only substantial file-grounded entries, and is strictly append-only (never overwrites).
+description: Captures non-obvious engineering insights into the touched module's INSIGHTS.md (client, server, reviewer-core, e2e). TRIGGER — invoke this skill immediately, before writing anything to an INSIGHTS.md yourself from memory of its format: the instant you hit something a future agent would otherwise relearn — a gotcha, a working approach, a dead-end antipattern, a codebase convention, a tool/library quirk, a recurring error+fix, or an open question. Fires mid-session on that discovery (even before tests are green) and again at session end, on "wrap up" / "retro", or when /engineering-insights is invoked. Reads the existing file first, never duplicates, writes only substantial file-grounded entries, and is strictly append-only (never overwrites).
 ---
 
 # Engineering Insights
@@ -75,11 +75,17 @@ Copy this checklist and work through it:
 
 1. **Gate check.** Did the session produce something substantial — a problem solved, a decision made, a non-obvious discovery? If not → **write nothing** and stop.
 
-   **Timing gate:** Run this skill exactly **once per session**, after implementation is complete and tests pass. Do NOT run:
-   - before any code changes are made;
-   - during exploration or mid-implementation;
-   - before tests are green;
-   - a second time in the same session.
+   **Timing gate:** two valid moments to run this skill:
+   - **Immediately on a genuine discovery** — the instant you solve a gotcha, hit a dead end, or land
+     a concrete decision worth keeping, even mid-session and before tests are green. This is a
+     separate, additional invocation, not a violation of "once per session."
+   - **Once at session end**, as a summary pass over anything substantial not already captured.
+
+   Do NOT run:
+   - speculatively, before anything concrete has actually been learned;
+   - during exploration with no finding yet, just to "check in";
+   - twice for the same discovery — the end-of-session pass must dedup (step 4) against what a
+     mid-session run already wrote.
 2. **Read first.** Open the touched module's `INSIGHTS.md` before drafting anything.
 3. **Draft ≤5 candidates**, ranked by signal (user corrections and gotchas highest; nice-to-know patterns lowest). Each candidate = the exact proposed line + its target section + `file:line` evidence.
 4. **Dedup.** Drop any candidate already covered by an existing entry. If reality contradicts an old entry, add a new dated note that supersedes it — never edit the old one.

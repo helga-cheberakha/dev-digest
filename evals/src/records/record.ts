@@ -31,6 +31,14 @@ export interface RecordData {
   verdict?: Verdict;
   grounded?: number;
   threshold?: number;
+  /**
+   * Pass/fail from the case's own trace assertions (expectFilesRead, expectSubagents, activation
+   * match, etc.), computed by the caller BEFORE `expect()` can throw. When provided, this is
+   * authoritative over `!result.isError` — isError alone only reflects SDK-level completion and
+   * says nothing about whether the case's real assertions held (a run can finish cleanly without
+   * ever reading the expected file).
+   */
+  assertionsPassed?: boolean;
   extra?: Record<string, unknown>;
 }
 
@@ -40,18 +48,26 @@ export interface RecordData {
  * from being silently empty.
  */
 export function record(label: string, data: RecordData): void {
-  const { result, verdict, grounded, threshold, extra } = data;
-  const state = expect.getState();
-  const nodeid = `${state.testPath ?? "?"} > ${state.currentTestName ?? label}`;
+  const { result, verdict, grounded, threshold, assertionsPassed, extra } = data;
+  // Build nodeid from testPath + label, NOT expect.getState().currentTestName: that's a live
+  // global that vitest mutates as soon as the NEXT test starts. A slow case (e.g. one that
+  // dispatches a nested subagent) can still be awaiting its `finally` block after vitest has
+  // already moved the global test-name pointer to a different test, silently mislabeling this
+  // record under someone else's nodeid.
+  const nodeid = `${expect.getState().testPath ?? "?"} > ${label}`;
 
-  // outcome: grounding gate failure short-circuits to false; else the judge threshold; else
-  // "did the run itself succeed" (workflow tests have neither grounding nor a judge verdict).
+  // outcome: grounding gate failure short-circuits to false; else the judge threshold; else the
+  // caller's own trace-assertion result; else "did the run itself succeed" (isError alone — the
+  // weakest signal, since a clean SDK completion says nothing about whether expected files were
+  // actually read or a subagent actually dispatched).
   const outcome =
     grounded !== undefined && grounded < 1
       ? false
       : verdict && threshold !== undefined
         ? verdict.score >= threshold
-        : !result.isError;
+        : assertionsPassed !== undefined
+          ? assertionsPassed
+          : !result.isError;
 
   const outDir = join(OUTPUTS, RUN_ID);
   mkdirSync(outDir, { recursive: true });
