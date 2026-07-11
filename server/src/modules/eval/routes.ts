@@ -18,8 +18,10 @@ import {
   buildCaseDraftFromFinding,
   createCase,
   listCases,
+  deleteCase,
   runCaseOnce,
   runBatch,
+  runSkillBatch,
 } from './service.js';
 
 const AgentIdParams = z.object({ id: z.string().uuid() });
@@ -33,6 +35,7 @@ const EmptyBody = z.object({});
  *   POST /findings/:id/eval-case            → draft a case from a finding (no DB write)
  *   POST /eval-cases                         → persist a new eval case (201)
  *   GET  /agents/:id/eval-cases             → list cases with latest-run badge data
+ *   DELETE /eval-cases/:id                  → delete a case (and its run history)
  *   POST /eval-cases/:id/run                → run a single case once
  *   POST /agents/:id/eval-runs              → run all cases for an agent (batch)
  *   GET  /agents/:id/eval-batches           → batch history (newest first)
@@ -115,7 +118,7 @@ export default async function evalRoutes(appBase: FastifyInstance) {
     },
     async (req) => {
       const { workspaceId } = await getContext(app.container, req);
-      const cases = await listCases(app.container, workspaceId, req.params.id);
+      const cases = await listCases(app.container, workspaceId, 'agent', req.params.id);
       return cases.map((c) => ({
         id: c.id,
         owner_kind: c.ownerKind,
@@ -139,6 +142,26 @@ export default async function evalRoutes(appBase: FastifyInstance) {
             }
           : null,
       }));
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // DELETE /eval-cases/:id
+  //
+  // Delete a case; its run history cascades via the eval_runs FK.
+  // ---------------------------------------------------------------------------
+  app.delete(
+    '/eval-cases/:id',
+    {
+      schema: {
+        params: CaseIdParams,
+        response: { 204: z.void() },
+      },
+    },
+    async (req, reply) => {
+      const { workspaceId } = await getContext(app.container, req);
+      await deleteCase(app.container, workspaceId, req.params.id);
+      reply.status(204);
     },
   );
 
@@ -186,6 +209,70 @@ export default async function evalRoutes(appBase: FastifyInstance) {
     async (req) => {
       const { workspaceId } = await getContext(app.container, req);
       return runBatch(app.container, workspaceId, req.params.id);
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // GET /skills/:id/eval-cases
+  //
+  // List all eval cases for a skill, augmented with the latest run outcome
+  // so the UI can show pass/fail badges without a second round-trip.
+  // ---------------------------------------------------------------------------
+  app.get(
+    '/skills/:id/eval-cases',
+    {
+      schema: {
+        params: AgentIdParams,
+        response: { 200: z.array(EvalCaseListItem) },
+      },
+    },
+    async (req) => {
+      const { workspaceId } = await getContext(app.container, req);
+      const cases = await listCases(app.container, workspaceId, 'skill', req.params.id);
+      return cases.map((c) => ({
+        id: c.id,
+        owner_kind: c.ownerKind,
+        owner_id: c.ownerId,
+        name: c.name,
+        input_diff: c.inputDiff ?? '',
+        input_files: c.inputFiles,
+        input_meta: c.inputMeta,
+        expected_output: c.expectedOutput,
+        notes: c.notes,
+        latest_run: c.latestRun
+          ? {
+              pass: c.latestRun.pass,
+              recall: c.latestRun.recall,
+              precision: c.latestRun.precision,
+              citation_accuracy: c.latestRun.citationAccuracy,
+              ran_at:
+                c.latestRun.ranAt instanceof Date
+                  ? c.latestRun.ranAt.toISOString()
+                  : String(c.latestRun.ranAt),
+            }
+          : null,
+      }));
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // POST /skills/:id/eval-runs
+  //
+  // Run all eval cases for a skill in a single batch (sequential).
+  // Returns the pooled aggregate EvalRun for the batch.
+  // ---------------------------------------------------------------------------
+  app.post(
+    '/skills/:id/eval-runs',
+    {
+      schema: {
+        params: AgentIdParams,
+        body: EmptyBody,
+        response: { 200: EvalRun },
+      },
+    },
+    async (req) => {
+      const { workspaceId } = await getContext(app.container, req);
+      return runSkillBatch(app.container, workspaceId, req.params.id);
     },
   );
 
@@ -241,12 +328,14 @@ export default async function evalRoutes(appBase: FastifyInstance) {
   );
 
   // ---------------------------------------------------------------------------
-  // GET /eval/dashboard[?agentId=<uuid>]
+  // GET /eval/dashboard[?agentId=<uuid>][?skillId=<uuid>]
   //
   // Dashboard aggregate.
-  //  - With agentId: current metrics, delta vs prev batch, trend, per-agent alert.
-  //  - Without agentId: workspace-wide recent_runs; current/delta/trend are zeroed
+  //  - With skillId:  current metrics, delta vs prev batch, trend, per-skill alert.
+  //  - With agentId:  current metrics, delta vs prev batch, trend, per-agent alert.
+  //  - Without either: workspace-wide recent_runs; current/delta/trend are zeroed
   //    (no single owner to aggregate — deliberate design, see analytics.ts).
+  // skillId takes precedence if both are somehow provided.
   // ---------------------------------------------------------------------------
   app.get(
     '/eval/dashboard',
@@ -254,13 +343,20 @@ export default async function evalRoutes(appBase: FastifyInstance) {
       schema: {
         querystring: z.object({
           agentId: z.string().uuid().optional(),
+          skillId: z.string().uuid().optional(),
         }),
         response: { 200: EvalDashboard },
       },
     },
     async (req) => {
       const { workspaceId } = await getContext(app.container, req);
-      return analytics.dashboard(workspaceId, req.query.agentId ?? null);
+      if (req.query.skillId) {
+        return analytics.dashboard(workspaceId, 'skill', req.query.skillId);
+      }
+      if (req.query.agentId) {
+        return analytics.dashboard(workspaceId, 'agent', req.query.agentId);
+      }
+      return analytics.dashboard(workspaceId, 'agent', null);
     },
   );
 }
