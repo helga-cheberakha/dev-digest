@@ -10,6 +10,7 @@ import type { EvalRun } from '../../vendor/shared/contracts/knowledge.js';
 import * as scoring from './scoring.js';
 import type { AggregateCase } from './scoring.js';
 import { runCase } from './run.js';
+import * as harness from './harness.js';
 import type { EvalCaseRow } from './repository.js';
 
 /**
@@ -80,7 +81,9 @@ export async function buildCaseDraftFromFinding(
   // The review's agentId is the owning agent for the case.
   const owner_id = review.agentId;
   if (!owner_id) {
-    throw new ValidationError('Finding belongs to a review with no owning agent');
+    throw new ValidationError(
+      "This finding wasn't reviewed by an agent, so it can't seed an eval case. Accept or dismiss a finding from an agent-run review instead.",
+    );
   }
 
   const region: EvalRegion = {
@@ -129,12 +132,19 @@ export async function createCase(
     throw new ValidationError('Invalid expected_output', parseResult.error.issues);
   }
 
-  // Verify the target agent belongs to the caller's workspace.
+  // Verify the target owner (agent or skill) belongs to the caller's workspace.
   // Without this check a client could create an orphaned case referencing a
-  // nonexistent or foreign-workspace agent id.
-  const agent = await container.agentsRepo.getById(workspaceId, input.owner_id);
-  if (!agent) {
-    throw new NotFoundError('Agent not found in workspace');
+  // nonexistent or foreign-workspace entity.
+  if (input.owner_kind === 'skill') {
+    const skill = await container.skillsRepo.getById(workspaceId, input.owner_id);
+    if (!skill) {
+      throw new NotFoundError('Skill not found in workspace');
+    }
+  } else {
+    const agent = await container.agentsRepo.getById(workspaceId, input.owner_id);
+    if (!agent) {
+      throw new NotFoundError('Agent not found in workspace');
+    }
   }
 
   return container.evalRepo.insertCase({
@@ -155,16 +165,18 @@ export async function createCase(
 // ---------------------------------------------------------------------------
 
 /**
- * List all eval cases for an agent, with each case's latest run attached.
+ * List all eval cases for an owner (agent or skill), with each case's latest
+ * run attached.
  */
 export async function listCases(
   container: Container,
   workspaceId: string,
-  agentId: string,
+  ownerKind: 'agent' | 'skill',
+  ownerId: string,
 ): Promise<CaseWithLatestRun[]> {
   const [cases, latestRuns] = await Promise.all([
-    container.evalRepo.listCases(workspaceId, 'agent', agentId),
-    container.evalRepo.latestRunPerCase(workspaceId, agentId),
+    container.evalRepo.listCases(workspaceId, ownerKind, ownerId),
+    container.evalRepo.latestRunPerCase(workspaceId, ownerId),
   ]);
 
   const runByCaseId = new Map(latestRuns.map((r) => [r.caseId, r]));
@@ -189,6 +201,20 @@ export async function listCases(
 }
 
 // ---------------------------------------------------------------------------
+// deleteCase
+// ---------------------------------------------------------------------------
+
+/** Delete an eval case (and its run history, via FK cascade). */
+export async function deleteCase(
+  container: Container,
+  workspaceId: string,
+  caseId: string,
+): Promise<void> {
+  const deleted = await container.evalRepo.deleteCase(workspaceId, caseId);
+  if (!deleted) throw new NotFoundError('Eval case not found');
+}
+
+// ---------------------------------------------------------------------------
 // runCaseOnce
 // ---------------------------------------------------------------------------
 
@@ -204,24 +230,41 @@ export async function runCaseOnce(
   const evalCase = await container.evalRepo.getCase(workspaceId, caseId);
   if (!evalCase) throw new NotFoundError('Eval case not found');
 
-  const agent = await container.agentsRepo.getById(workspaceId, evalCase.ownerId);
-  if (!agent) throw new NotFoundError('Agent not found for eval case');
-
-  const linked = await container.agentsRepo.linkedSkills(agent.id);
-  const skillBodies = linked
-    .filter((l) => l.skill.enabled && !l.skill.injectionDetected)
-    .map((l) => l.skill.body);
-
   const batchId = randomUUID();
 
-  const t0 = Date.now();
-  const output = await runCase(container, agent, skillBodies, { inputDiff: evalCase.inputDiff });
-  const durationMs = Date.now() - t0;
+  // Branch on owner kind — skill vs agent paths produce identical output shapes.
+  // ownerVersion, output, and durationMs are set in exactly one branch before
+  // reaching the shared score+persist tail below.
+  let ownerVersion: number;
+  let output: Awaited<ReturnType<typeof runCase>>;
+  let durationMs: number;
 
+  if (evalCase.ownerKind === 'skill') {
+    const skill = await container.skillsRepo.getById(workspaceId, evalCase.ownerId);
+    if (!skill) throw new NotFoundError('Skill not found for eval case');
+    if (skill.injectionDetected === true) {
+      throw new ValidationError('Skill has injection detected; eval run refused');
+    }
+    ownerVersion = skill.version;
+    const t0 = Date.now();
+    output = await harness.runSkillCase(container, skill.body, { inputDiff: evalCase.inputDiff });
+    durationMs = Date.now() - t0;
+  } else {
+    const agent = await container.agentsRepo.getById(workspaceId, evalCase.ownerId);
+    if (!agent) throw new NotFoundError('Agent not found for eval case');
+    const linked = await container.agentsRepo.linkedSkills(agent.id);
+    const skillBodies = linked
+      .filter((l) => l.skill.enabled && !l.skill.injectionDetected)
+      .map((l) => l.skill.body);
+    ownerVersion = agent.version;
+    const t0 = Date.now();
+    output = await runCase(container, agent, skillBodies, { inputDiff: evalCase.inputDiff });
+    durationMs = Date.now() - t0;
+  }
+
+  // Shared score+persist tail — identical for both owner kinds.
   const { expectation, expectedRegions } = _parseExpected(evalCase.expectedOutput);
-
   const actualRegions = _findingsToRegions(output.findings);
-
   const caseScore = scoring.scoreCase({ expectation, expectedRegions, actualRegions });
   const aggCase: AggregateCase = {
     name: evalCase.name,
@@ -237,7 +280,7 @@ export async function runCaseOnce(
 
   const row = await container.evalRepo.insertRun(caseId, {
     batchId,
-    agentVersion: agent.version,
+    agentVersion: ownerVersion,
     pass: caseScore.pass,
     recall: result.recall,
     precision: result.precision,
@@ -375,6 +418,128 @@ export async function runBatch(
   // we override it here to reflect the full batch count.
   // traces_passed is already correct: errored cases are absent from successCases so
   // they are never counted as passed.
+  return {
+    ...batchResult,
+    traces_total: cases.length,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// runSkillBatch
+// ---------------------------------------------------------------------------
+
+/**
+ * Run all eval cases for a skill in a single batch.
+ *
+ * Mirrors `runBatch` for skills. Execution is SEQUENTIAL (not concurrent).
+ *
+ * - Empty case set: returns a zero aggregate and persists NOTHING.
+ * - `injectionDetected` skill: throws ValidationError, persists NOTHING.
+ * - Per-case LLM errors are caught: the failed row is persisted with
+ *   `pass: null` and the error message in `actual_output.error`; execution
+ *   continues to the next case.
+ * - All rows in one batch share the same `batchId` and `agentVersion`
+ *   (the skill's version, stored in the legacy `agent_version` column).
+ */
+export async function runSkillBatch(
+  container: Container,
+  workspaceId: string,
+  skillId: string,
+): Promise<EvalRun> {
+  const cases = await container.evalRepo.listCases(workspaceId, 'skill', skillId);
+
+  // Empty set: aggregate vacuously, persist nothing.
+  if (cases.length === 0) {
+    return scoring.aggregate([], { kept: 0, produced: 0 });
+  }
+
+  const skill = await container.skillsRepo.getById(workspaceId, skillId);
+  if (!skill) throw new NotFoundError('Skill not found');
+  if (skill.injectionDetected === true) {
+    throw new ValidationError('Skill has injection detected; eval run refused');
+  }
+
+  // ONE batchId for the whole batch — all rows share it.
+  const batchId = randomUUID();
+
+  const successCases: AggregateCase[] = [];
+  let totalKept = 0;
+  let totalProduced = 0;
+  // Accumulated cost across all cases: null-cost cases contribute 0 to the sum.
+  let batchCostUsd = 0;
+  const batchStart = Date.now();
+
+  for (const evalCase of cases) {
+    try {
+      const caseStart = Date.now();
+      const output = await harness.runSkillCase(container, skill.body, {
+        inputDiff: evalCase.inputDiff,
+      });
+      const caseDurationMs = Date.now() - caseStart;
+
+      const { expectation, expectedRegions } = _parseExpected(evalCase.expectedOutput);
+      const actualRegions = _findingsToRegions(output.findings);
+
+      const caseScore = scoring.scoreCase({ expectation, expectedRegions, actualRegions });
+      const aggCase: AggregateCase = {
+        name: evalCase.name,
+        score: caseScore,
+        expected: expectedRegions,
+        actual: actualRegions,
+      };
+
+      // Compute per-case metrics for the individual run row.
+      const perCaseResult = scoring.aggregate([aggCase], {
+        kept: output.kept,
+        produced: output.produced,
+      });
+
+      await container.evalRepo.insertRun(evalCase.id, {
+        batchId,
+        agentVersion: skill.version,
+        pass: caseScore.pass,
+        recall: perCaseResult.recall,
+        precision: perCaseResult.precision,
+        citationAccuracy: perCaseResult.citation_accuracy,
+        durationMs: caseDurationMs,
+        costUsd: output.costUsd,
+        actualOutput: _buildActualOutput(output.findings, output.kept, output.produced),
+      });
+
+      // Accumulate for the pooled batch aggregate.
+      batchCostUsd += output.costUsd ?? 0;
+      successCases.push(aggCase);
+      totalKept += output.kept;
+      totalProduced += output.produced;
+    } catch (err) {
+      // Per-case failure: persist a failed row and continue.
+      const errMsg = err instanceof Error ? err.message : String(err);
+      await container.evalRepo.insertRun(evalCase.id, {
+        batchId,
+        agentVersion: skill.version,
+        pass: null,
+        recall: null,
+        precision: null,
+        citationAccuracy: null,
+        durationMs: null,
+        costUsd: null,
+        actualOutput: {
+          findings: [],
+          grounding: { kept: 0, produced: 0 },
+          error: errMsg,
+        },
+      });
+    }
+  }
+
+  // Pooled aggregate over successfully-scored cases only.
+  const batchResult = scoring.aggregate(
+    successCases,
+    { kept: totalKept, produced: totalProduced },
+    { durationMs: Date.now() - batchStart, costUsd: batchCostUsd },
+  );
+
+  // traces_total must equal ALL cases attempted (including per-case LLM errors).
   return {
     ...batchResult,
     traces_total: cases.length,

@@ -19,19 +19,32 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Must appear before the import of service.ts so Vitest hoists it.
+// Must appear before the import of service.ts so Vitest hoists them.
 vi.mock('./run.js', () => ({
   runCase: vi.fn(),
 }));
 
+vi.mock('./harness.js', () => ({
+  runSkillCase: vi.fn(),
+  SKILL_EVAL_HARNESS: {
+    provider: 'openrouter',
+    model: 'deepseek/deepseek-v4-flash',
+    strategy: 'single-pass',
+    systemPrompt: '',
+  },
+}));
+
 // Import after mock registration.
 import * as runModule from './run.js';
+import * as harnessModule from './harness.js';
 import {
   buildCaseDraftFromFinding,
   createCase,
   listCases,
+  deleteCase,
   runBatch,
   runCaseOnce,
+  runSkillBatch,
 } from './service.js';
 import { NotFoundError, ValidationError } from '../../platform/errors.js';
 import type { Container } from '../../platform/container.js';
@@ -47,6 +60,7 @@ const REVIEW_ID = 'cccccccc-0000-0000-0000-000000000001';
 const PULL_ID = 'dddddddd-0000-0000-0000-000000000001';
 const AGENT_ID = 'eeeeeeee-0000-0000-0000-000000000001';
 const CASE_ID = 'ffffffff-0000-0000-0000-000000000001';
+const SKILL_ID = 'gggggggg-0000-0000-0000-000000000001';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -171,6 +185,37 @@ function makeCase(id: string, overrides: Record<string, unknown> = {}) {
   };
 }
 
+const BASE_SKILL = {
+  id: SKILL_ID,
+  workspaceId: WS,
+  name: 'Test Skill',
+  description: 'A test skill for eval',
+  type: 'rubric' as const,
+  source: 'manual' as const,
+  body: 'Always check for null pointer dereferences.',
+  enabled: true,
+  injectionDetected: false,
+  version: 2,
+  evidenceFiles: null,
+  createdAt: new Date('2026-01-01'),
+};
+
+function makeSkillCase(id: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id,
+    workspaceId: WS,
+    ownerKind: 'skill' as const,
+    ownerId: SKILL_ID,
+    name: `Skill Case ${id}`,
+    inputDiff: '',
+    inputFiles: null,
+    inputMeta: null,
+    expectedOutput: { expectation: 'must_find', regions: [] },
+    notes: null,
+    ...overrides,
+  };
+}
+
 // Mock finding from runCase (empty → scores as pass with no expected regions)
 const MOCK_RUN_OUTPUT = { findings: [], kept: 0, produced: 0, costUsd: 0.001 };
 
@@ -182,16 +227,22 @@ type FindingContextResult =
   | { finding: ReturnType<typeof makeAcceptedFinding>; review: typeof BASE_REVIEW; pull: typeof BASE_PULL }
   | undefined;
 
+// Widen ownerKind to 'agent' | 'skill' so the container factory accepts both
+// makeCase (agent) and makeSkillCase (skill) fixtures without type errors.
+type AnyCase = Omit<ReturnType<typeof makeCase>, 'ownerKind'> & { ownerKind: 'agent' | 'skill' };
+
 function makeContainer(opts: {
   findingContext?: () => Promise<FindingContextResult>;
   getPrFiles?: () => Promise<{ path: string; patch: string | null }[]>;
   insertCase?: (values: unknown) => Promise<Record<string, unknown>>;
-  listCases?: () => Promise<ReturnType<typeof makeCase>[]>;
-  getCase?: () => Promise<ReturnType<typeof makeCase> | undefined>;
+  listCases?: () => Promise<AnyCase[]>;
+  getCase?: () => Promise<AnyCase | undefined>;
   insertRun?: (caseId: string, values: unknown) => Promise<Record<string, unknown>>;
   latestRunPerCase?: () => Promise<unknown[]>;
+  deleteCase?: () => Promise<boolean>;
   getById?: () => Promise<typeof BASE_AGENT | undefined>;
   linkedSkills?: () => Promise<unknown[]>;
+  skillsRepoGetById?: () => Promise<typeof BASE_SKILL | undefined>;
 } = {}): Container {
   return {
     reviewRepo: {
@@ -204,10 +255,14 @@ function makeContainer(opts: {
       getCase: opts.getCase ?? (async () => undefined),
       insertRun: opts.insertRun ?? (async (caseId: string, values: unknown) => ({ id: `run-${caseId}`, caseId, ...values as object })),
       latestRunPerCase: opts.latestRunPerCase ?? (async () => []),
+      deleteCase: opts.deleteCase ?? (async () => true),
     },
     agentsRepo: {
       getById: opts.getById ?? (async () => BASE_AGENT),
       linkedSkills: opts.linkedSkills ?? (async () => []),
+    },
+    skillsRepo: {
+      getById: opts.skillsRepoGetById ?? (async () => undefined),
     },
   } as unknown as Container;
 }
@@ -648,7 +703,7 @@ describe('listCases', () => {
       latestRunPerCase: async () => [],
     });
 
-    const result = await listCases(container, WS, AGENT_ID);
+    const result = await listCases(container, WS, 'agent', AGENT_ID);
 
     expect(result).toHaveLength(1);
     expect(result[0]!.latestRun).toBeNull();
@@ -672,11 +727,32 @@ describe('listCases', () => {
       latestRunPerCase: async () => [runRow],
     });
 
-    const result = await listCases(container, WS, AGENT_ID);
+    const result = await listCases(container, WS, 'agent', AGENT_ID);
 
     expect(result[0]!.latestRun).not.toBeNull();
     expect(result[0]!.latestRun!.pass).toBe(true);
     expect(result[0]!.latestRun!.batchId).toBe('batch-1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// deleteCase: repository delete called once; NotFoundError when no row deleted
+// ---------------------------------------------------------------------------
+
+describe('deleteCase', () => {
+  it('deletes the case and returns void when the repository reports a row deleted', async () => {
+    const deleteCaseSpy = vi.fn(async () => true);
+    const container = makeContainer({ deleteCase: deleteCaseSpy });
+
+    await expect(deleteCase(container, WS, CASE_ID)).resolves.toBeUndefined();
+    expect(deleteCaseSpy).toHaveBeenCalledOnce();
+    expect(deleteCaseSpy).toHaveBeenCalledWith(WS, CASE_ID);
+  });
+
+  it('throws NotFoundError when the repository deletes nothing (missing or cross-workspace)', async () => {
+    const container = makeContainer({ deleteCase: async () => false });
+
+    await expect(deleteCase(container, WS, CASE_ID)).rejects.toThrow(NotFoundError);
   });
 });
 
@@ -782,5 +858,291 @@ describe('(j) runBatch: cost_usd is sum of per-case costs with null-safe accumul
     expect(result.cost_usd).toBe(0);
     expect(result.traces_total).toBe(2);
     expect(result.traces_passed).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (T2-a) createCase — skill owner_kind branches
+// ---------------------------------------------------------------------------
+
+describe('(T2-a) createCase: skill owner_kind', () => {
+  it('valid skill id → insertCase called once, row returned', async () => {
+    const persistedRow = {
+      id: 'new-skill-case-1',
+      workspaceId: WS,
+      ownerKind: 'skill',
+      ownerId: SKILL_ID,
+      name: 'Skill case',
+      inputDiff: '+foo',
+      inputFiles: null,
+      inputMeta: null,
+      expectedOutput: { expectation: 'must_find', regions: [] },
+      notes: null,
+    };
+    const insertCaseSpy = vi.fn().mockResolvedValue(persistedRow);
+    const container = makeContainer({
+      insertCase: insertCaseSpy,
+      skillsRepoGetById: async () => BASE_SKILL,
+    });
+
+    const input = {
+      owner_kind: 'skill' as const,
+      owner_id: SKILL_ID,
+      name: 'Skill case',
+      input_diff: '+foo',
+      input_files: null,
+      input_meta: null,
+      expected_output: { expectation: 'must_find', regions: [] },
+      notes: null,
+    };
+
+    const row = await createCase(container, WS, input);
+
+    expect(insertCaseSpy).toHaveBeenCalledOnce();
+    expect(row).toBe(persistedRow);
+  });
+
+  it('missing/cross-workspace skill id → NotFoundError, insertCase not called', async () => {
+    const insertCaseSpy = vi.fn();
+    const container = makeContainer({
+      insertCase: insertCaseSpy,
+      // skillsRepoGetById returns undefined — skill not found in workspace
+      skillsRepoGetById: async () => undefined,
+    });
+
+    const input = {
+      owner_kind: 'skill' as const,
+      owner_id: 'foreign-skill-id',
+      name: 'Bad skill case',
+      input_diff: '+foo',
+      input_files: null,
+      input_meta: null,
+      expected_output: { expectation: 'must_find', regions: [] },
+      notes: null,
+    };
+
+    await expect(createCase(container, WS, input)).rejects.toThrow(NotFoundError);
+    expect(insertCaseSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (T2-b) runCaseOnce: skill-owned case uses harness.runSkillCase, not run.runCase
+// ---------------------------------------------------------------------------
+
+describe('(T2-b) runCaseOnce: skill-owned case', () => {
+  beforeEach(() => {
+    vi.mocked(runModule.runCase).mockReset();
+    vi.mocked(harnessModule.runSkillCase).mockReset();
+  });
+
+  it('skill case drives harness.runSkillCase (not runCase), stamps agentVersion = skill.version', async () => {
+    const evalCase = makeSkillCase(CASE_ID);
+
+    vi.mocked(harnessModule.runSkillCase).mockResolvedValue({
+      findings: [],
+      kept: 0,
+      produced: 0,
+      costUsd: 0.007,
+    });
+
+    const insertRunCalls: Array<{ caseId: string; values: Record<string, unknown> }> = [];
+    const container = makeContainer({
+      getCase: async () => evalCase,
+      skillsRepoGetById: async () => BASE_SKILL,
+      insertRun: async (caseId, values) => {
+        insertRunCalls.push({ caseId, values: values as Record<string, unknown> });
+        return { id: `run-${caseId}`, caseId, ...values as object };
+      },
+    });
+
+    await runCaseOnce(container, WS, CASE_ID);
+
+    // harness.runSkillCase must have been called, not runCase
+    expect(harnessModule.runSkillCase).toHaveBeenCalledOnce();
+    expect(runModule.runCase).not.toHaveBeenCalled();
+
+    // agentVersion on the row must equal the skill's version
+    expect(insertRunCalls).toHaveLength(1);
+    expect(insertRunCalls[0]!.values.agentVersion).toBe(BASE_SKILL.version);
+    expect(insertRunCalls[0]!.values.costUsd).toBe(0.007);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (T2-c) runSkillBatch: zero cases → traces_total: 0, zero insertRun calls
+// ---------------------------------------------------------------------------
+
+describe('(T2-c) runSkillBatch: zero cases', () => {
+  it('no cases → traces_total: 0, insertRun never called', async () => {
+    const insertRunSpy = vi.fn();
+    const container = makeContainer({
+      listCases: async () => [],
+      insertRun: insertRunSpy,
+    });
+
+    const result = await runSkillBatch(container, WS, SKILL_ID);
+
+    expect(result.traces_total).toBe(0);
+    expect(insertRunSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (T2-d) runSkillBatch: case 2 of 3 throws mid-batch
+// ---------------------------------------------------------------------------
+
+describe('(T2-d) runSkillBatch: mid-batch error resilience', () => {
+  beforeEach(() => {
+    vi.mocked(harnessModule.runSkillCase).mockReset();
+  });
+
+  it('case 2 throws → rows for 1 and 3 (scored), failed row for 2, all share batchId, traces_total: 3', async () => {
+    const case1 = makeSkillCase('sk-case-1');
+    const case2 = makeSkillCase('sk-case-2');
+    const case3 = makeSkillCase('sk-case-3');
+
+    vi.mocked(harnessModule.runSkillCase)
+      .mockResolvedValueOnce(MOCK_RUN_OUTPUT)        // case 1: success
+      .mockRejectedValueOnce(new Error('LLM error')) // case 2: throw
+      .mockResolvedValueOnce(MOCK_RUN_OUTPUT);       // case 3: success
+
+    const insertRunCalls: Array<{ caseId: string; values: Record<string, unknown> }> = [];
+    const container = makeContainer({
+      listCases: async () => [case1, case2, case3],
+      skillsRepoGetById: async () => BASE_SKILL,
+      insertRun: async (caseId, values) => {
+        insertRunCalls.push({ caseId, values: values as Record<string, unknown> });
+        return { id: `run-${caseId}`, caseId, ...values as object };
+      },
+    });
+
+    const result = await runSkillBatch(container, WS, SKILL_ID);
+
+    // Three rows: one per case
+    expect(insertRunCalls).toHaveLength(3);
+
+    // Case 1: success
+    expect(insertRunCalls[0]!.caseId).toBe('sk-case-1');
+    expect(insertRunCalls[0]!.values.pass).toBe(true);
+
+    // Case 2: failed row
+    expect(insertRunCalls[1]!.caseId).toBe('sk-case-2');
+    expect(insertRunCalls[1]!.values.pass).toBeNull();
+    expect((insertRunCalls[1]!.values.actualOutput as { error: string }).error).toBe('LLM error');
+
+    // Case 3: success
+    expect(insertRunCalls[2]!.caseId).toBe('sk-case-3');
+    expect(insertRunCalls[2]!.values.pass).toBe(true);
+
+    // All rows share the same batchId
+    const batchIds = insertRunCalls.map((c) => c.values.batchId);
+    expect(new Set(batchIds).size).toBe(1);
+    expect(batchIds[0]).toBeTruthy();
+
+    // All rows share skill.version in the agentVersion column
+    const agentVersions = insertRunCalls.map((c) => c.values.agentVersion);
+    expect(new Set(agentVersions).size).toBe(1);
+    expect(agentVersions[0]).toBe(BASE_SKILL.version);
+
+    // traces_total = all cases attempted
+    expect(result.traces_total).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (T2-e) injectionDetected: true → single-run AND batch both refuse, zero insertRun
+// ---------------------------------------------------------------------------
+
+describe('(T2-e) injectionDetected skill → eval refused, zero insertRun calls', () => {
+  beforeEach(() => {
+    vi.mocked(harnessModule.runSkillCase).mockReset();
+  });
+
+  it('runCaseOnce with injectionDetected skill → throws ValidationError, zero insertRun', async () => {
+    const evalCase = makeSkillCase(CASE_ID);
+    const injectedSkill = { ...BASE_SKILL, injectionDetected: true };
+
+    const insertRunSpy = vi.fn();
+    const container = makeContainer({
+      getCase: async () => evalCase,
+      skillsRepoGetById: async () => injectedSkill,
+      insertRun: insertRunSpy,
+    });
+
+    await expect(runCaseOnce(container, WS, CASE_ID)).rejects.toThrow(ValidationError);
+    expect(insertRunSpy).not.toHaveBeenCalled();
+    expect(harnessModule.runSkillCase).not.toHaveBeenCalled();
+  });
+
+  it('runSkillBatch with injectionDetected skill → throws ValidationError, zero insertRun', async () => {
+    const case1 = makeSkillCase('inj-case-1');
+    const injectedSkill = { ...BASE_SKILL, injectionDetected: true };
+
+    const insertRunSpy = vi.fn();
+    const container = makeContainer({
+      listCases: async () => [case1],
+      skillsRepoGetById: async () => injectedSkill,
+      insertRun: insertRunSpy,
+    });
+
+    await expect(runSkillBatch(container, WS, SKILL_ID)).rejects.toThrow(ValidationError);
+    expect(insertRunSpy).not.toHaveBeenCalled();
+    expect(harnessModule.runSkillCase).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (T2-f) cross-workspace skill id → 404 on create and run
+// ---------------------------------------------------------------------------
+
+describe('(T2-f) cross-workspace skill id → 404, zero persistence', () => {
+  it('createCase: skill not in workspace → NotFoundError, insertCase not called', async () => {
+    const insertCaseSpy = vi.fn();
+    const container = makeContainer({
+      insertCase: insertCaseSpy,
+      // skillsRepoGetById returns undefined — cross-workspace or missing
+      skillsRepoGetById: async () => undefined,
+    });
+
+    const input = {
+      owner_kind: 'skill' as const,
+      owner_id: 'other-ws-skill-id',
+      name: 'Cross workspace case',
+      input_diff: '',
+      input_files: null,
+      input_meta: null,
+      expected_output: { expectation: 'must_find', regions: [] },
+      notes: null,
+    };
+
+    await expect(createCase(container, WS, input)).rejects.toThrow(NotFoundError);
+    expect(insertCaseSpy).not.toHaveBeenCalled();
+  });
+
+  it('runCaseOnce: skill not in workspace → NotFoundError, insertRun not called', async () => {
+    const evalCase = makeSkillCase(CASE_ID);
+    const insertRunSpy = vi.fn();
+    const container = makeContainer({
+      getCase: async () => evalCase,
+      skillsRepoGetById: async () => undefined, // cross-workspace
+      insertRun: insertRunSpy,
+    });
+
+    await expect(runCaseOnce(container, WS, CASE_ID)).rejects.toThrow(NotFoundError);
+    expect(insertRunSpy).not.toHaveBeenCalled();
+  });
+
+  it('runSkillBatch: skill not in workspace → NotFoundError, insertRun not called', async () => {
+    const case1 = makeSkillCase('xws-case-1');
+    const insertRunSpy = vi.fn();
+    const container = makeContainer({
+      listCases: async () => [case1],
+      skillsRepoGetById: async () => undefined, // cross-workspace
+      insertRun: insertRunSpy,
+    });
+
+    await expect(runSkillBatch(container, WS, SKILL_ID)).rejects.toThrow(NotFoundError);
+    expect(insertRunSpy).not.toHaveBeenCalled();
   });
 });
