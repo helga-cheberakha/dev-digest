@@ -31,6 +31,7 @@ import {
   createCase,
   listCases,
   runBatch,
+  runCaseOnce,
 } from './service.js';
 import { NotFoundError, ValidationError } from '../../platform/errors.js';
 import type { Container } from '../../platform/container.js';
@@ -171,7 +172,7 @@ function makeCase(id: string, overrides: Record<string, unknown> = {}) {
 }
 
 // Mock finding from runCase (empty → scores as pass with no expected regions)
-const MOCK_RUN_OUTPUT = { findings: [], kept: 0, produced: 0 };
+const MOCK_RUN_OUTPUT = { findings: [], kept: 0, produced: 0, costUsd: 0.001 };
 
 // ---------------------------------------------------------------------------
 // Container factory helpers
@@ -676,5 +677,110 @@ describe('listCases', () => {
     expect(result[0]!.latestRun).not.toBeNull();
     expect(result[0]!.latestRun!.pass).toBe(true);
     expect(result[0]!.latestRun!.batchId).toBe('batch-1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (i) runCaseOnce: persists non-null durationMs and costUsd
+// ---------------------------------------------------------------------------
+
+describe('(i) runCaseOnce: persists real durationMs and costUsd', () => {
+  beforeEach(() => {
+    vi.mocked(runModule.runCase).mockReset();
+  });
+
+  it('persists non-null durationMs and the case costUsd on the eval_runs row', async () => {
+    const evalCase = makeCase(CASE_ID);
+
+    // runCase returns a cost value so service.ts can thread it through.
+    vi.mocked(runModule.runCase).mockResolvedValue({
+      findings: [],
+      kept: 0,
+      produced: 0,
+      costUsd: 0.005,
+    });
+
+    const insertRunCalls: Array<{ caseId: string; values: Record<string, unknown> }> = [];
+    const container = makeContainer({
+      getCase: async () => evalCase,
+      getById: async () => BASE_AGENT,
+      linkedSkills: async () => [],
+      insertRun: async (caseId, values) => {
+        insertRunCalls.push({ caseId, values: values as Record<string, unknown> });
+        return { id: `run-${caseId}`, caseId, ...values as object };
+      },
+    });
+
+    const { result } = await runCaseOnce(container, WS, CASE_ID);
+
+    expect(insertRunCalls).toHaveLength(1);
+    const persisted = insertRunCalls[0]!.values;
+
+    // durationMs should be a non-null number (wall-clock time ≥ 0).
+    expect(persisted.durationMs).not.toBeNull();
+    expect(typeof persisted.durationMs).toBe('number');
+    expect(persisted.durationMs as number).toBeGreaterThanOrEqual(0);
+
+    // costUsd should be the value returned by runCase, not null.
+    expect(persisted.costUsd).toBe(0.005);
+
+    // The returned EvalRun must also carry the cost.
+    expect(result.cost_usd).toBe(0.005);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (j) runBatch: cost_usd = sum of per-case costs; null-cost case contributes 0
+// ---------------------------------------------------------------------------
+
+describe('(j) runBatch: cost_usd is sum of per-case costs with null-safe accumulation', () => {
+  beforeEach(() => {
+    vi.mocked(runModule.runCase).mockReset();
+  });
+
+  it('sums per-case costUsd; a null-cost case contributes 0, not NaN', async () => {
+    const case1 = makeCase('cost-case-1');
+    const case2 = makeCase('cost-case-2'); // will error → null cost
+    const case3 = makeCase('cost-case-3');
+
+    vi.mocked(runModule.runCase)
+      .mockResolvedValueOnce({ findings: [], kept: 0, produced: 0, costUsd: 0.010 })
+      .mockRejectedValueOnce(new Error('LLM timeout'))   // case2 errors → costUsd: null
+      .mockResolvedValueOnce({ findings: [], kept: 0, produced: 0, costUsd: 0.020 });
+
+    const container = makeContainer({
+      listCases: async () => [case1, case2, case3],
+      getById: async () => BASE_AGENT,
+      linkedSkills: async () => [],
+    });
+
+    const result = await runBatch(container, WS, AGENT_ID);
+
+    // case1 (0.010) + case2 (error → 0) + case3 (0.020) = 0.030
+    expect(result.cost_usd).toBeCloseTo(0.030, 10);
+    // Sanity: total cases = 3, passed = 2 (case2 errored, not passed).
+    expect(result.traces_total).toBe(3);
+    expect(result.traces_passed).toBe(2);
+  });
+
+  it('returns cost_usd = 0 when all cases error (no successful cost accumulation)', async () => {
+    const case1 = makeCase('err-case-1');
+    const case2 = makeCase('err-case-2');
+
+    vi.mocked(runModule.runCase)
+      .mockRejectedValueOnce(new Error('error A'))
+      .mockRejectedValueOnce(new Error('error B'));
+
+    const container = makeContainer({
+      listCases: async () => [case1, case2],
+      getById: async () => BASE_AGENT,
+      linkedSkills: async () => [],
+    });
+
+    const result = await runBatch(container, WS, AGENT_ID);
+
+    expect(result.cost_usd).toBe(0);
+    expect(result.traces_total).toBe(2);
+    expect(result.traces_passed).toBe(0);
   });
 });

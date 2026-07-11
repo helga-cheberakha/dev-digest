@@ -197,6 +197,19 @@ describe('runCase', () => {
     expect(JSON.stringify(msgs2)).toBe(JSON.stringify(msgs1));
   });
 
+  it('includes costUsd from the mock provider outcome', async () => {
+    // MockLLMProvider.completeStructured returns costUsd: 0.001 per call.
+    // runCase must thread it through from ReviewOutcome to EvalRunOutput.
+    const llm = new MockLLMProvider('openai', { structured: REVIEW_WITH_FINDING });
+    const { container } = makeContainer(llm);
+
+    const result = await runCase(container, AGENT, [], { inputDiff: DIFF });
+
+    expect(result).toHaveProperty('costUsd');
+    // A single-pass review makes exactly one completeStructured call at 0.001 each.
+    expect(result.costUsd).toBe(0.001);
+  });
+
   it('includes skillBodies in the assembled user prompt when provided', async () => {
     const llm = new MockLLMProvider('openai', { structured: EMPTY_REVIEW });
     const { container } = makeContainer(llm);

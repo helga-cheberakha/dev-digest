@@ -6,12 +6,12 @@
 "use client";
 
 import React, { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { AppShell } from "@/components/app-shell";
 import { Skeleton } from "@devdigest/ui";
 import { useAgents } from "@/lib/hooks/agents";
-import { fetchEvalDashboard, runEvalBatch } from "@/lib/api";
+import { fetchEvalDashboard, runEvalBatch, evalQueryKeys } from "@/lib/api";
 import type { Agent } from "@devdigest/shared";
 import { AgentEvalCard } from "./AgentEvalCard";
 
@@ -78,20 +78,26 @@ const s = {
 export function EvalDashboardView() {
   const t = useTranslations("eval");
   const { data: agents, isLoading: agentsLoading } = useAgents();
+  const qc = useQueryClient();
   const [runningAll, setRunningAll] = useState(false);
+  const [runAllError, setRunAllError] = useState<string | null>(null);
 
   // Workspace-level query — used only for recent_runs (per the analytics contract,
   // current/delta/trend are zeroed for the null-owner case; recent_runs IS populated).
   const { data: workspaceDash } = useQuery({
-    queryKey: ["eval-dashboard-workspace"],
+    queryKey: evalQueryKeys.dashboard(),
     queryFn: () => fetchEvalDashboard(),
   });
 
   async function handleRunAll() {
     if (!agents?.length || runningAll) return;
     setRunningAll(true);
+    setRunAllError(null);
     try {
       await Promise.all(agents.map((a: Agent) => runEvalBatch(a.id)));
+      void qc.invalidateQueries({ queryKey: ["eval-dashboard"] });
+    } catch (err) {
+      setRunAllError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
       setRunningAll(false);
     }
@@ -121,6 +127,24 @@ export function EvalDashboardView() {
             {runningAll ? t("dashboard.running") : t("dashboard.runAll")}
           </button>
         </div>
+
+        {/* Run-all error */}
+        {runAllError && (
+          <div
+            role="alert"
+            style={{
+              color: "var(--crit)",
+              fontSize: 13,
+              marginBottom: 12,
+              padding: "8px 12px",
+              borderRadius: 6,
+              border: "1px solid var(--crit)",
+              background: "var(--crit-bg, transparent)",
+            }}
+          >
+            {runAllError}
+          </div>
+        )}
 
         {/* Per-agent cards */}
         {agentsLoading ? (

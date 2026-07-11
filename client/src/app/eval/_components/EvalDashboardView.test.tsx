@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NextIntlClientProvider } from "next-intl";
 import type { EvalDashboard } from "@devdigest/shared";
@@ -46,6 +46,12 @@ vi.mock("@/lib/hooks/agents", () => ({
 vi.mock("@/lib/api", () => ({
   fetchEvalDashboard: vi.fn(),
   runEvalBatch: vi.fn(),
+  evalQueryKeys: {
+    cases: (agentId: string) => ["eval-cases", agentId],
+    batches: (agentId: string) => ["eval-batches", agentId],
+    compare: (agentId: string, a: string, b: string) => ["eval-compare", agentId, a, b],
+    dashboard: (agentId?: string) => ["eval-dashboard", agentId],
+  },
 }));
 
 import { useAgents } from "@/lib/hooks/agents";
@@ -128,6 +134,16 @@ function makeQueryClient() {
 function renderWithProviders(ui: React.ReactElement) {
   return render(
     <QueryClientProvider client={makeQueryClient()}>
+      <NextIntlClientProvider locale="en" messages={{ eval: messages }}>
+        {ui}
+      </NextIntlClientProvider>
+    </QueryClientProvider>,
+  );
+}
+
+function renderWithClient(ui: React.ReactElement, qc: QueryClient) {
+  return render(
+    <QueryClientProvider client={qc}>
       <NextIntlClientProvider locale="en" messages={{ eval: messages }}>
         {ui}
       </NextIntlClientProvider>
@@ -245,6 +261,37 @@ describe("EvalDashboardView", () => {
     ).toBeInTheDocument();
     // rendered as role="alert"
     expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+
+  it("clicking 'Run all' invalidates eval-dashboard queries on success", async () => {
+    const qc = makeQueryClient();
+    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+    renderWithClient(<EvalDashboardView />, qc);
+
+    // Wait for agents to appear (agents hook resolves synchronously in mock,
+    // but query for workspace dashboard is async — wait for card names)
+    await screen.findByText("Security Reviewer");
+
+    fireEvent.click(screen.getByRole("button", { name: /run all agents/i }));
+
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: ["eval-dashboard"] }),
+      );
+    });
+  });
+
+  it("clicking 'Run all' surfaces error state when runEvalBatch rejects", async () => {
+    vi.mocked(runEvalBatch).mockRejectedValue(new Error("network error"));
+
+    renderWithProviders(<EvalDashboardView />);
+
+    await screen.findByText("Security Reviewer");
+
+    fireEvent.click(screen.getByRole("button", { name: /run all agents/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("network error");
   });
 
   it("renders workspace recent_runs table rows when data is populated", async () => {

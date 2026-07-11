@@ -28,6 +28,11 @@ export interface EvalRunOutput {
   kept: number;
   /** Total findings before grounding: kept + dropped. */
   produced: number;
+  /**
+   * Cost of this run in USD as reported by the LLM provider.
+   * Null when any chunk in the run lacked cost information (conservative).
+   */
+  costUsd: number | null;
 }
 
 /**
@@ -76,6 +81,7 @@ export async function runCase(
   const findings = outcome.review.findings;
   const kept = findings.length;
   const produced = kept + outcome.dropped.length;
+  const costUsd = outcome.costUsd;
 
-  return { findings, kept, produced };
+  return { findings, kept, produced, costUsd };
 }

@@ -6,7 +6,7 @@ import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
-import { fetchEvalDashboard } from "@/lib/api";
+import { fetchEvalDashboard, evalQueryKeys } from "@/lib/api";
 import type { Agent } from "@devdigest/shared";
 
 // ---------------------------------------------------------------------------
@@ -67,7 +67,7 @@ export function AgentEvalCard({ agent }: Props) {
   const t = useTranslations("eval");
 
   const { data, isLoading } = useQuery({
-    queryKey: ["eval-dashboard", agent.id],
+    queryKey: evalQueryKeys.dashboard(agent.id),
     queryFn: () => fetchEvalDashboard(agent.id),
   });
 

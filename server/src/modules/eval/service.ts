@@ -214,7 +214,9 @@ export async function runCaseOnce(
 
   const batchId = randomUUID();
 
+  const t0 = Date.now();
   const output = await runCase(container, agent, skillBodies, { inputDiff: evalCase.inputDiff });
+  const durationMs = Date.now() - t0;
 
   const { expectation, expectedRegions } = _parseExpected(evalCase.expectedOutput);
 
@@ -227,7 +229,11 @@ export async function runCaseOnce(
     expected: expectedRegions,
     actual: actualRegions,
   };
-  const result = scoring.aggregate([aggCase], { kept: output.kept, produced: output.produced });
+  const result = scoring.aggregate(
+    [aggCase],
+    { kept: output.kept, produced: output.produced },
+    { durationMs, costUsd: output.costUsd },
+  );
 
   const row = await container.evalRepo.insertRun(caseId, {
     batchId,
@@ -236,8 +242,8 @@ export async function runCaseOnce(
     recall: result.recall,
     precision: result.precision,
     citationAccuracy: result.citation_accuracy,
-    durationMs: null,
-    costUsd: null,
+    durationMs,
+    costUsd: output.costUsd,
     actualOutput: _buildActualOutput(output.findings, output.kept, output.produced),
   });
 
@@ -285,12 +291,17 @@ export async function runBatch(
   const successCases: AggregateCase[] = [];
   let totalKept = 0;
   let totalProduced = 0;
+  // Accumulated cost across all cases: null-cost cases contribute 0 to the sum.
+  let batchCostUsd = 0;
+  const batchStart = Date.now();
 
   for (const evalCase of cases) {
     try {
+      const caseStart = Date.now();
       const output = await runCase(container, agent, skillBodies, {
         inputDiff: evalCase.inputDiff,
       });
+      const caseDurationMs = Date.now() - caseStart;
 
       const { expectation, expectedRegions } = _parseExpected(evalCase.expectedOutput);
       const actualRegions = _findingsToRegions(output.findings);
@@ -316,17 +327,20 @@ export async function runBatch(
         recall: perCaseResult.recall,
         precision: perCaseResult.precision,
         citationAccuracy: perCaseResult.citation_accuracy,
-        durationMs: null,
-        costUsd: null,
+        durationMs: caseDurationMs,
+        costUsd: output.costUsd,
         actualOutput: _buildActualOutput(output.findings, output.kept, output.produced),
       });
 
       // Accumulate for the pooled batch aggregate.
+      // Null cost from any case contributes 0 (not NaN) to the batch total.
+      batchCostUsd += output.costUsd ?? 0;
       successCases.push(aggCase);
       totalKept += output.kept;
       totalProduced += output.produced;
     } catch (err) {
       // Per-case failure: persist a failed row and continue.
+      // Errored cases contribute 0 cost to the batch total (no accumulation here).
       const errMsg = err instanceof Error ? err.message : String(err);
       await container.evalRepo.insertRun(evalCase.id, {
         batchId,
@@ -349,7 +363,11 @@ export async function runBatch(
   // Pooled aggregate over successfully-scored cases only.
   // recall/precision/citation_accuracy are pooled purely over the cases that scored —
   // errored cases have no valid findings data to contribute to that math.
-  const batchResult = scoring.aggregate(successCases, { kept: totalKept, produced: totalProduced });
+  const batchResult = scoring.aggregate(
+    successCases,
+    { kept: totalKept, produced: totalProduced },
+    { durationMs: Date.now() - batchStart, costUsd: batchCostUsd },
+  );
 
   // AC-6: traces_total must equal ALL cases attempted in the batch (including per-case
   // LLM errors persisted with pass: null), not just the successfully-scored ones.
