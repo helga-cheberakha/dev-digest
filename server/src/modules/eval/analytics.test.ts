@@ -38,6 +38,7 @@ function makeAggRunRow(overrides: {
   grounding?: { kept: number; produced: number };
   expectation?: 'must_find' | 'must_not_flag';
   expectedRegions?: Array<{ file: string; start_line: number; end_line: number }>;
+  costUsd?: number | null;
 }) {
   return {
     batchId: overrides.batchId,
@@ -53,6 +54,7 @@ function makeAggRunRow(overrides: {
       expectation: overrides.expectation ?? 'must_find',
       regions: overrides.expectedRegions ?? [],
     },
+    costUsd: overrides.costUsd ?? null,
   };
 }
 
@@ -143,6 +145,7 @@ describe('EvalAnalytics.compare', () => {
       grounding: { kept: 2, produced: 4 }, // citation = 2/4 = 0.5
       expectation: 'must_find',
       expectedRegions: [region(1), region(2)], // 2 expected; 1 matched
+      costUsd: 0.01,
     });
 
     // BatchB: 5 expected regions, 4 matched → recall=0.8; grounding kept=4, produced=5 → citation=0.8
@@ -155,6 +158,7 @@ describe('EvalAnalytics.compare', () => {
       grounding: { kept: 4, produced: 5 },                        // citation = 4/5 = 0.8
       expectation: 'must_find',
       expectedRegions: [region(1), region(2), region(3), region(4), region(5)], // 5 expected; 4 matched
+      costUsd: 0.025,
     });
 
     const container = makeContainer(
@@ -181,6 +185,8 @@ describe('EvalAnalytics.compare', () => {
     expect(result.delta.recall).toBeCloseTo(0.3, 10);
     expect(result.delta.precision).toBeCloseTo(0.0, 10);    // both precision=1.0 (all actuals match)
     expect(result.delta.citation_accuracy).toBeCloseTo(0.3, 10);
+    // cost delta = b − a = 0.025 − 0.01
+    expect(result.delta.cost_usd).toBeCloseTo(0.015, 10);
 
     // Both prompt versions must be present in prompt_diff
     expect((result.prompt_diff as { old: string; new: string }).old).toBe('System prompt v1');
@@ -242,7 +248,7 @@ describe('EvalAnalytics.dashboard — floor-warning', () => {
     });
 
     const analytics = new EvalAnalytics(container);
-    const dash = await analytics.dashboard('ws', 'agent-id');
+    const dash = await analytics.dashboard('ws', 'agent', 'agent-id');
 
     expect(dash.alert).toBe(
       'Only 7 eval cases — add more for reliable regression detection (recommended minimum: 8).',
@@ -287,7 +293,7 @@ describe('EvalAnalytics.dashboard — regression alert', () => {
     });
 
     const analytics = new EvalAnalytics(container);
-    const dash = await analytics.dashboard('ws', 'agent-id');
+    const dash = await analytics.dashboard('ws', 'agent', 'agent-id');
 
     expect(dash.alert).toBe(
       "Regression: case 'Case 5' no longer finds the expected issue.",
@@ -325,7 +331,7 @@ describe('EvalAnalytics.dashboard — regression alert', () => {
     });
 
     const analytics = new EvalAnalytics(container);
-    const dash = await analytics.dashboard('ws', 'agent-id');
+    const dash = await analytics.dashboard('ws', 'agent', 'agent-id');
 
     expect(dash.alert).toBe(
       "New false positive: case 'False-positive guard' now flags a finding it previously didn't.",
@@ -376,7 +382,7 @@ describe('EvalAnalytics.dashboard — tie-breaking (alphabetical-first case)', (
     });
 
     const analytics = new EvalAnalytics(container);
-    const dash = await analytics.dashboard('ws', 'agent-id');
+    const dash = await analytics.dashboard('ws', 'agent', 'agent-id');
 
     // "Alpha Case" < "Zebra Case" alphabetically; and it's must_not_flag
     expect(dash.alert).toBe(
@@ -401,7 +407,7 @@ describe('EvalAnalytics.dashboard — single batch', () => {
     });
 
     const analytics = new EvalAnalytics(container);
-    const dash = await analytics.dashboard('ws', 'agent-id');
+    const dash = await analytics.dashboard('ws', 'agent', 'agent-id');
 
     // Fewer than 2 batches → step a/b skipped; 8 cases → step c doesn't fire
     expect(dash.alert).toBeNull();
@@ -416,7 +422,7 @@ describe('EvalAnalytics.dashboard — single batch', () => {
     });
 
     const analytics = new EvalAnalytics(container);
-    const dash = await analytics.dashboard('ws', 'agent-id');
+    const dash = await analytics.dashboard('ws', 'agent', 'agent-id');
 
     expect(dash.alert).toBeNull();
   });
@@ -570,6 +576,37 @@ describe('EvalAnalytics.history', () => {
     // recall = 2/2 = 1.0 (not affected by the errored run's expected region)
     expect(batch.recall).toBeCloseTo(1.0, 10);
   });
+
+  it('cost_usd sums per-run costUsd across the batch; a null-cost run contributes 0', async () => {
+    const runWithCost = makeAggRunRow({
+      batchId: 'b-cost',
+      ranAt: new Date('2024-01-01T00:00:00Z'),
+      costUsd: 0.012,
+    });
+    // A run with no recorded cost (e.g. an older row, or an errored case) — costUsd null.
+    const runWithoutCost = {
+      ...makeAggRunRow({ batchId: 'b-cost', ranAt: new Date('2024-01-01T00:00:01Z') }),
+      costUsd: null,
+    };
+    const anotherRunWithCost = makeAggRunRow({
+      batchId: 'b-cost',
+      ranAt: new Date('2024-01-01T00:00:02Z'),
+      costUsd: 0.008,
+    });
+
+    const container = makeContainer({
+      batchRunsWithExpectedForOwner: vi
+        .fn()
+        .mockResolvedValue([runWithCost, runWithoutCost, anotherRunWithCost]),
+    });
+
+    const analytics = new EvalAnalytics(container);
+    const result = await analytics.history('ws', 'agent-id');
+
+    expect(result).toHaveLength(1);
+    // 0.012 + 0 (null) + 0.008 = 0.02
+    expect(result[0]!.cost_usd).toBeCloseTo(0.02, 10);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -589,7 +626,7 @@ describe('EvalAnalytics.dashboard — shape', () => {
     });
 
     const analytics = new EvalAnalytics(container);
-    const dash = await analytics.dashboard('ws', 'my-agent');
+    const dash = await analytics.dashboard('ws', 'agent', 'my-agent');
 
     expect(dash.owner_kind).toBe('agent');
     expect(dash.owner_id).toBe('my-agent');
@@ -618,7 +655,7 @@ describe('EvalAnalytics.dashboard — shape', () => {
     });
 
     const analytics = new EvalAnalytics(container);
-    const dash = await analytics.dashboard('ws', 'a');
+    const dash = await analytics.dashboard('ws', 'agent', 'a');
 
     // trend must be oldest-first
     expect(dash.trend[0]!.ran_at).toBe('2024-01-01T00:00:00.000Z');
@@ -644,12 +681,61 @@ describe('EvalAnalytics.dashboard — shape', () => {
     });
 
     const analytics = new EvalAnalytics(container);
-    const dash = await analytics.dashboard('ws', null);
+    const dash = await analytics.dashboard('ws', 'agent', null);
 
     expect(dash.owner_kind).toBeNull();
     expect(dash.owner_id).toBeNull();
     expect(dash.alert).toBeNull();
     expect(dash.recent_runs).toHaveLength(1);
     expect(dash.recent_runs[0]!.case_id).toBe('c-1');
+  });
+
+  it('skill dashboard: sets owner_kind="skill", owner_id, and computes metrics via aggregateRunRows', async () => {
+    const skillId = 'skill-123';
+    // One batch: 1 expected region, 1 matched → recall=1.0; grounding kept=1, produced=1 → citation=1.0
+    const batchRows = [
+      makeAggRunRow({
+        batchId: 'b-skill',
+        ranAt: new Date('2024-03-01T00:00:00Z'),
+        agentVersion: null,
+        pass: true,
+        findings: [finding(5)],
+        grounding: { kept: 1, produced: 1 },
+        expectation: 'must_find',
+        expectedRegions: [region(5)],
+        costUsd: 0.005,
+      }),
+    ];
+    const cases = Array.from({ length: 10 }, (_, i) => makeCaseRow(`sc-${i}`, `Skill Case ${i}`));
+
+    const container = makeContainer({
+      batchRunsWithExpectedForOwner: vi.fn().mockResolvedValue(batchRows),
+      listCases: vi.fn().mockResolvedValue(cases),
+    });
+
+    const analytics = new EvalAnalytics(container);
+    const dash = await analytics.dashboard('ws', 'skill', skillId);
+
+    // owner_kind must reflect the skill owner
+    expect(dash.owner_kind).toBe('skill');
+    expect(dash.owner_id).toBe(skillId);
+    expect(dash.recent_runs).toEqual([]);
+    expect(dash.cases_total).toBe(10);
+
+    // Metrics computed via aggregateRunRows — same path as agent dashboard
+    // 1 expected region matched → recall=1.0, precision=1.0, citation=1.0
+    expect(dash.current.recall).toBeCloseTo(1.0, 10);
+    expect(dash.current.precision).toBeCloseTo(1.0, 10);
+    expect(dash.current.citation_accuracy).toBeCloseTo(1.0, 10);
+    expect(dash.current.traces_passed).toBe(1);
+    expect(dash.current.traces_total).toBe(1);
+    expect(dash.current.cost_usd).toBeCloseTo(0.005, 10);
+
+    // ≥8 cases, no regression → no alert
+    expect(dash.alert).toBeNull();
+
+    // trend has one entry (chronological, oldest-first = same entry)
+    expect(dash.trend).toHaveLength(1);
+    expect(dash.trend[0]!.ran_at).toBe('2024-03-01T00:00:00.000Z');
   });
 });

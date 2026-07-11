@@ -159,5 +159,31 @@
     "bodyLabel": "Skill body (Markdown)",
     "bodyHint": "Saving a changed body creates a new immutable version.",
     "version": "v{version}"
+  },
+  "evals": {
+    "metricsTitle": "Eval metrics",
+    "tiles": {
+      "recall": "RECALL",
+      "precision": "PRECISION",
+      "citationAccuracy": "CITATION ACCURACY",
+      "tracesPassed": "TRACES PASSED"
+    },
+    "casesHeading": "Eval cases",
+    "passingCount": "{passed}/{total} passing",
+    "newCase": "New eval case",
+    "runAll": "Run all evals",
+    "running": "Running…",
+    "batchResult": "Recall {recall}% · Precision {precision}% · Citation {citation}%",
+    "passed": "passed",
+    "failed": "failed",
+    "neverRun": "never run",
+    "emptyCases": "No eval cases yet. Create one to assert expected findings on a sample diff.",
+    "expectedGot": "expected {expected, plural, one {# finding} other {# findings}}, got {got}",
+    "expectedOnly": "expected {expected, plural, one {# finding} other {# findings}}",
+    "emptyExpectation": "empty []",
+    "runCaseLabel": "Run case",
+    "editCaseLabel": "Edit case",
+    "deleteCaseLabel": "Delete case",
+    "deleteConfirm": "Delete eval case \"{name}\"? This cannot be undone."
   }
 }

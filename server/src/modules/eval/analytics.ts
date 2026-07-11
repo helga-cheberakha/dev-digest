@@ -73,6 +73,10 @@ function aggregateRunRows(runRows: AggRunRow[]): EvalRunBatch[] {
     const agentVersion = runs[0]!.agentVersion ?? null;
     let tracesPassed = 0;
     let tracesTotal = 0;
+    // Sum of per-run cost_usd across the whole batch (success AND errored runs) —
+    // mirrors the live-run accumulation in `service.runBatch` (`batchCostUsd += costUsd ?? 0`),
+    // so reading a batch back here reproduces exactly the cost total the run returned.
+    let totalCostUsd = 0;
 
     // Pooled aggregation accumulators (successful runs only)
     const aggregateCases: AggregateCase[] = [];
@@ -88,6 +92,7 @@ function aggregateRunRows(runRows: AggRunRow[]): EvalRunBatch[] {
 
       tracesTotal++;
       if (run.pass === true) tracesPassed++;
+      totalCostUsd += run.costUsd ?? 0;
 
       // Skip errored runs for pooled metric computation (pass: null = error).
       // This matches `runBatch`'s `successCases`-only accumulation.
@@ -135,6 +140,7 @@ function aggregateRunRows(runRows: AggRunRow[]): EvalRunBatch[] {
       citation_accuracy: result.citation_accuracy,
       traces_passed: tracesPassed,
       traces_total: tracesTotal,
+      cost_usd: totalCostUsd,
     });
   }
 
@@ -182,12 +188,13 @@ function recentRunRowToRecord(row: RecentRunRow): EvalRunRecord {
 async function resolveAlert(
   container: Container,
   workspaceId: string,
+  ownerKind: 'agent' | 'skill',
   ownerId: string,
   batches: EvalRunBatch[],
 ): Promise<string | null> {
   // Fetch cases once — needed both for the expectation-type lookup in step 1
   // and the count check in step 2.
-  const cases = await container.evalRepo.listCases(workspaceId, 'agent', ownerId);
+  const cases = await container.evalRepo.listCases(workspaceId, ownerKind, ownerId);
 
   // Step 1: take the two most recent batches (batches is newest-first)
   const [newest, second] = batches;
@@ -313,6 +320,7 @@ export class EvalAnalytics {
         recall: batchB.recall - batchA.recall,
         precision: batchB.precision - batchA.precision,
         citation_accuracy: batchB.citation_accuracy - batchA.citation_accuracy,
+        cost_usd: batchB.cost_usd - batchA.cost_usd,
       },
     };
   }
@@ -326,9 +334,13 @@ export class EvalAnalytics {
    * - Workspace-level: workspace-wide `recent_runs`, zero-value current/delta
    *   (no single owner to aggregate), and `alert: null`.
    */
-  async dashboard(workspaceId: string, ownerId: string | null): Promise<EvalDashboard> {
+  async dashboard(
+    workspaceId: string,
+    ownerKind: 'agent' | 'skill',
+    ownerId: string | null,
+  ): Promise<EvalDashboard> {
     if (ownerId !== null) {
-      return this._agentDashboard(workspaceId, ownerId);
+      return this._ownerDashboard(workspaceId, ownerKind, ownerId);
     }
     return this._workspaceDashboard(workspaceId);
   }
@@ -337,15 +349,19 @@ export class EvalAnalytics {
   // Private implementation
   // ---------------------------------------------------------------------------
 
-  private async _agentDashboard(workspaceId: string, agentId: string): Promise<EvalDashboard> {
+  private async _ownerDashboard(
+    workspaceId: string,
+    ownerKind: 'agent' | 'skill',
+    ownerId: string,
+  ): Promise<EvalDashboard> {
     // Fetch batches and cases in parallel; alert resolution happens after batches
     // are known (it may fetch runsForBatch internally for regression detection).
     const [batches, cases] = await Promise.all([
-      this.history(workspaceId, agentId),
-      this.container.evalRepo.listCases(workspaceId, 'agent', agentId),
+      this.history(workspaceId, ownerId),
+      this.container.evalRepo.listCases(workspaceId, ownerKind, ownerId),
     ]);
 
-    const alert = await resolveAlert(this.container, workspaceId, agentId, batches);
+    const alert = await resolveAlert(this.container, workspaceId, ownerKind, ownerId, batches);
 
     const current = batches[0];
     const prev = batches[1];
@@ -357,12 +373,12 @@ export class EvalAnalytics {
       precision: b.precision,
       citation_accuracy: b.citation_accuracy,
       pass_rate: b.traces_total > 0 ? b.traces_passed / b.traces_total : 1,
-      cost_usd: null,
+      cost_usd: b.cost_usd,
     }));
 
     return {
-      owner_kind: 'agent',
-      owner_id: agentId,
+      owner_kind: ownerKind,
+      owner_id: ownerId,
       cases_total: cases.length,
       current: {
         recall: current?.recall ?? 0,
@@ -370,7 +386,7 @@ export class EvalAnalytics {
         citation_accuracy: current?.citation_accuracy ?? 0,
         traces_passed: current?.traces_passed ?? 0,
         traces_total: current?.traces_total ?? 0,
-        cost_usd: null,
+        cost_usd: current?.cost_usd ?? null,
       },
       delta: {
         recall: current && prev ? current.recall - prev.recall : 0,

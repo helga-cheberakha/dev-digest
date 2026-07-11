@@ -140,6 +140,9 @@ export const evalQueryKeys = {
   compare: (agentId: string, a: string, b: string) =>
     ["eval-compare", agentId, a, b] as const,
   dashboard: (agentId?: string) => ["eval-dashboard", agentId] as const,
+  skillCases: (skillId: string) => ["eval-cases", "skill", skillId] as const,
+  skillDashboard: (skillId: string) =>
+    ["eval-dashboard", "skill", skillId] as const,
 } as const;
 
 /**
@@ -171,6 +174,11 @@ export async function createEvalCase(input: EvalCaseInput): Promise<EvalCase> {
 /** List all eval cases for an agent, each augmented with the latest run outcome. */
 export async function fetchEvalCases(agentId: string): Promise<EvalCaseListItem[]> {
   return api.get<EvalCaseListItem[]>(`/agents/${agentId}/eval-cases`);
+}
+
+/** Delete an eval case (and its run history, cascaded server-side). */
+export async function deleteEvalCase(caseId: string): Promise<void> {
+  return api.del<void>(`/eval-cases/${caseId}`);
 }
 
 /**
@@ -215,6 +223,33 @@ export async function fetchEvalCompare(
 export async function fetchEvalDashboard(agentId?: string): Promise<EvalDashboard> {
   const qs = agentId ? `?agentId=${encodeURIComponent(agentId)}` : "";
   return api.get<EvalDashboard>(`/eval/dashboard${qs}`);
+}
+
+/** List all eval cases for a skill, each augmented with the latest run outcome. */
+export async function fetchSkillEvalCases(
+  skillId: string,
+): Promise<EvalCaseListItem[]> {
+  return api.get<EvalCaseListItem[]>(`/skills/${skillId}/eval-cases`);
+}
+
+/**
+ * Run all eval cases for a skill as a batch.
+ *
+ * Sends `{}` so Fastify sets `application/json` on the body-schema route.
+ */
+export async function runSkillEvalBatch(skillId: string): Promise<EvalRun> {
+  return api.post<EvalRun>(`/skills/${skillId}/eval-runs`, {});
+}
+
+/**
+ * Fetch the eval dashboard aggregate scoped to a single skill.
+ */
+export async function fetchSkillEvalDashboard(
+  skillId: string,
+): Promise<EvalDashboard> {
+  return api.get<EvalDashboard>(
+    `/eval/dashboard?skillId=${encodeURIComponent(skillId)}`,
+  );
 }
 
 /**
