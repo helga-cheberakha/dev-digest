@@ -57,6 +57,24 @@ export class EvalRepository {
   }
 
   /**
+   * Delete an eval case, scoped by workspace. `eval_runs` rows referencing
+   * this case cascade-delete via the FK (schema `onDelete: 'cascade'`).
+   * Returns true if a row was deleted, false if no matching case existed.
+   */
+  async deleteCase(workspaceId: string, caseId: string): Promise<boolean> {
+    const deleted = await this.db
+      .delete(t.evalCases)
+      .where(
+        and(
+          eq(t.evalCases.workspaceId, workspaceId),
+          eq(t.evalCases.id, caseId),
+        ),
+      )
+      .returning({ id: t.evalCases.id });
+    return deleted.length > 0;
+  }
+
+  /**
    * Insert a new eval run row and return the persisted row.
    * The caller is responsible for passing `batchId` and `agentVersion` —
    * the repository does not invent them.
@@ -207,6 +225,7 @@ export class EvalRepository {
         caseName: t.evalCases.name,
         actualOutput: t.evalRuns.actualOutput,
         expectedOutput: t.evalCases.expectedOutput,
+        costUsd: t.evalRuns.costUsd,
       })
       .from(t.evalRuns)
       .innerJoin(t.evalCases, eq(t.evalRuns.caseId, t.evalCases.id))
