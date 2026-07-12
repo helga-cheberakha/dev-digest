@@ -606,7 +606,8 @@ export async function runSkillBenchmark(
   let baselineTotalProduced = 0;
   let candidateCostUsd = 0;
   let baselineCostUsd = 0;
-  const benchmarkStart = Date.now();
+  let candidateDurationMs = 0;
+  let baselineDurationMs = 0;
 
   const perCase: EvalBenchmarkCaseResult[] = [];
 
@@ -658,6 +659,7 @@ export async function runSkillBenchmark(
       candidatePass = caseScore.pass;
       candidateSuccessCases.push(aggCase);
       candidateCostUsd += candidateOutput.costUsd ?? 0;
+      candidateDurationMs += caseDurationMs;
       candidateTotalKept += candidateOutput.kept;
       candidateTotalProduced += candidateOutput.produced;
     } catch (err) {
@@ -684,9 +686,11 @@ export async function runSkillBenchmark(
 
     // ---- Baseline arm (NEVER persisted — AC-23) ----
     try {
+      const baselineStart = Date.now();
       const baselineOutput = await harness.runSkillBaselineCase(container, {
         inputDiff: evalCase.inputDiff,
       });
+      const baselineCaseDurationMs = Date.now() - baselineStart;
 
       const actualRegions = _findingsToRegions(baselineOutput.findings);
       const caseScore = scoring.scoreCase({ expectation, expectedRegions, actualRegions });
@@ -700,6 +704,7 @@ export async function runSkillBenchmark(
       baselinePass = caseScore.pass;
       baselineSuccessCases.push(aggCase);
       baselineCostUsd += baselineOutput.costUsd ?? 0;
+      baselineDurationMs += baselineCaseDurationMs;
       baselineTotalKept += baselineOutput.kept;
       baselineTotalProduced += baselineOutput.produced;
     } catch {
@@ -715,19 +720,18 @@ export async function runSkillBenchmark(
     });
   }
 
-  // Pooled aggregates over successfully-scored cases only.
-  const benchmarkDurationMs = Date.now() - benchmarkStart;
-
+  // Pooled aggregates over successfully-scored cases only — each arm's duration_ms is its own
+  // accumulated per-case wall-clock time, not the combined candidate+baseline loop time.
   const candidateResult = scoring.aggregate(
     candidateSuccessCases,
     { kept: candidateTotalKept, produced: candidateTotalProduced },
-    { durationMs: benchmarkDurationMs, costUsd: candidateCostUsd },
+    { durationMs: candidateDurationMs, costUsd: candidateCostUsd },
   );
 
   const baselineResult = scoring.aggregate(
     baselineSuccessCases,
     { kept: baselineTotalKept, produced: baselineTotalProduced },
-    { costUsd: baselineCostUsd },
+    { durationMs: baselineDurationMs, costUsd: baselineCostUsd },
   );
 
   // traces_total must equal ALL cases attempted (including per-case errors),

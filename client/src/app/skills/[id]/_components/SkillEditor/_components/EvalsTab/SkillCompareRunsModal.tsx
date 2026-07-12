@@ -108,9 +108,12 @@ export function SkillCompareRunsModal({ skillId, casesTotal, oldBatch, newBatch,
   const oldV = oldBatch.agent_version;
   const newV = newBatch.agent_version;
 
-  const promptDiff = data?.prompt_diff as { old: string | null; new: string | null } | null;
+  // prompt_diff is z.unknown() on the wire (shared with the agent-side EvalCompare) — guard with
+  // real runtime checks rather than a bare cast, so an unexpected shape falls through to the
+  // "no body" message instead of throwing inside highlightAdditions mid-render.
+  const promptDiff = data?.prompt_diff as { old?: unknown; new?: unknown } | null | undefined;
   const diffLines =
-    promptDiff?.old != null && promptDiff?.new != null
+    typeof promptDiff?.old === "string" && typeof promptDiff?.new === "string"
       ? highlightAdditions(promptDiff.old, promptDiff.new)
       : null;
 
