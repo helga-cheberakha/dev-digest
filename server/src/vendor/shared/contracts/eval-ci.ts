@@ -366,6 +366,28 @@ export const EvalCompare = z.object({
 });
 export type EvalCompare = z.infer<typeof EvalCompare>;
 
+/** Per-case pass/fail breakdown for a benchmark comparison (candidate vs baseline). */
+export const EvalBenchmarkCaseResult = z.object({
+  case_id: z.string(),
+  case_name: z.string(),
+  candidate_pass: z.boolean().nullable(),
+  baseline_pass: z.boolean().nullable(),
+});
+export type EvalBenchmarkCaseResult = z.infer<typeof EvalBenchmarkCaseResult>;
+
+/** Benchmark result: candidate run vs baseline run, metric delta, per-case breakdown. */
+export const EvalBenchmark = z.object({
+  candidate: EvalRun,
+  baseline: EvalRun,
+  delta: z.object({
+    recall: z.number(),
+    precision: z.number(),
+    citation_accuracy: z.number(),
+  }),
+  per_case: z.array(EvalBenchmarkCaseResult),
+});
+export type EvalBenchmark = z.infer<typeof EvalBenchmark>;
+
 // ===========================================================================
 // Eval — case list item (case + latest run outcome, for UI badges)
 // ===========================================================================

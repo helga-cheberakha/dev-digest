@@ -94,9 +94,14 @@ type MockAgentsRepo = {
   getVersion: ReturnType<typeof vi.fn>;
 };
 
+type MockSkillsRepo = {
+  getVersion: ReturnType<typeof vi.fn>;
+};
+
 function makeContainer(
   evalRepo: Partial<MockEvalRepo> = {},
   agentsRepo: Partial<MockAgentsRepo> = {},
+  skillsRepo: Partial<MockSkillsRepo> = {},
 ): Container {
   const repo: MockEvalRepo = {
     batchRunsWithExpectedForOwner:
@@ -108,7 +113,10 @@ function makeContainer(
   const agents: MockAgentsRepo = {
     getVersion: agentsRepo.getVersion ?? vi.fn().mockResolvedValue(undefined),
   };
-  return { evalRepo: repo, agentsRepo: agents } as unknown as Container;
+  const skills: MockSkillsRepo = {
+    getVersion: skillsRepo.getVersion ?? vi.fn().mockResolvedValue(undefined),
+  };
+  return { evalRepo: repo, agentsRepo: agents, skillsRepo: skills } as unknown as Container;
 }
 
 // ---------------------------------------------------------------------------
@@ -425,6 +433,155 @@ describe('EvalAnalytics.dashboard — single batch', () => {
     const dash = await analytics.dashboard('ws', 'agent', 'agent-id');
 
     expect(dash.alert).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// compareSkill — skill body diff and delta
+// ---------------------------------------------------------------------------
+
+describe('EvalAnalytics.compareSkill', () => {
+  it('returns prompt_diff with both body texts and correct delta', async () => {
+    const rowA = makeAggRunRow({
+      batchId: 'batch-a',
+      ranAt: new Date('2024-01-01T00:00:00Z'),
+      agentVersion: 1,
+      pass: true,
+      findings: [finding(1)],
+      grounding: { kept: 2, produced: 4 },
+      expectation: 'must_find',
+      expectedRegions: [region(1), region(2)],
+      costUsd: 0.01,
+    });
+
+    const rowB = makeAggRunRow({
+      batchId: 'batch-b',
+      ranAt: new Date('2024-01-02T00:00:00Z'),
+      agentVersion: 2,
+      pass: true,
+      findings: [finding(1), finding(2), finding(3), finding(4)],
+      grounding: { kept: 4, produced: 5 },
+      expectation: 'must_find',
+      expectedRegions: [region(1), region(2), region(3), region(4), region(5)],
+      costUsd: 0.025,
+    });
+
+    const agentsGetVersion = vi.fn();
+    const container = makeContainer(
+      {
+        batchRunsWithExpectedForOwner: vi.fn().mockResolvedValue([rowA, rowB]),
+      },
+      { getVersion: agentsGetVersion },
+      {
+        getVersion: vi.fn().mockImplementation(async (_skillId: string, version: number) => ({
+          skillId: 'skill-1',
+          version,
+          body: version === 1 ? 'Skill body v1' : 'Skill body v2',
+          message: null,
+          createdAt: new Date(),
+        })),
+      },
+    );
+
+    const analytics = new EvalAnalytics(container);
+    const result = await analytics.compareSkill('ws', 'skill-1', 'batch-a', 'batch-b');
+
+    expect(result.a.batch_id).toBe('batch-a');
+    expect(result.b.batch_id).toBe('batch-b');
+
+    // prompt_diff uses skill body text
+    expect((result.prompt_diff as { old: string; new: string }).old).toBe('Skill body v1');
+    expect((result.prompt_diff as { old: string; new: string }).new).toBe('Skill body v2');
+
+    // delta = b − a
+    expect(result.delta.recall).toBeCloseTo(0.3, 10);
+    expect(result.delta.citation_accuracy).toBeCloseTo(0.3, 10);
+    expect(result.delta.cost_usd).toBeCloseTo(0.015, 10);
+
+    // agentsRepo.getVersion must NEVER be called on the skill compare path
+    expect(agentsGetVersion).not.toHaveBeenCalled();
+  });
+
+  it('yields null prompt_diff side when the version row is missing, delta still computed', async () => {
+    const rowA = makeAggRunRow({
+      batchId: 'batch-a',
+      ranAt: new Date('2024-01-01T00:00:00Z'),
+      agentVersion: 1,
+      pass: true,
+      findings: [finding(1)],
+      grounding: { kept: 1, produced: 1 },
+      expectation: 'must_find',
+      expectedRegions: [region(1)],
+      costUsd: 0.005,
+    });
+
+    const rowB = makeAggRunRow({
+      batchId: 'batch-b',
+      ranAt: new Date('2024-01-02T00:00:00Z'),
+      agentVersion: 2,
+      pass: true,
+      findings: [finding(1)],
+      grounding: { kept: 1, produced: 1 },
+      expectation: 'must_find',
+      expectedRegions: [region(1)],
+      costUsd: 0.01,
+    });
+
+    const agentsGetVersion = vi.fn();
+    const container = makeContainer(
+      {
+        batchRunsWithExpectedForOwner: vi.fn().mockResolvedValue([rowA, rowB]),
+      },
+      { getVersion: agentsGetVersion },
+      {
+        // version 1 resolves fine; version 2 returns undefined (row missing)
+        getVersion: vi.fn().mockImplementation(async (_skillId: string, version: number) =>
+          version === 1
+            ? { skillId: 'skill-1', version: 1, body: 'Skill body v1', message: null, createdAt: new Date() }
+            : undefined,
+        ),
+      },
+    );
+
+    const analytics = new EvalAnalytics(container);
+    const result = await analytics.compareSkill('ws', 'skill-1', 'batch-a', 'batch-b');
+
+    // Old side has body text; new side is null (missing version row)
+    expect((result.prompt_diff as { old: string; new: null }).old).toBe('Skill body v1');
+    expect((result.prompt_diff as { old: string; new: null }).new).toBeNull();
+
+    // delta is still fully computed
+    expect(result.delta.cost_usd).toBeCloseTo(0.005, 10);
+    expect(result.delta.recall).toBeCloseTo(0.0, 10);
+
+    // agentsRepo must not be called
+    expect(agentsGetVersion).not.toHaveBeenCalled();
+  });
+
+  it('throws when batchIdA does not belong to the skill', async () => {
+    const rowB = makeAggRunRow({ batchId: 'batch-b', ranAt: new Date('2024-01-02T00:00:00Z') });
+
+    const container = makeContainer({
+      batchRunsWithExpectedForOwner: vi.fn().mockResolvedValue([rowB]),
+    });
+
+    const analytics = new EvalAnalytics(container);
+    await expect(
+      analytics.compareSkill('ws', 'skill-1', 'unknown-batch', 'batch-b'),
+    ).rejects.toThrow('Eval batch not found: unknown-batch');
+  });
+
+  it('throws when batchIdB does not belong to the skill', async () => {
+    const rowA = makeAggRunRow({ batchId: 'batch-a', ranAt: new Date('2024-01-01T00:00:00Z') });
+
+    const container = makeContainer({
+      batchRunsWithExpectedForOwner: vi.fn().mockResolvedValue([rowA]),
+    });
+
+    const analytics = new EvalAnalytics(container);
+    await expect(
+      analytics.compareSkill('ws', 'skill-1', 'batch-a', 'unknown-batch'),
+    ).rejects.toThrow('Eval batch not found: unknown-batch');
   });
 });
 

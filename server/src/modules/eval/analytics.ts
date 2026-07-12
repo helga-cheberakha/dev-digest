@@ -326,6 +326,57 @@ export class EvalAnalytics {
   }
 
   /**
+   * Side-by-side comparison of two skill eval batch runs.
+   *
+   * Mirrors `compare` but resolves prompt text from the skill body snapshots
+   * in `skill_versions` (via `skillsRepo.getVersion`) rather than from the
+   * agent's `configJson.system_prompt`.
+   *
+   * `delta` = b - a. The caller decides which batch is newer.
+   *
+   * `prompt_diff` carries the raw skill `body` text for each batch's version
+   * snapshot, or `null` when the version row is missing.
+   */
+  async compareSkill(
+    workspaceId: string,
+    skillId: string,
+    batchIdA: string,
+    batchIdB: string,
+  ): Promise<EvalCompare> {
+    const batches = await this.history(workspaceId, skillId);
+    const batchA = batches.find((b) => b.batch_id === batchIdA);
+    const batchB = batches.find((b) => b.batch_id === batchIdB);
+    if (!batchA) throw new Error(`Eval batch not found: ${batchIdA}`);
+    if (!batchB) throw new Error(`Eval batch not found: ${batchIdB}`);
+
+    // Resolve skill body text from skill_version snapshots in parallel.
+    // `agent_version` on the batch row stamps the skill's version at run time.
+    const [snapA, snapB] = await Promise.all([
+      batchA.agent_version != null
+        ? this.container.skillsRepo.getVersion(skillId, batchA.agent_version)
+        : Promise.resolve(undefined),
+      batchB.agent_version != null
+        ? this.container.skillsRepo.getVersion(skillId, batchB.agent_version)
+        : Promise.resolve(undefined),
+    ]);
+
+    return {
+      a: batchA,
+      b: batchB,
+      prompt_diff: {
+        old: snapA?.body ?? null,
+        new: snapB?.body ?? null,
+      },
+      delta: {
+        recall: batchB.recall - batchA.recall,
+        precision: batchB.precision - batchA.precision,
+        citation_accuracy: batchB.citation_accuracy - batchA.citation_accuracy,
+        cost_usd: batchB.cost_usd - batchA.cost_usd,
+      },
+    };
+  }
+
+  /**
    * Dashboard for a single agent (`ownerId` given) or workspace-wide
    * (`ownerId` null).
    *

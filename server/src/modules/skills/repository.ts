@@ -142,13 +142,13 @@ export class SkillsRepository {
       .orderBy(desc(t.skillVersions.version));
   }
 
-  /** Restore a skill to a previous version (creates a new version entry). */
-  async restore(
-    workspaceId: string,
-    skillId: string,
-    version: number,
-  ): Promise<SkillRow | undefined> {
-    const [versionRow] = await this.db
+  /**
+   * Fetch a single version snapshot by skillId + version number.
+   * No workspaceId param — tenant safety is inherited from the caller
+   * (batch rows are already workspace-scoped before this is called).
+   */
+  async getVersion(skillId: string, version: number): Promise<SkillVersionRow | undefined> {
+    const rows = await this.db
       .select()
       .from(t.skillVersions)
       .where(
@@ -157,6 +157,16 @@ export class SkillsRepository {
           eq(t.skillVersions.version, version),
         ),
       );
+    return rows[0];
+  }
+
+  /** Restore a skill to a previous version (creates a new version entry). */
+  async restore(
+    workspaceId: string,
+    skillId: string,
+    version: number,
+  ): Promise<SkillRow | undefined> {
+    const versionRow = await this.getVersion(skillId, version);
     if (!versionRow) return undefined;
 
     return this.update(workspaceId, skillId, {
