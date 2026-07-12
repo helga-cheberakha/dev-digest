@@ -12,6 +12,7 @@ import type {
   EvalRunBatch,
   EvalCompare,
   EvalDashboard,
+  EvalBenchmark,
   Agent,
 } from "@devdigest/shared";
 
@@ -143,6 +144,9 @@ export const evalQueryKeys = {
   skillCases: (skillId: string) => ["eval-cases", "skill", skillId] as const,
   skillDashboard: (skillId: string) =>
     ["eval-dashboard", "skill", skillId] as const,
+  skillBatches: (skillId: string) => ["eval-batches", "skill", skillId] as const,
+  skillCompare: (skillId: string, a: string, b: string) =>
+    ["eval-compare", "skill", skillId, a, b] as const,
 } as const;
 
 /**
@@ -249,6 +253,35 @@ export async function fetchSkillEvalDashboard(
 ): Promise<EvalDashboard> {
   return api.get<EvalDashboard>(
     `/eval/dashboard?skillId=${encodeURIComponent(skillId)}`,
+  );
+}
+
+/**
+ * Run a benchmark comparison for a skill (candidate vs. baseline).
+ *
+ * Sends `{}` so Fastify sets `application/json` on the body-schema route.
+ */
+export async function runSkillEvalBenchmark(
+  skillId: string,
+): Promise<EvalBenchmark> {
+  return api.post<EvalBenchmark>(`/skills/${skillId}/eval-benchmark`, {});
+}
+
+/** List batch-run history for a skill (newest first). */
+export async function fetchSkillEvalBatches(
+  skillId: string,
+): Promise<EvalRunBatch[]> {
+  return api.get<EvalRunBatch[]>(`/skills/${skillId}/eval-batches`);
+}
+
+/** Compare two batch runs for a skill side-by-side. */
+export async function fetchSkillEvalCompare(
+  skillId: string,
+  a: string,
+  b: string,
+): Promise<EvalCompare> {
+  return api.get<EvalCompare>(
+    `/skills/${skillId}/eval-compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`,
   );
 }
 

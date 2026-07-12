@@ -5,6 +5,8 @@ import {
   EvalExpectedOutput,
   type EvalCaseInput,
   type EvalRegion,
+  type EvalBenchmark,
+  type EvalBenchmarkCaseResult,
 } from '../../vendor/shared/contracts/eval-ci.js';
 import type { EvalRun } from '../../vendor/shared/contracts/knowledge.js';
 import * as scoring from './scoring.js';
@@ -543,6 +545,212 @@ export async function runSkillBatch(
   return {
     ...batchResult,
     traces_total: cases.length,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// runSkillBenchmark
+// ---------------------------------------------------------------------------
+
+/**
+ * Run all eval cases for a skill in candidate-vs-baseline benchmark mode.
+ *
+ * For each case, BOTH arms are executed sequentially:
+ * - Candidate arm: `runSkillCase` with `[skill.body]` injected (the skill under test).
+ * - Baseline arm: `runSkillBaselineCase` with `skills: []` (zero skill influence).
+ *
+ * CRITICAL (AC-23): ONLY candidate rows are persisted to eval_runs. Persisting a
+ * baseline row would corrupt the case's "latest run" badge and pollute metric tiles
+ * (those read paths are owner-id-filtered, not configuration-aware).
+ *
+ * - Empty case set: returns zero aggregates, persists NOTHING (AC-25).
+ * - `injectionDetected` skill: throws ValidationError, persists NOTHING (AC-24).
+ * - Candidate LLM error on a case: persists a failed candidate row (pass: null,
+ *   error in actual_output), records candidate_pass: null; continues (AC-26).
+ * - Baseline LLM error on a case: NO row persisted; records baseline_pass: null;
+ *   continues (AC-26).
+ * - delta = candidate_aggregate − baseline_aggregate per metric (AC-20).
+ * - Both aggregates have traces_total overridden to cases.length (all attempted).
+ */
+export async function runSkillBenchmark(
+  container: Container,
+  workspaceId: string,
+  skillId: string,
+): Promise<EvalBenchmark> {
+  const cases = await container.evalRepo.listCases(workspaceId, 'skill', skillId);
+
+  // Empty set: aggregate vacuously, persist nothing (AC-25).
+  if (cases.length === 0) {
+    return {
+      candidate: scoring.aggregate([], { kept: 0, produced: 0 }),
+      baseline: scoring.aggregate([], { kept: 0, produced: 0 }),
+      delta: { recall: 0, precision: 0, citation_accuracy: 0 },
+      per_case: [],
+    };
+  }
+
+  const skill = await container.skillsRepo.getById(workspaceId, skillId);
+  if (!skill) throw new NotFoundError('Skill not found');
+  if (skill.injectionDetected === true) {
+    throw new ValidationError('Skill has injection detected; eval run refused');
+  }
+
+  // ONE batchId for the whole benchmark — all candidate rows share it.
+  const batchId = randomUUID();
+
+  const candidateSuccessCases: AggregateCase[] = [];
+  const baselineSuccessCases: AggregateCase[] = [];
+  let candidateTotalKept = 0;
+  let candidateTotalProduced = 0;
+  let baselineTotalKept = 0;
+  let baselineTotalProduced = 0;
+  let candidateCostUsd = 0;
+  let baselineCostUsd = 0;
+  const benchmarkStart = Date.now();
+
+  const perCase: EvalBenchmarkCaseResult[] = [];
+
+  for (const evalCase of cases) {
+    // Parse expected output once — shared by both arms.
+    const { expectation, expectedRegions } = _parseExpected(evalCase.expectedOutput);
+
+    let candidatePass: boolean | null = null;
+    let baselinePass: boolean | null = null;
+
+    // ---- Candidate arm ----
+    try {
+      const caseStart = Date.now();
+      const candidateOutput = await harness.runSkillCase(container, skill.body, {
+        inputDiff: evalCase.inputDiff,
+      });
+      const caseDurationMs = Date.now() - caseStart;
+
+      const actualRegions = _findingsToRegions(candidateOutput.findings);
+      const caseScore = scoring.scoreCase({ expectation, expectedRegions, actualRegions });
+      const aggCase: AggregateCase = {
+        name: evalCase.name,
+        score: caseScore,
+        expected: expectedRegions,
+        actual: actualRegions,
+      };
+      const perCaseResult = scoring.aggregate([aggCase], {
+        kept: candidateOutput.kept,
+        produced: candidateOutput.produced,
+      });
+
+      // PERSIST ONLY candidate row — NEVER a baseline row (AC-23).
+      await container.evalRepo.insertRun(evalCase.id, {
+        batchId,
+        agentVersion: skill.version,
+        pass: caseScore.pass,
+        recall: perCaseResult.recall,
+        precision: perCaseResult.precision,
+        citationAccuracy: perCaseResult.citation_accuracy,
+        durationMs: caseDurationMs,
+        costUsd: candidateOutput.costUsd,
+        actualOutput: _buildActualOutput(
+          candidateOutput.findings,
+          candidateOutput.kept,
+          candidateOutput.produced,
+        ),
+      });
+
+      candidatePass = caseScore.pass;
+      candidateSuccessCases.push(aggCase);
+      candidateCostUsd += candidateOutput.costUsd ?? 0;
+      candidateTotalKept += candidateOutput.kept;
+      candidateTotalProduced += candidateOutput.produced;
+    } catch (err) {
+      // Candidate LLM call fails → persist a failed candidate row; record candidatePass: null.
+      // Errored cases contribute 0 cost to the batch total.
+      const errMsg = err instanceof Error ? err.message : String(err);
+      await container.evalRepo.insertRun(evalCase.id, {
+        batchId,
+        agentVersion: skill.version,
+        pass: null,
+        recall: null,
+        precision: null,
+        citationAccuracy: null,
+        durationMs: null,
+        costUsd: null,
+        actualOutput: {
+          findings: [],
+          grounding: { kept: 0, produced: 0 },
+          error: errMsg,
+        },
+      });
+      candidatePass = null;
+    }
+
+    // ---- Baseline arm (NEVER persisted — AC-23) ----
+    try {
+      const baselineOutput = await harness.runSkillBaselineCase(container, {
+        inputDiff: evalCase.inputDiff,
+      });
+
+      const actualRegions = _findingsToRegions(baselineOutput.findings);
+      const caseScore = scoring.scoreCase({ expectation, expectedRegions, actualRegions });
+      const aggCase: AggregateCase = {
+        name: evalCase.name,
+        score: caseScore,
+        expected: expectedRegions,
+        actual: actualRegions,
+      };
+
+      baselinePass = caseScore.pass;
+      baselineSuccessCases.push(aggCase);
+      baselineCostUsd += baselineOutput.costUsd ?? 0;
+      baselineTotalKept += baselineOutput.kept;
+      baselineTotalProduced += baselineOutput.produced;
+    } catch {
+      // Baseline LLM call fails → no row to persist (AC-23); record baselinePass: null.
+      baselinePass = null;
+    }
+
+    perCase.push({
+      case_id: evalCase.id,
+      case_name: evalCase.name,
+      candidate_pass: candidatePass,
+      baseline_pass: baselinePass,
+    });
+  }
+
+  // Pooled aggregates over successfully-scored cases only.
+  const benchmarkDurationMs = Date.now() - benchmarkStart;
+
+  const candidateResult = scoring.aggregate(
+    candidateSuccessCases,
+    { kept: candidateTotalKept, produced: candidateTotalProduced },
+    { durationMs: benchmarkDurationMs, costUsd: candidateCostUsd },
+  );
+
+  const baselineResult = scoring.aggregate(
+    baselineSuccessCases,
+    { kept: baselineTotalKept, produced: baselineTotalProduced },
+    { costUsd: baselineCostUsd },
+  );
+
+  // traces_total must equal ALL cases attempted (including per-case errors),
+  // mirroring the traces_total override in runSkillBatch.
+  const candidate: EvalBenchmark['candidate'] = {
+    ...candidateResult,
+    traces_total: cases.length,
+  };
+
+  const baseline: EvalBenchmark['baseline'] = {
+    ...baselineResult,
+    traces_total: cases.length,
+  };
+
+  return {
+    candidate,
+    baseline,
+    delta: {
+      recall: candidate.recall - baseline.recall,
+      precision: candidate.precision - baseline.precision,
+      citation_accuracy: candidate.citation_accuracy - baseline.citation_accuracy,
+    },
+    per_case: perCase,
   };
 }
 

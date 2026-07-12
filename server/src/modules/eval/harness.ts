@@ -69,3 +69,46 @@ export async function runSkillCase(
 
   return { findings, kept, produced, costUsd };
 }
+
+/**
+ * runSkillBaselineCase — baseline arm for benchmark comparison (AC-21, AC-28).
+ *
+ * Identical to runSkillCase EXCEPT it passes `skills: []` (empty array) instead
+ * of `[skillBody]`. This drives the reviewer with zero injected rules, giving
+ * the "no skill" baseline result to compare against the candidate arm.
+ *
+ * Do NOT inject any agent config, any agent-linked skills, or the skill body
+ * under test on this arm — the baseline must have zero skill influence.
+ * NEVER persist any row for this arm (AC-23) — the caller (runSkillBenchmark)
+ * is responsible for ensuring that only candidate rows reach insertRun.
+ */
+export async function runSkillBaselineCase(
+  container: Container,
+  evalCase: EvalCaseRunInput,
+): Promise<EvalRunOutput> {
+  // Parse the frozen diff. An empty or null input produces { raw: '', files: [] }
+  // — a valid UnifiedDiff — and never throws.
+  const diff = parseUnifiedDiff(evalCase.inputDiff ?? '');
+
+  // Resolve the harness LLM provider via the DI container.
+  const llm = await container.llm(SKILL_EVAL_HARNESS.provider);
+
+  // Drive the pure review engine with NO injected skills — this is the baseline.
+  // callers / repoMap / intent / prDescription / specs / task are ALL omitted
+  // on purpose (same as runSkillCase).
+  const outcome = await reviewPullRequest({
+    systemPrompt: SKILL_EVAL_HARNESS.systemPrompt,
+    model: SKILL_EVAL_HARNESS.model,
+    diff,
+    llm,
+    strategy: SKILL_EVAL_HARNESS.strategy,
+    skills: [],
+  });
+
+  const findings = outcome.review.findings;
+  const kept = findings.length;
+  const produced = kept + outcome.dropped.length;
+  const costUsd = outcome.costUsd;
+
+  return { findings, kept, produced, costUsd };
+}

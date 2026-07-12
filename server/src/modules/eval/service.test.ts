@@ -26,6 +26,7 @@ vi.mock('./run.js', () => ({
 
 vi.mock('./harness.js', () => ({
   runSkillCase: vi.fn(),
+  runSkillBaselineCase: vi.fn(),
   SKILL_EVAL_HARNESS: {
     provider: 'openrouter',
     model: 'deepseek/deepseek-v4-flash',
@@ -45,6 +46,7 @@ import {
   runBatch,
   runCaseOnce,
   runSkillBatch,
+  runSkillBenchmark,
 } from './service.js';
 import { NotFoundError, ValidationError } from '../../platform/errors.js';
 import type { Container } from '../../platform/container.js';
@@ -1144,5 +1146,246 @@ describe('(T2-f) cross-workspace skill id → 404, zero persistence', () => {
 
     await expect(runSkillBatch(container, WS, SKILL_ID)).rejects.toThrow(NotFoundError);
     expect(insertRunSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (T6-a) runSkillBenchmark: drives BOTH arms per case, returns correct shape
+// ---------------------------------------------------------------------------
+
+describe('(T6-a) runSkillBenchmark: drives both arms per case, correct shape (AC-20, AC-22)', () => {
+  beforeEach(() => {
+    vi.mocked(harnessModule.runSkillCase).mockReset();
+    vi.mocked(harnessModule.runSkillBaselineCase).mockReset();
+  });
+
+  it('2 cases → runSkillCase and runSkillBaselineCase each called twice, correct {candidate, baseline, delta, per_case}', async () => {
+    const case1 = makeSkillCase('bm-case-1');
+    const case2 = makeSkillCase('bm-case-2');
+
+    vi.mocked(harnessModule.runSkillCase).mockResolvedValue({
+      findings: [], kept: 0, produced: 0, costUsd: 0.005,
+    });
+    vi.mocked(harnessModule.runSkillBaselineCase).mockResolvedValue({
+      findings: [], kept: 0, produced: 0, costUsd: 0.003,
+    });
+
+    const container = makeContainer({
+      listCases: async () => [case1, case2],
+      skillsRepoGetById: async () => BASE_SKILL,
+    });
+
+    const result = await runSkillBenchmark(container, WS, SKILL_ID);
+
+    // Both arms called once per case (2 cases = 2 calls each)
+    expect(harnessModule.runSkillCase).toHaveBeenCalledTimes(2);
+    expect(harnessModule.runSkillBaselineCase).toHaveBeenCalledTimes(2);
+
+    // Shape: candidate, baseline, delta, per_case
+    expect(result).toHaveProperty('candidate');
+    expect(result).toHaveProperty('baseline');
+    expect(result).toHaveProperty('delta');
+    expect(result).toHaveProperty('per_case');
+
+    // per_case has one entry per case
+    expect(result.per_case).toHaveLength(2);
+    expect(result.per_case[0]).toMatchObject({
+      case_id: 'bm-case-1',
+      case_name: 'Skill Case bm-case-1',
+      candidate_pass: true,  // must_find + empty expected + empty findings = pass
+      baseline_pass: true,
+    });
+    expect(result.per_case[1]).toMatchObject({
+      case_id: 'bm-case-2',
+      case_name: 'Skill Case bm-case-2',
+      candidate_pass: true,
+      baseline_pass: true,
+    });
+
+    // delta fields are numbers (recall - recall, precision - precision, etc.)
+    expect(typeof result.delta.recall).toBe('number');
+    expect(typeof result.delta.precision).toBe('number');
+    expect(typeof result.delta.citation_accuracy).toBe('number');
+
+    // traces_total overridden to cases.length
+    expect(result.candidate.traces_total).toBe(2);
+    expect(result.baseline.traces_total).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (T6-b) runSkillBenchmark: persists ONLY candidate rows (AC-23)
+// THE SINGLE MOST IMPORTANT TEST — zero baseline insertRun calls
+// ---------------------------------------------------------------------------
+
+describe('(T6-b) runSkillBenchmark: persists ONLY candidate rows, never baseline (AC-23)', () => {
+  beforeEach(() => {
+    vi.mocked(harnessModule.runSkillCase).mockReset();
+    vi.mocked(harnessModule.runSkillBaselineCase).mockReset();
+  });
+
+  it('3 cases → insertRun called exactly 3 times (candidate only), all share one batchId and skill.version', async () => {
+    const case1 = makeSkillCase('only-c1');
+    const case2 = makeSkillCase('only-c2');
+    const case3 = makeSkillCase('only-c3');
+
+    vi.mocked(harnessModule.runSkillCase).mockResolvedValue({
+      findings: [], kept: 0, produced: 0, costUsd: 0.002,
+    });
+    vi.mocked(harnessModule.runSkillBaselineCase).mockResolvedValue({
+      findings: [], kept: 0, produced: 0, costUsd: 0.001,
+    });
+
+    const insertRunCalls: Array<{ caseId: string; values: Record<string, unknown> }> = [];
+    const container = makeContainer({
+      listCases: async () => [case1, case2, case3],
+      skillsRepoGetById: async () => BASE_SKILL,
+      insertRun: async (caseId, values) => {
+        insertRunCalls.push({ caseId, values: values as Record<string, unknown> });
+        return { id: `run-${caseId}`, caseId, ...values as object };
+      },
+    });
+
+    await runSkillBenchmark(container, WS, SKILL_ID);
+
+    // CRITICAL: exactly 3 insertRun calls — one candidate per case, ZERO baseline rows.
+    expect(insertRunCalls).toHaveLength(3);
+
+    // All share ONE batchId (generated once for the benchmark).
+    const batchIds = insertRunCalls.map((c) => c.values.batchId);
+    expect(new Set(batchIds).size).toBe(1);
+    expect(batchIds[0]).toBeTruthy();
+
+    // All agentVersion fields match the skill's version (candidate metadata only).
+    const agentVersions = insertRunCalls.map((c) => c.values.agentVersion);
+    expect(new Set(agentVersions).size).toBe(1);
+    expect(agentVersions[0]).toBe(BASE_SKILL.version);
+
+    // Confirm case IDs correspond to all 3 candidate cases (not baseline ghosts).
+    const caseIds = insertRunCalls.map((c) => c.caseId);
+    expect(caseIds).toContain('only-c1');
+    expect(caseIds).toContain('only-c2');
+    expect(caseIds).toContain('only-c3');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (T6-c) runSkillBenchmark: empty case set (AC-25)
+// ---------------------------------------------------------------------------
+
+describe('(T6-c) runSkillBenchmark: empty case set → zero aggregates, zero insertRun calls (AC-25)', () => {
+  it('no cases → traces_total: 0 for both arms, zero-valued delta, empty per_case, zero insertRun', async () => {
+    const insertRunSpy = vi.fn();
+    const container = makeContainer({
+      listCases: async () => [],
+      insertRun: insertRunSpy,
+    });
+
+    const result = await runSkillBenchmark(container, WS, SKILL_ID);
+
+    expect(result.candidate.traces_total).toBe(0);
+    expect(result.baseline.traces_total).toBe(0);
+    expect(result.delta).toEqual({ recall: 0, precision: 0, citation_accuracy: 0 });
+    expect(result.per_case).toHaveLength(0);
+    expect(insertRunSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (T6-d) runSkillBenchmark: injectionDetected skill → throws, zero insertRun (AC-24)
+// ---------------------------------------------------------------------------
+
+describe('(T6-d) runSkillBenchmark: injectionDetected skill → ValidationError, zero insertRun (AC-24)', () => {
+  it('injection-flagged skill → throws ValidationError, insertRun never called', async () => {
+    const case1 = makeSkillCase('inj-bm-1');
+    const injectedSkill = { ...BASE_SKILL, injectionDetected: true };
+    const insertRunSpy = vi.fn();
+    const container = makeContainer({
+      listCases: async () => [case1],
+      skillsRepoGetById: async () => injectedSkill,
+      insertRun: insertRunSpy,
+    });
+
+    await expect(runSkillBenchmark(container, WS, SKILL_ID)).rejects.toThrow(ValidationError);
+    expect(insertRunSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (T6-e) runSkillBenchmark: baseline-arm throw on case 2 of 3 (AC-26)
+// ---------------------------------------------------------------------------
+
+describe('(T6-e) runSkillBenchmark: baseline-arm throw on case 2 → baseline_pass: null, all 3 candidate rows persisted (AC-26)', () => {
+  beforeEach(() => {
+    vi.mocked(harnessModule.runSkillCase).mockReset();
+    vi.mocked(harnessModule.runSkillBaselineCase).mockReset();
+  });
+
+  it('case 2 baseline throws → per_case[1].baseline_pass: null, 3 candidate insertRun calls, cases 1 and 3 fully intact', async () => {
+    const case1 = makeSkillCase('bl-fail-c1');
+    const case2 = makeSkillCase('bl-fail-c2');
+    const case3 = makeSkillCase('bl-fail-c3');
+
+    // Candidate arm succeeds for all 3
+    vi.mocked(harnessModule.runSkillCase).mockResolvedValue({
+      findings: [], kept: 0, produced: 0, costUsd: 0.004,
+    });
+
+    // Baseline arm: succeeds for case1, throws for case2, succeeds for case3
+    vi.mocked(harnessModule.runSkillBaselineCase)
+      .mockResolvedValueOnce({ findings: [], kept: 0, produced: 0, costUsd: 0.002 })
+      .mockRejectedValueOnce(new Error('Baseline LLM timeout'))
+      .mockResolvedValueOnce({ findings: [], kept: 0, produced: 0, costUsd: 0.002 });
+
+    const insertRunCalls: Array<{ caseId: string; values: Record<string, unknown> }> = [];
+    const container = makeContainer({
+      listCases: async () => [case1, case2, case3],
+      skillsRepoGetById: async () => BASE_SKILL,
+      insertRun: async (caseId, values) => {
+        insertRunCalls.push({ caseId, values: values as Record<string, unknown> });
+        return { id: `run-${caseId}`, caseId, ...values as object };
+      },
+    });
+
+    const result = await runSkillBenchmark(container, WS, SKILL_ID);
+
+    // Exactly 3 candidate insertRun calls — NOT 6 (no baseline rows persisted).
+    expect(insertRunCalls).toHaveLength(3);
+    expect(insertRunCalls[0]!.caseId).toBe('bl-fail-c1');
+    expect(insertRunCalls[1]!.caseId).toBe('bl-fail-c2');
+    expect(insertRunCalls[2]!.caseId).toBe('bl-fail-c3');
+
+    // All candidate rows have non-null pass (candidate arm succeeded for all 3)
+    expect(insertRunCalls[0]!.values.pass).toBe(true);
+    expect(insertRunCalls[1]!.values.pass).toBe(true);
+    expect(insertRunCalls[2]!.values.pass).toBe(true);
+
+    // per_case has 3 entries
+    expect(result.per_case).toHaveLength(3);
+
+    // Case 1: both arms succeeded
+    expect(result.per_case[0]).toMatchObject({
+      case_id: 'bl-fail-c1',
+      candidate_pass: true,
+      baseline_pass: true,
+    });
+
+    // Case 2: candidate succeeded, baseline failed → baseline_pass: null
+    expect(result.per_case[1]).toMatchObject({
+      case_id: 'bl-fail-c2',
+      candidate_pass: true,
+      baseline_pass: null,
+    });
+
+    // Case 3: both arms succeeded (execution continued after case 2 failure)
+    expect(result.per_case[2]).toMatchObject({
+      case_id: 'bl-fail-c3',
+      candidate_pass: true,
+      baseline_pass: true,
+    });
+
+    // traces_total = all cases attempted (including case 2 which had a baseline error)
+    expect(result.candidate.traces_total).toBe(3);
+    expect(result.baseline.traces_total).toBe(3);
   });
 });
