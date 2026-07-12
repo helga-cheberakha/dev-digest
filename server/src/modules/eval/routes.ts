@@ -9,6 +9,7 @@ import {
   EvalRun,
   EvalRunBatch,
   EvalCompare,
+  EvalBenchmark,
   EvalDashboard,
 } from '@devdigest/shared';
 import { getContext } from '../_shared/context.js';
@@ -22,6 +23,7 @@ import {
   runCaseOnce,
   runBatch,
   runSkillBatch,
+  runSkillBenchmark,
 } from './service.js';
 
 const AgentIdParams = z.object({ id: z.string().uuid() });
@@ -38,12 +40,17 @@ const EmptyBody = z.object({});
  *   DELETE /eval-cases/:id                  → delete a case (and its run history)
  *   POST /eval-cases/:id/run                → run a single case once
  *   POST /agents/:id/eval-runs              → run all cases for an agent (batch)
+ *   GET  /skills/:id/eval-cases             → list cases with latest-run badge data (skill)
+ *   POST /skills/:id/eval-runs              → run all cases for a skill (batch)
+ *   POST /skills/:id/eval-benchmark         → candidate vs baseline benchmark for a skill
+ *   GET  /skills/:id/eval-batches           → batch history for a skill (newest first)
+ *   GET  /skills/:id/eval-compare           → side-by-side comparison of two skill batches
  *   GET  /agents/:id/eval-batches           → batch history (newest first)
  *   GET  /agents/:id/eval-compare           → side-by-side comparison of two batches
  *   GET  /eval/dashboard                    → dashboard (per-agent or workspace-wide)
  *
  * Error mapping (via global AppError handler in app.ts):
- *   NotFoundError  → 404  (finding/case/agent not found or cross-workspace)
+ *   NotFoundError  → 404  (finding/case/agent/skill not found or cross-workspace)
  *   ValidationError → 422  (missing/invalid expected_output)
  */
 export default async function evalRoutes(appBase: FastifyInstance) {
@@ -273,6 +280,78 @@ export default async function evalRoutes(appBase: FastifyInstance) {
     async (req) => {
       const { workspaceId } = await getContext(app.container, req);
       return runSkillBatch(app.container, workspaceId, req.params.id);
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // POST /skills/:id/eval-benchmark
+  //
+  // Run a candidate vs baseline benchmark for a skill: re-runs all cases twice
+  // (once with the skill enabled, once without) and returns the delta metrics.
+  // ---------------------------------------------------------------------------
+  app.post(
+    '/skills/:id/eval-benchmark',
+    {
+      schema: {
+        params: AgentIdParams,
+        body: EmptyBody,
+        response: { 200: EvalBenchmark },
+      },
+    },
+    async (req) => {
+      const { workspaceId } = await getContext(app.container, req);
+      return runSkillBenchmark(app.container, workspaceId, req.params.id);
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // GET /skills/:id/eval-batches
+  //
+  // History of batch runs for a skill, newest-first.
+  // ---------------------------------------------------------------------------
+  app.get(
+    '/skills/:id/eval-batches',
+    {
+      schema: {
+        params: AgentIdParams,
+        response: { 200: z.array(EvalRunBatch) },
+      },
+    },
+    async (req) => {
+      const { workspaceId } = await getContext(app.container, req);
+      return analytics.history(workspaceId, req.params.id);
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // GET /skills/:id/eval-compare?a=<batchId>&b=<batchId>
+  //
+  // Side-by-side comparison of two batch runs for a skill.
+  // `a` is the baseline; `b` is the candidate (delta = b - a).
+  // ---------------------------------------------------------------------------
+  app.get(
+    '/skills/:id/eval-compare',
+    {
+      schema: {
+        params: AgentIdParams,
+        querystring: z.object({
+          a: z.string().uuid(),
+          b: z.string().uuid(),
+        }),
+        response: { 200: EvalCompare },
+      },
+    },
+    async (req) => {
+      const { workspaceId } = await getContext(app.container, req);
+      try {
+        return await analytics.compareSkill(workspaceId, req.params.id, req.query.a, req.query.b);
+      } catch (err) {
+        // analytics.compareSkill throws a plain Error for unknown batch ids; map to 404.
+        if (err instanceof Error && /not found/i.test(err.message)) {
+          throw new NotFoundError(err.message);
+        }
+        throw err;
+      }
     },
   );
 
