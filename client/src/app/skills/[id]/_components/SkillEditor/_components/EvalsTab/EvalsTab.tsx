@@ -1,19 +1,22 @@
 /*
  * EvalsTab — Eval metrics strip + eval case management (run/edit/delete).
  * No "View full dashboard" link — there is no /eval/[skillId] page in v1.
- * Lesson 06 — TC3.
+ * Lesson 06 — TC3 (benchmark + batch-history + compare wiring in TC8).
  */
 "use client";
 import React, { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { Badge, Button, Icon, IconBtn, Skeleton, SectionLabel } from "@devdigest/ui";
-import type { EvalCaseInput, EvalCaseListItem } from "@devdigest/shared";
+import type { EvalCaseInput, EvalCaseListItem, EvalRunBatch, EvalBenchmark } from "@devdigest/shared";
 import { EvalCaseModal } from "@/components/EvalCaseModal";
+import { SkillCompareRunsModal } from "./SkillCompareRunsModal";
 import {
   fetchSkillEvalCases,
   fetchSkillEvalDashboard,
+  fetchSkillEvalBatches,
   runSkillEvalBatch,
+  runSkillEvalBenchmark,
   runEvalCase,
   deleteEvalCase,
   evalQueryKeys,
@@ -108,6 +111,46 @@ function MetricTile({
 }
 
 // ---------------------------------------------------------------------------
+// Lift tile — shows a metric delta as its primary value
+// ---------------------------------------------------------------------------
+
+function LiftTile({ label, delta }: { label: string; delta: number }) {
+  const pts = Math.round(delta * 100);
+  const flat = pts === 0;
+  const up = pts > 0;
+  const color = flat ? "var(--text-muted)" : up ? "var(--ok)" : "var(--crit)";
+  const DeltaIcon = flat ? Icon.Slash : up ? Icon.ArrowUp : Icon.ArrowDown;
+  return (
+    <div
+      style={{
+        flex: 1,
+        background: "var(--bg-elevated)",
+        border: "1px solid var(--border)",
+        borderRadius: 9,
+        padding: "14px 16px",
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: "0.05em",
+          color: "var(--text-muted)",
+        }}
+      >
+        {label}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
+        <DeltaIcon size={13} style={{ color }} />
+        <span className="tnum" style={{ fontSize: 22, fontWeight: 700, color }}>
+          {Math.abs(pts)}pt
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -132,6 +175,11 @@ export function EvalsTab({
     queryFn: () => fetchSkillEvalDashboard(skillId),
   });
 
+  const { data: batches } = useQuery({
+    queryKey: evalQueryKeys.skillBatches(skillId),
+    queryFn: () => fetchSkillEvalBatches(skillId),
+  });
+
   // ── Local state ──────────────────────────────────────────────────────────────
   const [editingCase, setEditingCase] = useState<EvalCaseListItem | null>(null);
   const [newCaseOpen, setNewCaseOpen] = useState(false);
@@ -143,13 +191,21 @@ export function EvalsTab({
     citation_accuracy: number;
   } | null>(null);
 
+  const [runningBenchmark, setRunningBenchmark] = useState(false);
+  const [benchmarkResult, setBenchmarkResult] = useState<EvalBenchmark | null>(null);
+
   const [runningCaseId, setRunningCaseId] = useState<string | null>(null);
+
+  // Batch-history selection — at most 2 IDs. When non-null, compare modal is open.
+  const [selectedBatchIds, setSelectedBatchIds] = useState<string[]>([]);
+  const [compareModalBatches, setCompareModalBatches] = useState<[EvalRunBatch, EvalRunBatch] | null>(null);
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
 
   function invalidateAll() {
     void qc.invalidateQueries({ queryKey: evalQueryKeys.skillCases(skillId) });
     void qc.invalidateQueries({ queryKey: evalQueryKeys.skillDashboard(skillId) });
+    void qc.invalidateQueries({ queryKey: evalQueryKeys.skillBatches(skillId) });
   }
 
   const handleRunAll = async () => {
@@ -162,6 +218,19 @@ export function EvalsTab({
       invalidateAll();
     } finally {
       setRunningBatch(false);
+    }
+  };
+
+  const handleBenchmark = async () => {
+    if (runningBenchmark) return;
+    setRunningBenchmark(true);
+    setBenchmarkResult(null);
+    try {
+      const result = await runSkillEvalBenchmark(skillId);
+      setBenchmarkResult(result);
+      invalidateAll();
+    } finally {
+      setRunningBenchmark(false);
     }
   };
 
@@ -180,6 +249,26 @@ export function EvalsTab({
     if (!window.confirm(t("evals.deleteConfirm", { name: c.name }))) return;
     await deleteEvalCase(c.id);
     invalidateAll();
+  };
+
+  const toggleBatchSelection = (batchId: string) => {
+    setSelectedBatchIds((prev) => {
+      if (prev.includes(batchId)) return prev.filter((id) => id !== batchId);
+      if (prev.length >= 2) return prev;
+      return [...prev, batchId];
+    });
+  };
+
+  const handleCompare = () => {
+    if (selectedBatchIds.length !== 2 || !batches) return;
+    const batchA = batches.find((b) => b.batch_id === selectedBatchIds[0]);
+    const batchB = batches.find((b) => b.batch_id === selectedBatchIds[1]);
+    if (!batchA || !batchB) return;
+    // Older ran_at → oldBatch, newer → newBatch
+    const sorted = [batchA, batchB].sort(
+      (x, y) => new Date(x.ran_at).getTime() - new Date(y.ran_at).getTime(),
+    );
+    setCompareModalBatches(sorted as [EvalRunBatch, EvalRunBatch]);
   };
 
   // ── Derived values ────────────────────────────────────────────────────────────
@@ -210,6 +299,7 @@ export function EvalsTab({
 
   const casesList = cases ?? [];
   const passedCount = casesList.filter((c) => c.latest_run?.pass === true).length;
+  const batchList = batches ?? [];
 
   // ── Status icon ───────────────────────────────────────────────────────────────
 
@@ -322,6 +412,14 @@ export function EvalsTab({
           </Badge>
         )}
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          <Button
+            kind="secondary"
+            icon="BarChart"
+            onClick={() => void handleBenchmark()}
+            loading={runningBenchmark}
+          >
+            {runningBenchmark ? t("evals.benchmarking") : t("evals.benchmark")}
+          </Button>
           <Button kind="secondary" icon="Play" onClick={() => void handleRunAll()} loading={runningBatch}>
             {runningBatch ? t("evals.running") : t("evals.runAll")}
           </Button>
@@ -348,6 +446,127 @@ export function EvalsTab({
             precision: pct(lastBatchResult.precision).replace("%", ""),
             citation: pct(lastBatchResult.citation_accuracy).replace("%", ""),
           })}
+        </div>
+      )}
+
+      {/* ── Benchmark result panel ── */}
+      {benchmarkResult && (
+        <div
+          style={{
+            marginBottom: 24,
+            padding: 20,
+            border: "1px solid var(--border)",
+            borderRadius: 10,
+            background: "var(--bg-surface)",
+          }}
+        >
+          <SectionLabel icon="BarChart">{t("evals.benchmarkPanel.heading")}</SectionLabel>
+
+          {/* Candidate (with skill) */}
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: "0.05em",
+              color: "var(--text-muted)",
+              marginBottom: 8,
+            }}
+          >
+            {t("evals.benchmarkPanel.candidateLabel")}
+          </div>
+          <div style={{ display: "flex", gap: 12, marginBottom: 12 }}>
+            <MetricTile
+              label={t("evals.benchmarkPanel.tiles.recall")}
+              value={pct(benchmarkResult.candidate.recall)}
+              color="var(--accent)"
+            />
+            <MetricTile
+              label={t("evals.benchmarkPanel.tiles.precision")}
+              value={pct(benchmarkResult.candidate.precision)}
+              color="var(--ok)"
+            />
+            <MetricTile
+              label={t("evals.benchmarkPanel.tiles.citationAccuracy")}
+              value={pct(benchmarkResult.candidate.citation_accuracy)}
+              color="var(--warn)"
+            />
+          </div>
+
+          {/* Baseline (no skill) */}
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: "0.05em",
+              color: "var(--text-muted)",
+              marginBottom: 8,
+            }}
+          >
+            {t("evals.benchmarkPanel.baselineLabel")}
+          </div>
+          <div style={{ display: "flex", gap: 12, marginBottom: 12 }}>
+            <MetricTile
+              label={t("evals.benchmarkPanel.tiles.recall")}
+              value={pct(benchmarkResult.baseline.recall)}
+              color="var(--accent)"
+            />
+            <MetricTile
+              label={t("evals.benchmarkPanel.tiles.precision")}
+              value={pct(benchmarkResult.baseline.precision)}
+              color="var(--ok)"
+            />
+            <MetricTile
+              label={t("evals.benchmarkPanel.tiles.citationAccuracy")}
+              value={pct(benchmarkResult.baseline.citation_accuracy)}
+              color="var(--warn)"
+            />
+          </div>
+
+          {/* Lift deltas — taken directly from server's delta field */}
+          <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
+            <LiftTile
+              label={t("evals.benchmarkPanel.lift.recall")}
+              delta={benchmarkResult.delta.recall}
+            />
+            <LiftTile
+              label={t("evals.benchmarkPanel.lift.precision")}
+              delta={benchmarkResult.delta.precision}
+            />
+            <LiftTile
+              label={t("evals.benchmarkPanel.lift.citation")}
+              delta={benchmarkResult.delta.citation_accuracy}
+            />
+          </div>
+
+          {/* Per-case comparison table */}
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                <th style={{ textAlign: "left", padding: "6px 8px", color: "var(--text-muted)", fontWeight: 600 }}>
+                  Case
+                </th>
+                <th style={{ textAlign: "center", padding: "6px 8px", color: "var(--text-muted)", fontWeight: 600 }}>
+                  {t("evals.benchmarkPanel.table.candidatePass")}
+                </th>
+                <th style={{ textAlign: "center", padding: "6px 8px", color: "var(--text-muted)", fontWeight: 600 }}>
+                  {t("evals.benchmarkPanel.table.baselinePass")}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {benchmarkResult.per_case.map((row) => (
+                <tr key={row.case_id} style={{ borderBottom: "1px solid var(--border)" }}>
+                  <td style={{ padding: "6px 8px" }}>{row.case_name}</td>
+                  <td style={{ textAlign: "center", padding: "6px 8px" }}>
+                    {row.candidate_pass === null ? "—" : row.candidate_pass ? "✓" : "✗"}
+                  </td>
+                  <td style={{ textAlign: "center", padding: "6px 8px" }}>
+                    {row.baseline_pass === null ? "—" : row.baseline_pass ? "✓" : "✗"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -439,6 +658,77 @@ export function EvalsTab({
         </div>
       )}
 
+      {/* ── Batch history ── */}
+      <div style={{ marginTop: 8 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            marginBottom: 12,
+          }}
+        >
+          <span style={{ fontSize: 14, fontWeight: 600 }}>
+            {t("evals.batchHistory")}
+          </span>
+          <div style={{ marginLeft: "auto" }}>
+            <Button
+              kind="secondary"
+              icon="GitCompare"
+              onClick={handleCompare}
+              disabled={selectedBatchIds.length !== 2}
+            >
+              {t("evals.compareSelected")}
+            </Button>
+          </div>
+        </div>
+        {batchList.length === 0 ? (
+          <p style={{ fontSize: 13, color: "var(--text-muted)" }}>—</p>
+        ) : (
+          batchList.map((batch) => {
+            const selected = selectedBatchIds.includes(batch.batch_id);
+            const versionLabel = batch.agent_version != null ? `v${batch.agent_version}` : "—";
+            return (
+              <div
+                key={batch.batch_id}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  padding: "10px 12px",
+                  borderRadius: 6,
+                  marginBottom: 4,
+                  border: "1px solid var(--border)",
+                  background: selected ? "var(--bg-elevated)" : "var(--bg-surface)",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={selected}
+                  onChange={() => toggleBatchSelection(batch.batch_id)}
+                  aria-label={`Select batch ${versionLabel}`}
+                />
+                <span style={{ fontSize: 13, fontWeight: 600, minWidth: 40 }}>
+                  {versionLabel}
+                </span>
+                <span style={{ fontSize: 12, color: "var(--text-muted)", flex: 1 }}>
+                  {new Date(batch.ran_at).toLocaleDateString()}
+                </span>
+                <span className="tnum" style={{ fontSize: 12 }}>
+                  {pct(batch.recall)} / {pct(batch.precision)} / {pct(batch.citation_accuracy)}
+                </span>
+                <span
+                  className="tnum"
+                  style={{ fontSize: 12, color: "var(--text-muted)" }}
+                >
+                  {batch.traces_passed}/{batch.traces_total}
+                </span>
+              </div>
+            );
+          })
+        )}
+      </div>
+
       {/* ── Modals ── */}
       {newCaseOpen && (
         <EvalCaseModal
@@ -461,6 +751,15 @@ export function EvalsTab({
             invalidateAll();
           }}
           onClose={() => setEditingCase(null)}
+        />
+      )}
+      {compareModalBatches && (
+        <SkillCompareRunsModal
+          skillId={skillId}
+          casesTotal={cases?.length ?? 0}
+          oldBatch={compareModalBatches[0]}
+          newBatch={compareModalBatches[1]}
+          onClose={() => setCompareModalBatches(null)}
         />
       )}
     </div>

@@ -1,5 +1,5 @@
 /*
- * EvalsTab RTL tests (TC3 acceptance criteria).
+ * EvalsTab RTL tests (TC3 + TC8 acceptance criteria).
  *
  * Asserts:
  * 1. One row per case rendered with a status icon reflecting latest_run.pass:
@@ -12,13 +12,18 @@
  * 4. Row action icons fire runEvalCase / open the edit modal / deleteEvalCase
  *    (delete gated behind window.confirm).
  * 5. No "View full dashboard" link is present (skill tab does not have one).
+ * 6. (TC8) Clicking "Benchmark vs no-skill" fires runSkillEvalBenchmark and
+ *    renders the candidate/baseline tiles + lift values + per-case table.
+ * 7. (TC8) Batch history renders one row per batch; selecting two rows and
+ *    clicking "Compare selected" opens SkillCompareRunsModal.
  *
  * Uses fireEvent only — @testing-library/user-event is not installed
  * (client/INSIGHTS.md 2026-07-06).
  *
  * next-intl is provided via NextIntlClientProvider.
  * @tanstack/react-query is provided via QueryClientProvider.
- * EvalCaseModal is mocked to avoid rendering its complex internals.
+ * EvalCaseModal and SkillCompareRunsModal are mocked to avoid rendering their
+ * complex internals.
  */
 
 import { describe, it, expect, afterEach, vi, beforeEach } from "vitest";
@@ -40,12 +45,18 @@ import { EvalsTab } from "./EvalsTab";
 vi.mock("@/lib/api", () => ({
   fetchSkillEvalCases: vi.fn(),
   fetchSkillEvalDashboard: vi.fn(),
+  fetchSkillEvalBatches: vi.fn(),
+  fetchSkillEvalCompare: vi.fn(),
   runSkillEvalBatch: vi.fn(),
+  runSkillEvalBenchmark: vi.fn(),
   runEvalCase: vi.fn(),
   deleteEvalCase: vi.fn(),
   evalQueryKeys: {
     skillCases: (skillId: string) => ["eval-cases", "skill", skillId] as const,
     skillDashboard: (skillId: string) => ["eval-dashboard", "skill", skillId] as const,
+    skillBatches: (skillId: string) => ["eval-batches", "skill", skillId] as const,
+    skillCompare: (skillId: string, a: string, b: string) =>
+      ["eval-compare", "skill", skillId, a, b] as const,
   },
 }));
 
@@ -59,10 +70,21 @@ vi.mock("@/components/EvalCaseModal", () => ({
   ),
 }));
 
+// Mock SkillCompareRunsModal — mirrors the EvalCaseModal stub pattern.
+vi.mock("./SkillCompareRunsModal", () => ({
+  SkillCompareRunsModal: ({ onClose }: { onClose: () => void }) => (
+    <div role="dialog" aria-label="skill-compare-modal">
+      <button onClick={onClose}>close-compare</button>
+    </div>
+  ),
+}));
+
 import {
   fetchSkillEvalCases,
   fetchSkillEvalDashboard,
+  fetchSkillEvalBatches,
   runSkillEvalBatch,
+  runSkillEvalBenchmark,
   runEvalCase,
   deleteEvalCase,
 } from "@/lib/api";
@@ -161,6 +183,70 @@ const DASHBOARD = {
   alert: null,
 };
 
+// Benchmark result: candidate_pass=true, baseline_pass=false for case-1
+// so the per-case table shows the distinction (✓ vs ✗).
+const BENCHMARK_RESULT = {
+  candidate: {
+    recall: 0.8,
+    precision: 0.75,
+    citation_accuracy: 0.9,
+    traces_passed: 4,
+    traces_total: 5,
+    duration_ms: 2000,
+    cost_usd: 0.05,
+    per_trace: [],
+  },
+  baseline: {
+    recall: 0.6,
+    precision: 0.55,
+    citation_accuracy: 0.7,
+    traces_passed: 3,
+    traces_total: 5,
+    duration_ms: 1800,
+    cost_usd: 0.04,
+    per_trace: [],
+  },
+  delta: {
+    recall: 0.2,
+    precision: 0.2,
+    citation_accuracy: 0.2,
+  },
+  per_case: [
+    {
+      case_id: "case-1",
+      case_name: "stripe-key-leak",
+      candidate_pass: true,
+      baseline_pass: false,
+    },
+  ],
+};
+
+// Two batch history entries — used for the "Compare selected" test.
+const BATCH_HISTORY = [
+  {
+    batch_id: "batch-1",
+    ran_at: "2026-07-10T12:00:00Z",
+    agent_version: 2,
+    recall: 0.82,
+    precision: 0.91,
+    citation_accuracy: 0.95,
+    traces_passed: 17,
+    traces_total: 20,
+    cost_usd: 0.1,
+  },
+  {
+    batch_id: "batch-2",
+    ran_at: "2026-07-09T10:00:00Z",
+    agent_version: 1,
+    recall: 0.75,
+    precision: 0.8,
+    citation_accuracy: 0.85,
+    traces_passed: 15,
+    traces_total: 20,
+    cost_usd: 0.09,
+  },
+];
+
 // ---------------------------------------------------------------------------
 // Render helper
 // ---------------------------------------------------------------------------
@@ -193,7 +279,9 @@ beforeEach(() => {
     CASE_NEVER_RUN,
   ] as ReturnType<typeof fetchSkillEvalCases> extends Promise<infer T> ? T : never);
   vi.mocked(fetchSkillEvalDashboard).mockResolvedValue(DASHBOARD);
+  vi.mocked(fetchSkillEvalBatches).mockResolvedValue([]);
   vi.mocked(runSkillEvalBatch).mockResolvedValue(BATCH_RESULT);
+  vi.mocked(runSkillEvalBenchmark).mockResolvedValue(BENCHMARK_RESULT);
   vi.mocked(runEvalCase).mockResolvedValue({
     run_id: "run-1",
     case_id: "case-1",
@@ -368,5 +456,64 @@ describe("EvalsTab (skill) — per-row run/edit/delete actions", () => {
     expect(confirmSpy).toHaveBeenCalled();
     expect(vi.mocked(deleteEvalCase)).not.toHaveBeenCalled();
     confirmSpy.mockRestore();
+  });
+});
+
+describe("EvalsTab (skill) — Benchmark vs no-skill (AC-20, AC-22)", () => {
+  it("clicking the button fires runSkillEvalBenchmark once and renders candidate/baseline tiles + lift + per-case distinction", async () => {
+    renderEvalsTab();
+    await screen.findByText("stripe-key-leak");
+
+    const benchBtn = screen.getByRole("button", { name: /benchmark vs no-skill/i });
+    expect(benchBtn).toBeInTheDocument();
+
+    fireEvent.click(benchBtn);
+
+    await waitFor(() => {
+      expect(vi.mocked(runSkillEvalBenchmark)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(runSkillEvalBenchmark)).toHaveBeenCalledWith("sk1");
+    });
+
+    // Candidate tiles: 80%, 75%, 90% — unique from dashboard (82%, 91%, 95%)
+    expect(await screen.findByText("80%")).toBeInTheDocument();
+    expect(screen.getByText("75%")).toBeInTheDocument();
+    expect(screen.getByText("90%")).toBeInTheDocument();
+
+    // Baseline tiles: 60%, 55%, 70%
+    expect(screen.getByText("60%")).toBeInTheDocument();
+    expect(screen.getByText("55%")).toBeInTheDocument();
+    expect(screen.getByText("70%")).toBeInTheDocument();
+
+    // Per-case distinction: candidate_pass=true → "✓", baseline_pass=false → "✗"
+    expect(screen.getAllByText("✓").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("✗").length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("EvalsTab (skill) — Batch history + Compare selected (AC-32)", () => {
+  it("renders one row per batch and opens SkillCompareRunsModal when two are selected and Compare is clicked", async () => {
+    vi.mocked(fetchSkillEvalBatches).mockResolvedValue(
+      BATCH_HISTORY as ReturnType<typeof fetchSkillEvalBatches> extends Promise<infer T> ? T : never,
+    );
+    renderEvalsTab();
+
+    // Wait for cases and batch history to load
+    await screen.findByText("stripe-key-leak");
+    // Batch rows show version labels
+    expect(await screen.findByText("v2")).toBeInTheDocument();
+    expect(screen.getByText("v1")).toBeInTheDocument();
+
+    // Select both batch checkboxes
+    const checkboxes = screen.getAllByRole("checkbox");
+    expect(checkboxes).toHaveLength(2);
+    fireEvent.click(checkboxes[0]!);
+    fireEvent.click(checkboxes[1]!);
+
+    // Click Compare selected — now 2 batches are selected so the button is enabled
+    const compareBtn = screen.getByRole("button", { name: /compare selected/i });
+    fireEvent.click(compareBtn);
+
+    // The mocked SkillCompareRunsModal should open
+    expect(screen.getByRole("dialog", { name: "skill-compare-modal" })).toBeInTheDocument();
   });
 });
