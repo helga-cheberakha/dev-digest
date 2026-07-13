@@ -41,6 +41,7 @@ import * as harnessModule from './harness.js';
 import {
   buildCaseDraftFromFinding,
   createCase,
+  updateCase,
   listCases,
   deleteCase,
   runBatch,
@@ -237,6 +238,7 @@ function makeContainer(opts: {
   findingContext?: () => Promise<FindingContextResult>;
   getPrFiles?: () => Promise<{ path: string; patch: string | null }[]>;
   insertCase?: (values: unknown) => Promise<Record<string, unknown>>;
+  updateCase?: (workspaceId: string, caseId: string, values: unknown) => Promise<Record<string, unknown> | undefined>;
   listCases?: () => Promise<AnyCase[]>;
   getCase?: () => Promise<AnyCase | undefined>;
   insertRun?: (caseId: string, values: unknown) => Promise<Record<string, unknown>>;
@@ -253,6 +255,7 @@ function makeContainer(opts: {
     },
     evalRepo: {
       insertCase: opts.insertCase ?? (async (values: unknown) => ({ id: 'new-case-1', ...values as object })),
+      updateCase: opts.updateCase ?? (async (_workspaceId: string, caseId: string, values: unknown) => ({ id: caseId, ...values as object })),
       listCases: opts.listCases ?? (async () => []),
       getCase: opts.getCase ?? (async () => undefined),
       insertRun: opts.insertRun ?? (async (caseId: string, values: unknown) => ({ id: `run-${caseId}`, caseId, ...values as object })),
@@ -451,6 +454,104 @@ describe('(b-2) createCase: owner_id from a different workspace → NotFoundErro
 
     await createCase(container, WS, input);
     expect(insertCaseSpy).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (b-3) updateCase: updates an existing case in place — no duplicate row
+// ---------------------------------------------------------------------------
+
+describe('(b-3) updateCase', () => {
+  it('valid input → updateCase repo call is scoped to caseId, updated row returned (not a new one)', async () => {
+    const updatedRow = {
+      id: 'case-1',
+      workspaceId: WS,
+      ownerKind: 'agent',
+      ownerId: AGENT_ID,
+      name: 'Renamed case',
+      inputDiff: '+foo',
+      inputFiles: null,
+      inputMeta: null,
+      expectedOutput: { expectation: 'must_find', regions: [] },
+      notes: null,
+    };
+    const updateCaseSpy = vi.fn().mockResolvedValue(updatedRow);
+    const container = makeContainer({ updateCase: updateCaseSpy });
+
+    const input = {
+      owner_kind: 'agent' as const,
+      owner_id: AGENT_ID,
+      name: 'Renamed case',
+      input_diff: '+foo',
+      input_files: null,
+      input_meta: null,
+      expected_output: { expectation: 'must_find', regions: [] },
+      notes: null,
+    };
+
+    const row = await updateCase(container, WS, 'case-1', input);
+
+    expect(updateCaseSpy).toHaveBeenCalledOnce();
+    expect(updateCaseSpy).toHaveBeenCalledWith(WS, 'case-1', expect.objectContaining({ name: 'Renamed case' }));
+    expect(row).toBe(updatedRow);
+  });
+
+  it('repo returns undefined (case does not exist in this workspace) → NotFoundError', async () => {
+    const container = makeContainer({ updateCase: async () => undefined });
+
+    const input = {
+      owner_kind: 'agent' as const,
+      owner_id: AGENT_ID,
+      name: 'Ghost case',
+      input_diff: '',
+      input_files: null,
+      input_meta: null,
+      expected_output: { expectation: 'must_find', regions: [] },
+      notes: null,
+    };
+
+    await expect(updateCase(container, WS, 'missing-case', input)).rejects.toThrow(NotFoundError);
+  });
+
+  it('malformed expected_output → throws ValidationError, updateCase not called', async () => {
+    const updateCaseSpy = vi.fn();
+    const container = makeContainer({ updateCase: updateCaseSpy });
+
+    const input = {
+      owner_kind: 'agent' as const,
+      owner_id: AGENT_ID,
+      name: 'Bad case',
+      input_diff: '',
+      input_files: null,
+      input_meta: null,
+      expected_output: { regions: [] }, // missing 'expectation'
+      notes: null,
+    };
+
+    await expect(updateCase(container, WS, 'case-1', input)).rejects.toThrow(ValidationError);
+    expect(updateCaseSpy).not.toHaveBeenCalled();
+  });
+
+  it('owner_id not in caller\'s workspace → NotFoundError, updateCase not called', async () => {
+    const updateCaseSpy = vi.fn();
+    const container = makeContainer({
+      updateCase: updateCaseSpy,
+      getById: async () => undefined,
+    });
+
+    const input = {
+      owner_kind: 'agent' as const,
+      owner_id: 'foreign-agent-id',
+      name: 'My case',
+      input_diff: '',
+      input_files: null,
+      input_meta: null,
+      expected_output: { expectation: 'must_find', regions: [] },
+      notes: null,
+    };
+
+    await expect(updateCase(container, WS, 'case-1', input)).rejects.toThrow(NotFoundError);
+    expect(updateCaseSpy).not.toHaveBeenCalled();
   });
 });
 

@@ -4,10 +4,11 @@
  *
  * Call sites provide `initial: EvalCaseInput` (blank, finding-derived draft,
  * or existing case data) and optionally `caseId` (when editing a persisted
- * case).  The modal is AGNOSTIC to where `initial` came from — it always calls
- * `createEvalCase` on Save regardless of origin. This is the "review before
- * save" guarantee: the draft endpoint never persists; only this modal's Save
- * action does.
+ * case). The modal is AGNOSTIC to where `initial` came from — Save always
+ * calls `createEvalCase` for a new case, or `updateEvalCase` when `caseId` is
+ * set, so editing a persisted case updates it in place instead of duplicating
+ * it. This is the "review before save" guarantee: the draft endpoint never
+ * persists; only this modal's Save action does.
  */
 
 import React, { useState } from "react";
@@ -35,6 +36,7 @@ import {
 } from "@devdigest/shared";
 import {
   createEvalCase,
+  updateEvalCase,
   runEvalCase,
   fetchEvalCases,
   evalQueryKeys,
@@ -68,6 +70,7 @@ export interface EvalCaseModalProps {
 // ---------------------------------------------------------------------------
 
 type RegionRow = {
+  id: string;
   file: string;
   start_line: number;
   end_line: number;
@@ -178,6 +181,7 @@ function hydrateExpectedOutput(raw: unknown): {
     return {
       expectation: result.data.expectation,
       regions: result.data.regions.map((r) => ({
+        id: crypto.randomUUID(),
         file: r.file,
         start_line: r.start_line,
         end_line: r.end_line,
@@ -188,13 +192,17 @@ function hydrateExpectedOutput(raw: unknown): {
   }
   return {
     expectation: "must_find",
-    regions: [{ file: "", start_line: 1, end_line: 1 }],
+    regions: [{ id: crypto.randomUUID(), file: "", start_line: 1, end_line: 1 }],
   };
 }
 
 /** A region row is invalid when file is blank or start_line > end_line. */
 function isRowInvalid(row: RegionRow): boolean {
   return row.file.trim() === "" || row.start_line > row.end_line;
+}
+
+function newRegionRow(): RegionRow {
+  return { id: crypto.randomUUID(), file: "", start_line: 1, end_line: 1 };
 }
 
 // ---------------------------------------------------------------------------
@@ -229,6 +237,9 @@ export function EvalCaseModal({
   const [regions, setRegions] = useState<RegionRow[]>(
     () => hydrateExpectedOutput(initial.expected_output).regions,
   );
+  // Rows the user has actively edited — gates the invalid (red) styling so a
+  // freshly-added blank row doesn't render as an error before it's touched.
+  const [touchedRegionIds, setTouchedRegionIds] = useState<Set<string>>(new Set());
 
   // ---------------------------------------------------------------------------
   // Option arrays (built here so t() is in scope)
@@ -259,16 +270,17 @@ export function EvalCaseModal({
   // Region handlers
   // ---------------------------------------------------------------------------
 
-  function updateRegion(i: number, patch: Partial<RegionRow>) {
-    setRegions((prev) => prev.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  function updateRegion(id: string, patch: Partial<RegionRow>) {
+    setRegions((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+    setTouchedRegionIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
   }
 
-  function removeRegion(i: number) {
-    setRegions((prev) => prev.filter((_, j) => j !== i));
+  function removeRegion(id: string) {
+    setRegions((prev) => prev.filter((r) => r.id !== id));
   }
 
   function addRegion() {
-    setRegions((prev) => [...prev, { file: "", start_line: 1, end_line: 1 }]);
+    setRegions((prev) => [...prev, newRegionRow()]);
   }
 
   // ---------------------------------------------------------------------------
@@ -320,8 +332,10 @@ export function EvalCaseModal({
 
     setSaving(true);
     try {
-      // ALWAYS call createEvalCase — the "review before save" invariant.
-      const saved = await createEvalCase(input);
+      // Editing a persisted case (caseId set) updates it in place; otherwise
+      // this is a new case — either way, this modal's Save is the only path
+      // that persists ("review before save" invariant).
+      const saved = caseId ? await updateEvalCase(caseId, input) : await createEvalCase(input);
 
       if (runOnSave) {
         const { result } = await runEvalCase(saved.id);
@@ -519,11 +533,11 @@ export function EvalCaseModal({
           {/* Region rows */}
           <FormField label={t("regionsLabel")} required>
             <div>
-              {regions.map((row, i) => {
-                const invalid = isRowInvalid(row);
+              {regions.map((row) => {
+                const invalid = isRowInvalid(row) && touchedRegionIds.has(row.id);
                 return (
                   <div
-                    key={i}
+                    key={row.id}
                     style={{
                       border: `1px solid ${invalid ? "var(--crit)" : "var(--border-strong)"}`,
                       borderRadius: 8,
@@ -534,10 +548,10 @@ export function EvalCaseModal({
                   >
                     {/* Row 1: file input + remove button */}
                     <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
-                      <div style={{ flex: 1 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
                         <TextInput
                           value={row.file}
-                          onChange={(v) => updateRegion(i, { file: v })}
+                          onChange={(v) => updateRegion(row.id, { file: v })}
                           placeholder={t("regionFilePlaceholder")}
                           aria-label={t("regionFile")}
                           mono
@@ -546,7 +560,7 @@ export function EvalCaseModal({
                       <button
                         type="button"
                         aria-label={t("removeRegion")}
-                        onClick={() => removeRegion(i)}
+                        onClick={() => removeRegion(row.id)}
                         style={{
                           display: "inline-flex",
                           alignItems: "center",
@@ -574,7 +588,7 @@ export function EvalCaseModal({
                         gap: 6,
                       }}
                     >
-                      <div>
+                      <div style={{ minWidth: 0 }}>
                         <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>
                           {t("regionStartLine")}
                         </div>
@@ -582,14 +596,14 @@ export function EvalCaseModal({
                           value={String(row.start_line)}
                           onChange={(v) => {
                             const n = parseInt(v, 10);
-                            updateRegion(i, { start_line: isNaN(n) ? row.start_line : n });
+                            updateRegion(row.id, { start_line: isNaN(n) ? row.start_line : n });
                           }}
                           type="number"
                           aria-label={t("regionStartLine")}
                           mono
                         />
                       </div>
-                      <div>
+                      <div style={{ minWidth: 0 }}>
                         <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>
                           {t("regionEndLine")}
                         </div>
@@ -597,21 +611,21 @@ export function EvalCaseModal({
                           value={String(row.end_line)}
                           onChange={(v) => {
                             const n = parseInt(v, 10);
-                            updateRegion(i, { end_line: isNaN(n) ? row.end_line : n });
+                            updateRegion(row.id, { end_line: isNaN(n) ? row.end_line : n });
                           }}
                           type="number"
                           aria-label={t("regionEndLine")}
                           mono
                         />
                       </div>
-                      <div>
+                      <div style={{ minWidth: 0 }}>
                         <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>
                           {t("regionSeverity")}
                         </div>
                         <SelectInput
                           value={row.severity ?? ""}
                           onChange={(v) =>
-                            updateRegion(i, {
+                            updateRegion(row.id, {
                               severity: v === "" ? undefined : (v as Severity),
                             })
                           }
@@ -619,14 +633,14 @@ export function EvalCaseModal({
                           mono={false}
                         />
                       </div>
-                      <div>
+                      <div style={{ minWidth: 0 }}>
                         <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>
                           {t("regionCategory")}
                         </div>
                         <SelectInput
                           value={row.category ?? ""}
                           onChange={(v) =>
-                            updateRegion(i, {
+                            updateRegion(row.id, {
                               category: v === "" ? undefined : (v as FindingCategory),
                             })
                           }

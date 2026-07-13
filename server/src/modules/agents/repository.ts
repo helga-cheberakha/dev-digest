@@ -145,7 +145,9 @@ export class AgentsRepository {
     return row;
   }
 
-  private async snapshotVersion(row: AgentRow, version: number): Promise<void> {
+  /** Idempotent: relies on the `(agent_id, version)` PK's onConflictDoNothing,
+   *  so callers (e.g. seed.ts backfill) can call this repeatedly and safely. */
+  async snapshotVersion(row: AgentRow, version: number): Promise<void> {
     const skills = await this.skillIdsForAgent(row.id);
     await this.db
       .insert(t.agentVersions)

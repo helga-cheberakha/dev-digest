@@ -6,7 +6,11 @@
  *    - pass=true  → aria-label "passed"
  *    - pass=false → aria-label "failed"
  *    - null run   → aria-label "never run"
- * 2. Clicking "Run all evals" fires exactly one runEvalBatch call.
+ * 2. The metrics strip renders recall/precision/citation/traces-passed tiles
+ *    from fetchEvalDashboard.
+ * 3. Clicking "Run all evals" fires exactly one runEvalBatch call.
+ * 4. Row action icons fire runEvalCase / open the edit modal / deleteEvalCase
+ *    (delete gated behind window.confirm).
  *
  * Uses fireEvent only — @testing-library/user-event is not installed
  * (client/INSIGHTS.md 2026-07-06).
@@ -34,16 +38,13 @@ import { EvalsTab } from "./EvalsTab";
 // ---------------------------------------------------------------------------
 vi.mock("@/lib/api", () => ({
   fetchEvalCases: vi.fn(),
-  fetchEvalBatches: vi.fn(),
+  fetchEvalDashboard: vi.fn(),
   runEvalBatch: vi.fn(),
-  fetchEvalCompare: vi.fn(),
-  promoteVersion: vi.fn(),
+  runEvalCase: vi.fn(),
+  deleteEvalCase: vi.fn(),
   evalQueryKeys: {
     cases: (agentId: string) => ["eval-cases", agentId] as const,
-    batches: (agentId: string) => ["eval-batches", agentId] as const,
     dashboard: (agentId?: string) => ["eval-dashboard", agentId] as const,
-    compare: (agentId: string, a: string, b: string) =>
-      ["eval-compare", agentId, a, b] as const,
   },
 }));
 
@@ -59,9 +60,10 @@ vi.mock("@/components/EvalCaseModal", () => ({
 
 import {
   fetchEvalCases,
-  fetchEvalBatches,
+  fetchEvalDashboard,
   runEvalBatch,
-  fetchEvalCompare,
+  runEvalCase,
+  deleteEvalCase,
 } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
@@ -78,12 +80,12 @@ const CASE_PASSED = {
   input_meta: null,
   expected_output: {
     expectation: "must_find",
-    regions: [{ file: "src/config.ts", start_line: 10, end_line: 12 }],
+    regions: [{ file: "src/config.ts", start_line: 10, end_line: 12, severity: "CRITICAL", category: "security" }],
   },
   notes: null,
   latest_run: {
     pass: true,
-    recall: 0.9,
+    recall: 1,
     precision: 0.85,
     citation_accuracy: 0.8,
     ran_at: "2026-07-10T12:00:00Z",
@@ -140,6 +142,24 @@ const BATCH_RESULT = {
   per_trace: [],
 };
 
+const DASHBOARD = {
+  owner_kind: "agent" as const,
+  owner_id: "ag1",
+  cases_total: 3,
+  current: {
+    recall: 0.82,
+    precision: 0.91,
+    citation_accuracy: 0.95,
+    traces_passed: 17,
+    traces_total: 20,
+    cost_usd: 0.1,
+  },
+  delta: { recall: 0.04, precision: -0.02, citation_accuracy: 0.01 },
+  trend: [],
+  recent_runs: [],
+  alert: null,
+};
+
 // ---------------------------------------------------------------------------
 // Render helper
 // ---------------------------------------------------------------------------
@@ -155,7 +175,7 @@ function renderEvalsTab() {
   return render(
     <QueryClientProvider client={qc}>
       <NextIntlClientProvider locale="en" messages={{ agents: agentsMessages }}>
-        <EvalsTab agentId="ag1" agentVersion={2} />
+        <EvalsTab agentId="ag1" agentName="Security Reviewer" />
       </NextIntlClientProvider>
     </QueryClientProvider>,
   );
@@ -171,32 +191,14 @@ beforeEach(() => {
     CASE_FAILED,
     CASE_NEVER_RUN,
   ] as ReturnType<typeof fetchEvalCases> extends Promise<infer T> ? T : never);
-  vi.mocked(fetchEvalBatches).mockResolvedValue([]);
+  vi.mocked(fetchEvalDashboard).mockResolvedValue(DASHBOARD);
   vi.mocked(runEvalBatch).mockResolvedValue(BATCH_RESULT);
-  vi.mocked(fetchEvalCompare).mockResolvedValue({
-    a: {
-      batch_id: "batch-a",
-      ran_at: "2026-07-09T10:00:00Z",
-      agent_version: 1,
-      recall: 0.7,
-      precision: 0.7,
-      citation_accuracy: 0.7,
-      traces_passed: 7,
-      traces_total: 10,
-    },
-    b: {
-      batch_id: "batch-b",
-      ran_at: "2026-07-10T10:00:00Z",
-      agent_version: 2,
-      recall: 0.8,
-      precision: 0.8,
-      citation_accuracy: 0.8,
-      traces_passed: 8,
-      traces_total: 10,
-    },
-    prompt_diff: { old: "old prompt text", new: "new prompt text" },
-    delta: { recall: 0.1, precision: 0.1, citation_accuracy: 0.1 },
+  vi.mocked(runEvalCase).mockResolvedValue({
+    run_id: "run-1",
+    case_id: "case-1",
+    result: BATCH_RESULT,
   });
+  vi.mocked(deleteEvalCase).mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -223,18 +225,45 @@ describe("EvalsTab — case list + pass/fail icons", () => {
     expect(screen.getByRole("img", { name: "never run" })).toBeInTheDocument();
   });
 
-  it("shows the expectation badge from expected_output", async () => {
+  it("shows the severity · category badge from the first expected region", async () => {
     renderEvalsTab();
-    // CASE_PASSED and CASE_NEVER_RUN both have expectation "must_find"
-    const mustFindBadges = await screen.findAllByText("must_find");
-    expect(mustFindBadges.length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("must_not_flag")).toBeInTheDocument();
+    expect(await screen.findByText("CRITICAL · security")).toBeInTheDocument();
   });
 
-  it("shows region file:line from the first region", async () => {
+  it("shows the empty [] badge for a must_not_flag case with no regions", async () => {
     renderEvalsTab();
-    // CASE_PASSED has regions[0].file = "src/config.ts", start_line = 10
-    expect(await screen.findByText("src/config.ts:10")).toBeInTheDocument();
+    await screen.findByText("stripe-key-leak");
+    expect(screen.getByText("empty []")).toBeInTheDocument();
+  });
+
+  it("derives 'expected N finding(s), got M' from recall for a passed case", async () => {
+    renderEvalsTab();
+    // CASE_PASSED: 1 region, recall 1 → got 1
+    expect(await screen.findByText("expected 1 finding, got 1")).toBeInTheDocument();
+  });
+
+  it("shows 'never run' subtitle for a case with no latest_run", async () => {
+    renderEvalsTab();
+    // "never run" appears both as the status icon aria-label and the subtitle text
+    const neverRunTexts = await screen.findAllByText("never run");
+    expect(neverRunTexts.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("EvalsTab — metrics strip", () => {
+  it("renders recall/precision/citation/traces-passed tiles from the dashboard", async () => {
+    renderEvalsTab();
+    expect(await screen.findByText("82%")).toBeInTheDocument();
+    expect(screen.getByText("91%")).toBeInTheDocument();
+    expect(screen.getByText("95%")).toBeInTheDocument();
+    expect(screen.getByText("17/20")).toBeInTheDocument();
+  });
+
+  it("renders a link to the full dashboard", async () => {
+    renderEvalsTab();
+    await screen.findByText("stripe-key-leak");
+    const link = screen.getByRole("link", { name: /view full dashboard/i });
+    expect(link).toHaveAttribute("href", "/eval/ag1");
   });
 });
 
@@ -265,7 +294,6 @@ describe("EvalsTab — Run all evals button", () => {
     // Batch result shows recall / precision / citation
     // pct(0.75) = "75%", pct(0.8) = "80%", pct(0.7) = "70%"
     await waitFor(() => {
-      // The batch result line is: "Recall 75% · Precision 80% · Citation 70%"
       expect(
         screen.getByText(/recall 75% · precision 80% · citation 70%/i),
       ).toBeInTheDocument();
@@ -292,45 +320,52 @@ describe("EvalsTab — Run all evals button", () => {
   });
 });
 
-describe("EvalsTab — compare panel prompt diff", () => {
-  it("renders real old/new prompt text from prompt_diff in the correct before/after panes", async () => {
-    // Provide two history batches so the compare buttons appear
-    vi.mocked(fetchEvalBatches).mockResolvedValue([
-      {
-        batch_id: "batch-b",
-        ran_at: "2026-07-10T10:00:00Z",
-        agent_version: 2,
-        recall: 0.8,
-        precision: 0.8,
-        citation_accuracy: 0.8,
-        traces_passed: 8,
-        traces_total: 10,
-      },
-      {
-        batch_id: "batch-a",
-        ran_at: "2026-07-09T10:00:00Z",
-        agent_version: 1,
-        recall: 0.7,
-        precision: 0.7,
-        citation_accuracy: 0.7,
-        traces_passed: 7,
-        traces_total: 10,
-      },
-    ]);
-
+describe("EvalsTab — per-row run/edit/delete actions", () => {
+  it("clicking the row's run icon calls runEvalCase and does not open the modal", async () => {
     renderEvalsTab();
     await screen.findByText("stripe-key-leak");
 
-    // Both compare buttons appear (one per batch row, both show "Compare" initially)
-    const firstCompareBtn = (await screen.findAllByRole("button", { name: /^compare$/i }))[0]!;
-    fireEvent.click(firstCompareBtn);
+    fireEvent.click(screen.getAllByLabelText("Run case")[0]!);
 
-    // After selecting one batch, the other batch's button still shows "Compare"
-    const secondCompareBtn = screen.getByRole("button", { name: /^compare$/i });
-    fireEvent.click(secondCompareBtn);
+    await waitFor(() => {
+      expect(vi.mocked(runEvalCase)).toHaveBeenCalledWith("case-1");
+    });
+    expect(screen.queryByRole("dialog", { name: "eval-case-modal" })).not.toBeInTheDocument();
+  });
 
-    // Wait for fetchEvalCompare to resolve and the compare panel to render
-    expect(await screen.findByText("old prompt text")).toBeInTheDocument();
-    expect(screen.getByText("new prompt text")).toBeInTheDocument();
+  it("clicking the row's edit icon opens the modal without triggering a run", async () => {
+    renderEvalsTab();
+    await screen.findByText("stripe-key-leak");
+
+    fireEvent.click(screen.getAllByLabelText("Edit case")[0]!);
+
+    expect(screen.getByRole("dialog", { name: "eval-case-modal" })).toBeInTheDocument();
+    expect(vi.mocked(runEvalCase)).not.toHaveBeenCalled();
+  });
+
+  it("clicking the row's delete icon calls deleteEvalCase after confirm", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderEvalsTab();
+    await screen.findByText("stripe-key-leak");
+
+    fireEvent.click(screen.getAllByLabelText("Delete case")[0]!);
+
+    expect(confirmSpy).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(vi.mocked(deleteEvalCase)).toHaveBeenCalledWith("case-1");
+    });
+    confirmSpy.mockRestore();
+  });
+
+  it("does not call deleteEvalCase when the user cancels the confirm dialog", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderEvalsTab();
+    await screen.findByText("stripe-key-leak");
+
+    fireEvent.click(screen.getAllByLabelText("Delete case")[0]!);
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(vi.mocked(deleteEvalCase)).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 });

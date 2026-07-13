@@ -17,6 +17,15 @@ run the question round (AskUserQuestion is unavailable to subagents); confirm be
 ## Requirements (verified)
 - Source: `specs/SPEC-2026-07-10-eval-pipeline.md` (approved) — ACs: AC-1..AC-25 (AC-25 added
   2026-07-10: regression-flip alert, priority over the AC-17 floor-warning).
+- **Extension (2026-07-11, approved — the spec heading still reads "pending approval" but the user
+  has confirmed AC-26..AC-35 as finalized):** `specs/SPEC-2026-07-10-eval-pipeline.md` — ACs
+  AC-26..AC-35 (structured `expected_output` Case Editor form; US8/US9; the Inputs-provenance
+  addition; the 6 new Case-Editor Edge cases). Covered by the new **Phase 5 (TC6, TC7)** below. This
+  extension is **client-only, UI-only**: no contract/schema/route task — `EvalCaseInput` /
+  `EvalExpectedOutput` / `EvalRegion` and `POST /eval-cases` are **frozen and reused as-is** (the
+  form serialises to the existing shapes; server `safeParse` at AC-22 stays the final authority). The
+  diff paste + `parseDiffLines`/`DiffPreview` and the `input_files`/`input_meta` raw-JSON tabs are
+  retained untouched.
 - All three prior open questions are resolved inline in the spec and are treated as settled:
   Promote vN = client-side compose of existing `GET /agents/:id/versions/:version` + `PUT
   /agents/:id` (no new endpoint); add net-new `EvalRunBatch` + `EvalCompare` contracts lockstep;
@@ -606,6 +615,237 @@ run the question round (AskUserQuestion is unavailable to subagents); confirm be
   - **Acceptance:** `cd client && npx tsc --noEmit` passes; `/eval` renders one card per agent + a
     recent-runs table; the sidebar shows the item and it is active-highlighted on `/eval`.
 
+### Phase 5 — Case Editor: structured `expected_output` form (extension 2026-07-11)
+<!-- Client-only, UI-only. No backend/contract/schema/route task: `EvalCaseInput`,
+     `EvalExpectedOutput`, `EvalRegion` and `POST /eval-cases` are FROZEN and reused as-is (AC-26
+     intro paragraph + Non-goals (extension)) — plan-verifier should NOT flag a missing backend task.
+     The two tasks are strictly sequential: TC7 (tests) depends on TC6 (component + i18n). No new
+     page/route, no `input_files`/`input_meta` change, no copy/title rebrand, no `owner_kind='skill'`
+     work (all explicit extension Non-goals). -->
+
+- **TC6 — Rework `EvalCaseModal`'s `expected_output` column into a structured region-row form (+ i18n)**
+  - **Action:**
+    1. **Remove** from `client/src/components/EvalCaseModal/EvalCaseModal.tsx` the raw-JSON
+       `expected_output` surface: the `expectedOutputText` state (l.208-210), `validateExpectedOutput`
+       (l.154-158), `appendFindingSkeleton` (l.160-180), the `expectedOutputValid` derived (l.219),
+       and the entire right-column JSON `<Textarea>` + valid/invalid badge + "Finding skeleton"
+       `<Button>` + `jsonInvalidHint` block (l.445-499). **Keep untouched** `parseDiffLines`/
+       `DiffPreview` (l.64-122), the Diff/Files/PR-meta tabs, `toJsonText`/`parseJsonSafe` (still used
+       by `input_files`/`input_meta`), and the Save/Cancel/Run-case footer.
+    2. Add form state: `expectation` (`'must_find' | 'must_not_flag'`) and `regions`
+       (`RegionRow[]`, `RegionRow = { file: string; start_line: number; end_line: number;
+       severity?: Severity; category?: FindingCategory }`), hydrated by a helper that runs
+       `EvalExpectedOutput.safeParse(initial.expected_output)` — on success preselect `expectation`
+       and map each stored region to a row (AC-34); on failure/blank/null default to
+       `expectation='must_find'` and exactly **one** empty row `{file:'',start_line:1,end_line:1}`
+       (AC-30). Using the schema to **hydrate** is allowed; it is only the Save-gate text-`safeParse`
+       that AC-33 removes.
+    3. In the right column render an expectation `SelectInput` (options `must_find`/`must_not_flag`,
+       i18n labels — AC-27) above a region-row list. Each row: file `TextInput`; `start_line` and
+       `end_line` `TextInput type="number"`; an **optional** severity `SelectInput` (options
+       `['', 'CRITICAL','WARNING','SUGGESTION']`, `''` labelled "—"); an **optional** category
+       `SelectInput` (`['', 'bug','security','perf','style','test']`); and a per-row **remove**
+       control (`Icon.Trash`/`IconBtn`, `aria-label` from i18n) deleting exactly that row (AC-28/AC-29).
+       Below the list a first-class **"+ Add region"** `Button icon="Plus"` appending one empty row
+       (AC-29). All add/remove/edit handlers update `regions` immutably.
+    4. Inline per-row validation: a row is invalid when `file.trim()===''` OR `start_line > end_line`;
+       flag the offending row visibly (AC-32). Number inputs parse to int (guard `NaN`).
+    5. Replace the Save-disable logic entirely with
+       `saveDisabled = saving || !name.trim() || regions.length === 0 || regions.some(isInvalid)`
+       (name non-empty + expectation always set + ≥1 row + every row valid — AC-31/AC-33). Delete all
+       `expectedOutputValid` / `EvalExpectedOutput.safeParse`-over-text references.
+    6. In `handleSave` build `expected_output = { expectation, regions: regions.map(r => ({ file,
+       start_line, end_line, ...(r.severity ? {severity:r.severity} : {}), ...(r.category ?
+       {category:r.category} : {}) })) }` — **omit** unset severity/category (AC-28). Keep the rest of
+       the `EvalCaseInput` build + the unconditional `createEvalCase` call unchanged (AC-4/AC-35).
+       Refactor `buildStatusLine` to take the expected count from `regions.length`, not from parsing
+       `expectedOutputText`.
+    7. In `client/messages/en/eval.json` under the existing `caseEditor.*` namespace (confirmed home
+       per `client/INSIGHTS.md` 2026-07-11 — NOT `agents.json`'s `evals.*`), add keys:
+       `expectationLabel`, `expectation.mustFind`, `expectation.mustNotFlag`, `regionsLabel`,
+       `regionFile`, `regionFilePlaceholder`, `regionStartLine`, `regionEndLine`, `regionSeverity`,
+       `regionCategory`, `severityNone` (`"—"`), `categoryNone` (`"—"`), `addRegion` (`"+ Add
+       region"`), `removeRegion` (aria). Remove the now-dead `findingSkeleton`, `validJson`,
+       `invalidJson`, `jsonInvalidHint` keys (grep-verified referenced only by this modal). Match the
+       existing camelCase key convention.
+  - **Module:** client
+  - **Type:** ui
+  - **Skills to use:** react-best-practices, frontend-architecture, typescript-expert, zod, react-testing-library
+  - **Owned paths:** `client/src/components/EvalCaseModal/EvalCaseModal.tsx`,
+    `client/messages/en/eval.json`
+  - **Depends-on:** TC2 (created the modal + `caseEditor.*` keys; all prior phases complete), T1 (frozen contracts)
+  - **Covers:** AC-26, AC-27, AC-28, AC-29, AC-30, AC-31, AC-32, AC-33, AC-34, AC-35
+  - **Risk:** medium
+  - **Known gotchas:** `SelectInput` (`@devdigest/ui`, `vendor/ui/kit/SelectInput.tsx`) renders a
+    native `<select>` with **no empty state** — the optional severity/category need an explicit
+    `''`→"—" option, and `''` must serialise to an omitted field (AC-28). `TextInput` accepts
+    `type="number"` and forwards it to a real `<input>` (`vendor/ui/kit/TextInput.tsx`) → RTL role
+    `spinbutton`. `EvalExpectedOutput` stays imported for **hydration only** (AC-34), never for the
+    Save gate (AC-33). **Both entry points need ZERO changes and are deliberately not owned by any
+    task:** `EvalsTab.tsx` (`:465-479` — passes `blankInitial` with `expected_output:null` for "New
+    eval case", and `buildInitialFromCase(editingCase)` with `caseId` for edit) and `FindingsPanel.tsx`
+    (`:73,82,153` — passes the draft `initial`, no `caseId`) both hand only `initial`/`caseId` to the
+    modal and read no `expected_output` internals; the modal's public props are unchanged, so AC-35
+    holds with no edit to them. `blankInitial.expected_output = null` is exactly the "default to one
+    empty row" hydration path (AC-30). `FindingCard.tsx` has no `expected_output` reference at all.
+  - **Acceptance:** `cd client && npx tsc --noEmit` passes; the modal renders NO `expected_output`
+    JSON `<textarea>` (only the Diff-tab textarea when editing a diff), instead an expectation
+    `<select>` + ≥1 region row; Save is disabled with zero rows and with an invalid row.
+
+- **TC7 — Rewrite `EvalCaseModal.test.tsx` for the structured form**
+  - **Action:**
+    1. In `client/src/components/EvalCaseModal/EvalCaseModal.test.tsx` **remove** the tests that
+       assert raw-JSON-textarea behavior and `safeParse`-driven Save-disable — "typing invalid JSON
+       into expected_output disables Save", "Save stays disabled when expected_output fails schema
+       validation", and "'Finding skeleton' appends a schema-correct region". **Keep unchanged** the
+       diff-paste/preview tests ("Diff tab defaults to a read-only colorized preview", "clicking 'Edit
+       diff' switches …") and the Cancel-fires-zero, Save-fires-one, Run-on-save order, subtitle,
+       Run-case, and last-run-status tests — none of them author `expected_output` (out of scope).
+    2. **Add** tests (use `fireEvent` only — `@testing-library/user-event` is NOT installed,
+       `client/INSIGHTS.md` 2026-07-06): default **one empty region row** on blank open
+       (`initial.expected_output` null → exactly one row, AC-30); Save **disabled with zero rows**
+       after removing the last row (AC-31); Save **disabled on an invalid row** (empty file / start
+       > end) and **re-enabled on fix** (AC-32); Save **enabled exactly** when name + expectation +
+       all rows valid (AC-33); **hydration** from a finding-derived single-region draft AND from an
+       existing multi-region case → one prefilled row per stored region + preselected expectation
+       (AC-34); **"+ Add region"** adds one row and a row's **remove** deletes only that row (AC-29).
+    3. Query controls via `getByRole("combobox")` (native `<select>`: expectation, severity,
+       category), `getByRole("spinbutton")` (number inputs: start/end line), `getByRole("textbox")`
+       (file), and `getByRole("button", { name: /add region|remove/i })`; drive them with
+       `fireEvent.change(el, { target: { value } })`. Assert the `createEvalCase` mock's submitted
+       `expected_output.regions` length + `expectation` to cover AC-27/AC-28 serialization.
+    4. Update the file's top doc-comment invariant list to match the new behavior.
+  - **Module:** client
+  - **Type:** ui
+  - **Skills to use:** react-testing-library, react-best-practices, typescript-expert
+  - **Owned paths:** `client/src/components/EvalCaseModal/EvalCaseModal.test.tsx`
+  - **Depends-on:** TC6
+  - **Covers:** AC-27, AC-28, AC-29, AC-30, AC-31, AC-32, AC-33, AC-34
+  - **Risk:** medium
+  - **Known gotchas:** `fireEvent` only — no `user-event` (`client/INSIGHTS.md` 2026-07-06). The test
+    imports `../../../messages/en/eval.json` (read-only) — TC6 owns adding the new `caseEditor.*`
+    keys, so TC7 must run **after** TC6 lands or the new labels/keys are missing. Native `<select>` is
+    role `combobox`; number inputs are role `spinbutton`. There are now two `<textbox>`-like inputs
+    per row concern — scope row queries with `within(row)` to avoid ambiguity.
+  - **Acceptance:** `cd client && npx vitest run src/components/EvalCaseModal` is green; the three
+    raw-JSON tests are gone; the diff-preview tests still pass unchanged; `cd client && npx tsc
+    --noEmit` passes.
+
+### Phase 6 — Trend chart tooltip (extension 2026-07-13)
+<!-- New Phase, follows Phase 5. T9/T10 are server tasks (T1-T8 already used); TC8-TC10 are client
+     tasks (TC1-TC7 already used, TC6/TC7 by Phase 5). T9 is the root of this phase's DAG — both
+     TC8 and T10 depend on it (T10 for the field it asserts, TC8 for the shape it must accept). -->
+
+- **T9 — `agent_version` on `EvalTrendPoint` (contract + analytics)**
+  - **Action:**
+    1. In both `server/src/vendor/shared/contracts/eval-ci.ts` and
+       `client/src/vendor/shared/contracts/eval-ci.ts`, add `agent_version: z.number().int().nullable()`
+       to the `EvalTrendPoint` schema/type, byte-identical in both mirrors (same convention T1 used).
+    2. In `server/src/modules/eval/analytics.ts`, find where `EvalTrendPoint[]` is built (inside
+       `history()`/`dashboard()`, from the same pooled batch rows that already populate
+       `EvalRunBatch.agent_version`) and thread `agent_version` from that same batch record onto
+       each trend point — no new query, the field is already fetched.
+  - **Module:** server
+  - **Type:** backend
+  - **Skills to use:** typescript-expert, zod, onion-architecture
+  - **Owned paths:** `server/src/vendor/shared/contracts/eval-ci.ts`,
+    `client/src/vendor/shared/contracts/eval-ci.ts`, `server/src/modules/eval/analytics.ts`
+  - **Depends-on:** none (T1-T8 already complete)
+  - **Covers:** AC-36, AC-37, AC-38
+  - **Risk:** low
+  - **Known gotchas:** vendor mirrors are hand-copied, not auto-synced — a mismatch fails `tsc` in
+    whichever package didn't get the edit. `agent_version` is nullable (AC-38) — don't default it
+    to a number.
+  - **Acceptance:** `cd server && npx tsc --noEmit` and `cd client && npx tsc --noEmit` both pass;
+    a trend point built from a batch with `agent_version=3` carries `agent_version: 3`.
+
+- **T10 — analytics test coverage for `agent_version` on trend points**
+  - **Action:** in `server/src/modules/eval/analytics.test.ts`, extend the existing
+    `history()`/`dashboard()` trend-building test(s) to assert `agent_version` is present and
+    correct on each returned trend point, including a case where the underlying batch's
+    `agent_version` is null (asserts `null`, not `0` or omitted).
+  - **Module:** server
+  - **Type:** backend
+  - **Skills to use:** typescript-expert
+  - **Owned paths:** `server/src/modules/eval/analytics.test.ts`
+  - **Depends-on:** T9
+  - **Covers:** AC-36, AC-38
+  - **Risk:** low
+  - **Acceptance:** `cd server && npx vitest run src/modules/eval/analytics.test.ts` is green.
+
+- **TC8 — per-point tooltip metadata + hover rendering in `LineChart`**
+  - **Action:**
+    1. Read `client/src/vendor/ui/charts/LineChart.tsx` and `client/src/components/Tooltip/Tooltip.tsx`
+       first to confirm current shapes (the latter is new on this branch — a generic hover-label
+       wrapper, 80ms show delay, positions above its child).
+    2. Extend `LineChart`'s props with an optional per-index metadata array (at minimum `ran_at`,
+       `agent_version`, `cost_usd`) alongside the existing `series: {name,color,data}[]` prop —
+       don't change the existing prop's meaning, only add a sibling prop so other `LineChart`
+       consumers are unaffected.
+    3. If the chart renders a discrete marker/dot per data point, wrap each marker in the existing
+       `Tooltip` component with a composed label (timestamp + version + cost). If it does not (e.g.
+       a bare path with no per-point DOM element), add Recharts' `<Tooltip content={CustomTooltip} />`
+       instead, reading the metadata for the hovered index. Pick whichever requires less structural
+       change to the existing render — don't add dot markers purely to enable the wrapper if the
+       chart is deliberately dot-free today.
+    4. Format cost via `formatCost` (`client/src/lib/cost.ts`); render `agent_version == null` as
+       `"—"` (AC-38).
+  - **Module:** client
+  - **Type:** ui
+  - **Skills to use:** react-best-practices, frontend-architecture, dataviz
+  - **Owned paths:** `client/src/vendor/ui/charts/LineChart.tsx`
+  - **Depends-on:** T9 (needs `EvalTrendPoint.agent_version` to exist for TC9 to pass through)
+  - **Covers:** AC-37, AC-38, AC-39
+  - **Risk:** medium
+  - **Known gotchas:** the existing NaN/length-1 divide-by-`length-1` guard in this chart family
+    (`client/INSIGHTS.md`) must survive this change — don't attach tooltip logic before the
+    length-guard runs.
+  - **Acceptance:** `cd client && npx tsc --noEmit` passes; a Storybook-less manual render (or the
+    TC10 test) confirms hovering a point shows timestamp/version/cost.
+
+- **TC9 — wire `dashboard.trend` metadata into `AgentEvalDetailView`**
+  - **Action:** in `client/src/app/eval/[agentId]/_components/AgentEvalDetailView.tsx`, pass the
+    per-point metadata (`ran_at`, `agent_version`, `cost_usd` from `filteredTrend`) into the
+    extended `LineChart` prop from TC8. No other change to this view.
+  - **Module:** client
+  - **Type:** ui
+  - **Skills to use:** react-best-practices, frontend-architecture
+  - **Owned paths:** `client/src/app/eval/[agentId]/_components/AgentEvalDetailView.tsx`
+  - **Depends-on:** TC8
+  - **Covers:** AC-36, AC-37
+  - **Risk:** low
+  - **Acceptance:** `cd client && npx tsc --noEmit` passes.
+
+- **TC10 — tooltip test coverage**
+  - **Action:** add or extend a test for `AgentEvalDetailView` (create
+    `AgentEvalDetailView.test.tsx` if none exists) asserting: hovering/triggering a trend point
+    renders its version + formatted cost; a point with `agent_version: null` renders "—" instead of
+    crashing or omitting the tooltip (AC-38); a trend array of length < 2 still renders no chart
+    (AC-39, regression check on the existing guard).
+  - **Module:** client
+  - **Type:** ui
+  - **Skills to use:** react-testing-library
+  - **Owned paths:** `client/src/app/eval/[agentId]/_components/AgentEvalDetailView.test.tsx`
+  - **Depends-on:** TC9
+  - **Covers:** AC-37, AC-38, AC-39
+  - **Risk:** low
+  - **Acceptance:** `cd client && npx vitest run src/app/eval` is green.
+
+**Also required (AC-40, no task needed):** confirm
+`client/src/app/agents/[id]/_components/AgentEditor/_components/EvalsTab/EvalsTab.tsx` is left
+untouched by this phase — grep it for any chart/recharts import before closing out Phase 6; if one
+is found, it predates this phase and is out of scope to remove.
+
+### Phase 6 red-flags check
+- [x] AC-36..AC-40 each covered by at least one task (T9, T10, TC8, TC9, TC10 — see updated
+      traceability matrix below); AC-40 is a negative assertion, verified by inspection not a task
+- [x] Contract change (`agent_version` on `EvalTrendPoint`) is additive-only, both mirrors, called
+      out explicitly in T9 — no existing field removed/retyped
+- [x] Dependencies form a DAG: T9 → {T10, TC8} → TC9 → TC10 — no cycles
+- [x] Owned paths don't overlap with any Phase 1-5 task or with `PLAN-skill-evals-tab.md` (confirmed
+      during planning — that plan owns `skills/[id]/.../EvalsTab.tsx`, not `AgentEvalDetailView.tsx`)
+- [x] No task Action has 10+ numbered steps
+
 ## Testing strategy
 - **Scorer unit + `verify:l06` (AC-8..13, AC-19):** `cd server && pnpm verify:l06` — must pass with
   no network and `OPENROUTER_API_KEY` unset (inject a throwing provider). This is the lesson's gate.
@@ -620,6 +860,16 @@ run the question round (AskUserQuestion is unavailable to subagents); confirm be
   create call; EvalsTab renders rows + fires run; dashboard maps rows + shows floor alert.
 - **Client typecheck:** `cd client && npx tsc --noEmit`.
 - **Contracts:** both `npx tsc --noEmit` runs prove the two vendor mirrors stayed in lockstep.
+- **Case Editor structured form (AC-26..35, Phase 5):** `cd client && npx vitest run
+  src/components/EvalCaseModal` — one-empty-row default (AC-30), zero-rows / invalid-row Save-disable
+  (AC-31/AC-32), Save-enabled gate (AC-33), hydration from single- and multi-region `initial`
+  (AC-34), add/remove region (AC-29), serialized `expected_output` shape (AC-27/AC-28); the retained
+  diff-preview tests still pass. Plus `cd client && npx tsc --noEmit`.
+- **Trend chart tooltip (AC-36..40, Phase 6):** `cd server && npx vitest run
+  src/modules/eval/analytics.test.ts` — `agent_version` present (incl. null) on trend points. `cd
+  client && npx vitest run src/app/eval` — tooltip shows version+cost, null-version fallback,
+  length<2 guard still suppresses the chart. Both packages' `npx tsc --noEmit` green (contract
+  change touches both).
 
 ## Risks & mitigations
 - **Run execution model is a defaulted assumption (sequential synchronous).** → If the user wants
@@ -668,6 +918,20 @@ run the question round (AskUserQuestion is unavailable to subagents); confirm be
       (TC2/TC3/TC4/TC5); `verify:l06` scoring test via the `vitest run <path>` script (T3); migration
       file via `db:migrate`'s journal (T1)
 
+### Extension 2026-07-11 (Phase 5) red-flags
+- [x] AC-26..AC-35 each covered by TC6 and/or TC7 (see matrix below)
+- [x] No backend/contract/schema/route task — `EvalCaseInput` / `EvalExpectedOutput` / `EvalRegion` +
+      `POST /eval-cases` are frozen and reused; no shared-symbol edit (explicit callout in Requirements)
+- [x] Both entry points (`EvalsTab.tsx:465-479`, `FindingsPanel.tsx:73,82,153`) grep-verified to need
+      ZERO changes — they pass only `initial`/`caseId`; the modal's public props are unchanged (AC-35);
+      `FindingCard.tsx` has no `expected_output` reference
+- [x] TC6 → TC7 is a linear DAG; TC6 owns `EvalCaseModal.tsx` + `eval.json`, TC7 owns
+      `EvalCaseModal.test.tsx` — no owned-path overlap
+- [x] `parseDiffLines`/`DiffPreview` (l.64-122) + `input_files`/`input_meta` tabs left untouched;
+      no page/route/title-copy rebrand; no `owner_kind='skill'` work (extension Non-goals)
+- [x] No task Action has 10+ steps (TC6 = 7); i18n folded into TC6 (sub-5-min coupled change)
+- [x] New `caseEditor.*` keys cite their discoverer (`readdirSync` in `i18n/request.ts`, already wired)
+
 ## AC → task traceability (IDs only)
 | AC | Tasks | AC | Tasks |
 |----|-------|----|-------|
@@ -683,4 +947,11 @@ run the question round (AskUserQuestion is unavailable to subagents); confirm be
 | AC-10 | T3 | AC-23 | T2, T5 |
 | AC-11 | T3, T4 | AC-24 | T5 |
 | AC-12 | T3 | AC-25 | T6, TC5 |
-| AC-13 | T3 | | |
+| AC-13 | T3 | AC-26 | TC6 |
+| AC-27 | TC6, TC7 | AC-28 | TC6, TC7 |
+| AC-29 | TC6, TC7 | AC-30 | TC6, TC7 |
+| AC-31 | TC6, TC7 | AC-32 | TC6, TC7 |
+| AC-33 | TC6, TC7 | AC-34 | TC6, TC7 |
+| AC-35 | TC6 | AC-36 | T9, T10, TC9 |
+| AC-37 | T9, TC8, TC9, TC10 | AC-38 | T9, T10, TC8, TC10 |
+| AC-39 | TC8, TC10 | AC-40 | (inspection, no task) |

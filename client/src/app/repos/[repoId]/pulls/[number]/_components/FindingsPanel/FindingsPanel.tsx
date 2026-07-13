@@ -4,16 +4,30 @@
 
 import React from "react";
 import { useTranslations } from "next-intl";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Toggle, EmptyState } from "@devdigest/ui";
-import type { FindingRecord, EvalCaseInput } from "@devdigest/shared";
+import type { FindingRecord, EvalCaseInput, EvalCaseListItem } from "@devdigest/shared";
+import { EvalInputMeta } from "@devdigest/shared";
 import { FindingCard } from "../FindingCard";
 import { useFindingAction } from "../../../../../../../lib/hooks/reviews";
-import { draftEvalCaseFromFinding } from "../../../../../../../lib/api";
+import { draftEvalCaseFromFinding, fetchEvalCases, evalQueryKeys } from "../../../../../../../lib/api";
 import { EvalCaseModal } from "@/components/EvalCaseModal";
 import { KEY_TO_ACTION } from "./constants";
 import { visibleFindings } from "./helpers";
 import { s } from "./styles";
+
+/** Case-list rows keyed by the finding they were seeded from, so an already-
+ *  created case can be opened directly instead of drafting a duplicate. */
+function indexByFindingId(cases: EvalCaseListItem[]): Map<string, EvalCaseListItem> {
+  const byFinding = new Map<string, EvalCaseListItem>();
+  for (const c of cases) {
+    const meta = EvalInputMeta.safeParse(c.input_meta);
+    if (meta.success && !byFinding.has(meta.data.source_finding_id)) {
+      byFinding.set(meta.data.source_finding_id, c);
+    }
+  }
+  return byFinding;
+}
 
 export function FindingsPanel({
   findings,
@@ -21,6 +35,7 @@ export function FindingsPanel({
   repoFullName,
   headSha,
   targetFindingId = null,
+  agentId = null,
 }: {
   findings: FindingRecord[];
   prId: string;
@@ -28,17 +43,49 @@ export function FindingsPanel({
   headSha?: string | null;
   /** Finding to focus (scroll to + expand) on mount/param change. */
   targetFindingId?: string | null;
+  /** The review's owning agent — used to look up whether a finding already
+   *  has an eval case, so "Turn into eval case" can open the existing case
+   *  instead of drafting a duplicate. Null for reviews with no owning agent
+   *  (e.g. legacy/ad-hoc runs) — the lookup is simply skipped. */
+  agentId?: string | null;
 }) {
   const t = useTranslations("prReview");
   const action = useFindingAction();
+  const qc = useQueryClient();
   const [hideLow, setHideLow] = React.useState(false);
   const [focusIdx, setFocusIdx] = React.useState(0);
-  const [draft, setDraft] = React.useState<EvalCaseInput | null>(null);
+  const [modal, setModal] = React.useState<{ initial: EvalCaseInput; caseId?: string } | null>(
+    null,
+  );
+
+  const { data: evalCases } = useQuery({
+    queryKey: evalQueryKeys.cases(agentId ?? ""),
+    queryFn: () => fetchEvalCases(agentId!),
+    enabled: !!agentId,
+  });
+  const caseByFindingId = React.useMemo(
+    () => indexByFindingId(evalCases ?? []),
+    [evalCases],
+  );
 
   const draftMutation = useMutation({
     mutationFn: draftEvalCaseFromFinding,
-    onSuccess: (data) => setDraft(data),
+    onSuccess: (data) => setModal({ initial: data }),
   });
+
+  const handleCreateEvalCase = React.useCallback(
+    (findingId: string) => {
+      const existing = caseByFindingId.get(findingId);
+      if (existing) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { latest_run, ...initial } = existing;
+        setModal({ initial, caseId: existing.id });
+      } else {
+        draftMutation.mutate(findingId);
+      }
+    },
+    [caseByFindingId, draftMutation],
+  );
 
   const shown = React.useMemo(() => visibleFindings(findings, hideLow), [findings, hideLow]);
 
@@ -94,18 +141,27 @@ export function FindingsPanel({
               pending={action.isPending}
               repoFullName={repoFullName}
               headSha={headSha}
+              hasEvalCase={caseByFindingId.has(f.id)}
               onAction={(act) => action.mutate({ findingId: f.id, action: act, prId })}
-              onCreateEvalCase={(findingId) => draftMutation.mutate(findingId)}
+              onCreateEvalCase={handleCreateEvalCase}
             />
           ))
         )}
       </div>
 
-      {draft && (
+      {modal && (
         <EvalCaseModal
-          initial={draft}
-          onSaved={() => setDraft(null)}
-          onClose={() => setDraft(null)}
+          initial={modal.initial}
+          caseId={modal.caseId}
+          onSaved={() => {
+            // A save (new case, or a "Run case" on an existing one) can
+            // change whether/what this panel's "hasEvalCase" lookup sees —
+            // without this the button only picks up the new case after a
+            // full page reload (the query is otherwise cached for 30s).
+            if (agentId) void qc.invalidateQueries({ queryKey: evalQueryKeys.cases(agentId) });
+            setModal(null);
+          }}
+          onClose={() => setModal(null)}
         />
       )}
     </div>

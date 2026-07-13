@@ -32,6 +32,7 @@ export function SelectInput({
         onChange={(e) => onChange?.(e.target.value)}
         style={{
           flex: 1,
+          minWidth: 0,
           fontSize: 14,
           color: "var(--text-primary)",
           background: "transparent",

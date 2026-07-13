@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach, vi, beforeEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { NextIntlClientProvider } from "next-intl";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { FindingRecord, EvalCaseInput } from "@devdigest/shared";
+import type { FindingRecord, EvalCaseInput, EvalCaseListItem } from "@devdigest/shared";
 import messages from "../../../../../../../../messages/en/prReview.json";
 
 vi.mock("../../../../../../../lib/hooks/reviews", () => ({
@@ -13,18 +13,31 @@ vi.mock("../../../../../../../lib/hooks/reviews", () => ({
 vi.mock("@/lib/api", () => ({
   draftEvalCaseFromFinding: vi.fn(),
   createEvalCase: vi.fn(),
+  fetchEvalCases: vi.fn().mockResolvedValue([]),
+  evalQueryKeys: { cases: (agentId: string) => ["eval-cases", agentId] },
 }));
 
 vi.mock("@/components/EvalCaseModal", () => ({
-  EvalCaseModal: ({ initial }: { initial: EvalCaseInput }) => (
+  EvalCaseModal: ({
+    initial,
+    caseId,
+    onSaved,
+  }: {
+    initial: EvalCaseInput;
+    caseId?: string;
+    onSaved: (c: unknown) => void;
+  }) => (
     <div
       data-testid="eval-case-modal"
       data-expected-output={JSON.stringify(initial.expected_output)}
-    />
+      data-case-id={caseId ?? ""}
+    >
+      <button onClick={() => onSaved({ id: "new-case" })}>mock-save</button>
+    </div>
   ),
 }));
 
-import { draftEvalCaseFromFinding, createEvalCase } from "@/lib/api";
+import { draftEvalCaseFromFinding, createEvalCase, fetchEvalCases } from "@/lib/api";
 import { FindingsPanel } from "./FindingsPanel";
 
 afterEach(cleanup);
@@ -127,5 +140,73 @@ describe("FindingsPanel — eval case flow", () => {
 
     // createEvalCase NOT called — opening the modal never persists
     expect(createEvalCase).not.toHaveBeenCalled();
+  });
+
+  it("refetches the agent's eval cases after Save, so the button updates without a page reload", async () => {
+    vi.mocked(draftEvalCaseFromFinding).mockResolvedValue(DRAFT);
+    vi.mocked(fetchEvalCases).mockResolvedValue([]); // no existing case yet
+
+    const resolvedFinding: FindingRecord = {
+      ...BASE_FINDING,
+      accepted_at: "2024-01-01T00:00:00Z",
+    };
+
+    renderWithIntl(
+      <FindingsPanel findings={[resolvedFinding]} prId="pr1" agentId="agent-1" />,
+    );
+
+    // Initial mount fetches the agent's eval cases once.
+    await waitFor(() => expect(fetchEvalCases).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: EVAL_BTN_NAME }));
+    await waitFor(() => {
+      expect(screen.getByTestId("eval-case-modal")).toBeInTheDocument();
+    });
+
+    // Simulate the modal's Save completing (calls onSaved).
+    fireEvent.click(screen.getByText("mock-save"));
+
+    // The cases query is invalidated on save, triggering a second fetch —
+    // without this, "hasEvalCase" only reflects the new case after a reload.
+    await waitFor(() => expect(fetchEvalCases).toHaveBeenCalledTimes(2));
+  });
+
+  const EXISTING_CASE: EvalCaseListItem = {
+    id: "case-1",
+    owner_kind: "agent",
+    owner_id: "agent-1",
+    name: "finding-derived",
+    input_diff: DRAFT.input_diff,
+    input_files: null,
+    input_meta: { source_finding_id: "f1" },
+    expected_output: DRAFT.expected_output,
+    notes: null,
+    latest_run: null,
+  };
+
+  it("opens the existing case (not a fresh draft) when one was already created from this finding", async () => {
+    vi.mocked(fetchEvalCases).mockResolvedValue([EXISTING_CASE]);
+
+    const resolvedFinding: FindingRecord = {
+      ...BASE_FINDING,
+      accepted_at: "2024-01-01T00:00:00Z",
+    };
+
+    renderWithIntl(
+      <FindingsPanel findings={[resolvedFinding]} prId="pr1" agentId="agent-1" />,
+    );
+
+    const viewBtn = await screen.findByRole("button", {
+      name: /view the eval case already created from this finding/i,
+    });
+    fireEvent.click(viewBtn);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("eval-case-modal")).toBeInTheDocument();
+    });
+
+    // Opens the existing case in edit mode — no duplicate draft fetched.
+    expect(screen.getByTestId("eval-case-modal").getAttribute("data-case-id")).toBe("case-1");
+    expect(draftEvalCaseFromFinding).not.toHaveBeenCalled();
   });
 });

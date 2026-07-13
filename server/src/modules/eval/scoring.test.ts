@@ -473,6 +473,38 @@ describe('EvalRun shape', () => {
     expect(Array.isArray(trace?.actual)).toBe(true);
   });
 
+  it('traces_passed counts only passing cases, not every case in the batch', () => {
+    // Mutation-testing regression: a mutant replacing `cases.filter((c) =>
+    // c.score.pass).length` with `cases.length` survived because every prior
+    // test's aggregate() call happened to have a 1-passing/1-total set, where
+    // both expressions give the same answer. A mixed pass/fail batch is
+    // required to distinguish them.
+    const found = region('f.ts', 1, 5);
+    const missed = region('g.ts', 1, 5);
+    const passingScore = scoreCase({
+      expectation: 'must_find',
+      expectedRegions: [found],
+      actualRegions: [found],
+    });
+    const failingScore = scoreCase({
+      expectation: 'must_find',
+      expectedRegions: [missed],
+      actualRegions: [],
+    });
+
+    const result = aggregate(
+      [
+        { name: 'pass-1', score: passingScore, expected: [found], actual: [found] },
+        { name: 'fail-1', score: failingScore, expected: [missed], actual: [] },
+        { name: 'pass-2', score: passingScore, expected: [found], actual: [found] },
+      ],
+      { kept: 2, produced: 2 },
+    );
+
+    expect(result.traces_total).toBe(3);
+    expect(result.traces_passed).toBe(2);
+  });
+
   it('passes custom durationMs and costUsd through to EvalRun', () => {
     const score = scoreCase({
       expectation: 'must_find',

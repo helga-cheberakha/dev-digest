@@ -11,7 +11,13 @@
     "sendReply": "Send reply",
     "cancel": "Cancel",
     "turnIntoEvalCase": "Turn into eval case",
-    "turnIntoEvalCaseAria": "Turn this finding into an eval case"
+    "turnIntoEvalCaseAria": "Turn this finding into an eval case",
+    "turnIntoEvalCaseDisabledHint": "Accept or dismiss this finding first to turn it into an eval case",
+    "alreadyAcceptedHint": "Already accepted",
+    "alreadyDismissedHint": "Already dismissed",
+    "viewEvalCase": "View eval case",
+    "viewEvalCaseAria": "View the eval case already created from this finding",
+    "evalCaseAlreadyCreatedHint": "An eval case already exists for this finding — click to view it"
   },
   "trifecta": {
     "lethal": "LETHAL TRIFECTA — ALL 3 PRESENT",

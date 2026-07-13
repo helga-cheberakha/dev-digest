@@ -57,6 +57,28 @@ export class EvalRepository {
   }
 
   /**
+   * Update an existing eval case in place, scoped by workspace.
+   * Returns the updated row, or undefined if no matching case existed.
+   */
+  async updateCase(
+    workspaceId: string,
+    caseId: string,
+    values: InsertCaseValues,
+  ) {
+    const [row] = await this.db
+      .update(t.evalCases)
+      .set(values)
+      .where(
+        and(
+          eq(t.evalCases.workspaceId, workspaceId),
+          eq(t.evalCases.id, caseId),
+        ),
+      )
+      .returning();
+    return row;
+  }
+
+  /**
    * Delete an eval case, scoped by workspace. `eval_runs` rows referencing
    * this case cascade-delete via the FK (schema `onDelete: 'cascade'`).
    * Returns true if a row was deleted, false if no matching case existed.

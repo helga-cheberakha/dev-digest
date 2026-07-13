@@ -12,6 +12,16 @@ turns those decisions into stored eval cases and lets an agent be re-run against
 producing deterministic recall / precision / citation metrics so prompt changes become
 measurable ("old prompt vs new prompt") instead of guessed at. It ships as Lesson 06.
 
+**Extension (2026-07-11) — manual case authoring via a structured Case Editor.** The dataset above
+only grows from findings the agent has already flagged. There is no path to log a case for a bug the
+agent has *never seen* — someone else's incident, an edge case spotted in a colleague's review. The
+`EvalCaseModal` already doubles as a manual-creation entry point (via the Evals tab's "New eval
+case"), but its `expected_output` is edited as a **raw JSON textarea**: a reviewer capturing an
+ad-hoc case must hand-write correct `{expectation, regions}` JSON, which defeats "capture it in the
+moment". This extension replaces that textarea with a structured form (expectation select + repeatable
+region rows), giving the dataset a second, human-seeded growth path. It is a client-side form rework
+only — no schema, contract, route, or copy change (see Goals / Non-goals, AC-26–AC-35).
+
 ## Goals / Non-goals
 - **Goal:** turn a real finding into an eval case via a **prefilled, reviewable** create flow — an
   *accepted* finding seeds `must_find`, a *dismissed* finding seeds `must_not_flag` — persisted only
@@ -40,6 +50,19 @@ measurable ("old prompt vs new prompt") instead of guessed at. It ships as Lesso
   (`reviewPullRequest`, grounding) only; no engine edit.
 - **Non-goal:** injecting live repo-intel / callers / repo-map into an eval run (that would make
   runs non-comparable over time) — deliberately excluded, see AC-7.
+- **Goal (extension):** author `expected_output` through a **structured Case Editor form** —
+  expectation select + repeatable region rows with inline per-row validation — so a case can be
+  logged for a bug the agent has never seen, without hand-writing JSON (AC-26–AC-35).
+- **Non-goal (extension):** no `eval_cases` / `eval_runs` schema or migration change, and **no**
+  change to the `EvalCaseInput` / `EvalExpectedOutput` / `EvalRegion` contracts — the structured form
+  serialises to the existing frozen shapes.
+- **Non-goal (extension):** no `owner_kind='skill'` support in the Case Editor (still agent-only).
+- **Non-goal (extension):** no new page, route, or entry point — both existing entry points keep
+  opening the same shared modal through the same `POST /eval-cases` (AC-35).
+- **Non-goal (extension):** the `input_files` and `input_meta` tabs stay as raw-JSON textareas, and
+  the diff paste + colorized preview stays unchanged — only `expected_output` is restructured.
+- **Non-goal (extension):** no UI copy or title rebrand — existing "New eval case" / "Edit eval
+  case" titles and button labels are unchanged; this is an internal form rework only.
 
 ## User stories
 - US1: As a reviewer, I want to turn an **accepted** finding into a `must_find` eval case in one
@@ -56,6 +79,11 @@ measurable ("old prompt vs new prompt") instead of guessed at. It ships as Lesso
   can spot regressions at a glance.
 - US7: As a course maintainer, I want `pnpm verify:l06` to prove the deterministic scorer, so the
   lesson has an objective green gate.
+- US8: As a reviewer, I want to log an eval case for a bug the agent has never flagged — from a
+  colleague's review or a past incident — by filling a structured form instead of hand-writing JSON,
+  so I can seed the dataset with human judgment ahead of the agent encountering the pattern.
+- US9: As a case author, I want each expected/forbidden region entered as a row with file + line
+  fields and inline validation, so I cannot save a malformed or unscoreable case by accident.
 
 ## Inputs (provenance)
 - Finding decision — `accepted_at` / `dismissed_at` timestamps on the `findings` row
@@ -70,6 +98,10 @@ measurable ("old prompt vs new prompt") instead of guessed at. It ships as Lesso
   `[deterministic: reviewer-core, zero LLM]`.
 - Recall / precision / citation metrics — pure comparison of actual vs expected regions
   `[deterministic: repo scorer, zero LLM]`.
+- Case Editor form values — expectation + region rows typed by the author, or hydrated from a
+  finding-derived draft / existing case row `[reused: eval_cases rows + finding-derived draft, zero
+  LLM]`. The structured form serialises to the existing `EvalExpectedOutput` shape; no new input
+  surface and no new LLM call are introduced by the extension.
 - Agent findings per case — the agent's review of the frozen case input
   `[new: 1 LLM call per case per batch]`. **Justification:** observing the agent's behaviour under
   its current prompt *is* the feature; this is the same single review call the studio already
@@ -189,6 +221,88 @@ measurable ("old prompt vs new prompt") instead of guessed at. It ships as Lesso
   in the same batch**.
   _(observable: a batch where case 2 of 3 throws still persists rows for cases 1 and 3 with their metrics, plus a failed row for case 2)_
 
+**Case Editor — structured `expected_output` form (extension 2026-07-11, approved).** The
+following criteria (AC-26–AC-35) extend the case-creation flow (AC-1–AC-4): they replace the raw-JSON
+`expected_output` editor inside the shared `EvalCaseModal` with a structured form so a reviewer can
+log a case for a bug the agent has never seen without hand-writing JSON. The existing dual-source →
+single-pipeline persist behaviour (AC-4, `POST /eval-cases`), the server-side `safeParse` gate
+(AC-22), and the frozen `EvalCaseInput` / `EvalExpectedOutput` / `EvalRegion` contracts are
+**unchanged** — only re-asserted here, never redefined. The diff paste + colorized preview
+(`parseDiffLines` / `DiffPreview`) and the `input_files` / `input_meta` raw-JSON tabs are retained
+**as-is** and are out of scope for this extension.
+
+- AC-26: The Case Editor shall compose `expected_output` **exclusively** through a structured form —
+  an expectation-type control plus a list of region rows — and shall present no raw-JSON textarea and
+  no advanced-JSON escape hatch for `expected_output`.
+  _(observable: the modal renders no free-text JSON editor for expected_output; the only way to author expected_output is the expectation control and region rows)_
+- AC-27: The expectation control shall offer exactly the two values `must_find` and `must_not_flag`,
+  and the selected value shall populate `expected_output.expectation` verbatim on Save.
+  _(observable: selecting must_not_flag yields expected_output.expectation === 'must_not_flag' in the submitted payload; must_find yields 'must_find')_
+- AC-28: Each region row shall expose `file` (text), `start_line` (number), `end_line` (number), an
+  **optional** `severity` select (`CRITICAL` / `WARNING` / `SUGGESTION`), and an **optional**
+  `category` select (`bug` / `security` / `perf` / `style` / `test`), and each row shall map
+  one-to-one to an `EvalRegion` in `expected_output.regions`; a row whose severity/category is left
+  unset shall omit those fields (they are optional on `EvalRegion`).
+  _(observable: a form with two region rows produces expected_output.regions of length 2 with matching file/line values; a row with no severity selected serialises without a severity key)_
+- AC-29: The Case Editor shall provide a first-class **"+ Add region"** action that appends a new
+  empty region row and a per-row **remove** control that deletes exactly that row, replacing the
+  former "Finding skeleton" JSON-append button (which shall no longer exist).
+  _(observable: clicking "+ Add region" increases the row count by one; a row's remove control deletes only that row; no "Finding skeleton" control remains in the modal)_
+- AC-30: WHEN the Case Editor is opened for a new (blank) eval case, the form shall initialise with
+  exactly one empty region row (matching today's "Finding skeleton" default, now built into initial
+  state rather than requiring a click).
+  _(observable: opening "New eval case" renders exactly one region row before any user interaction)_
+- AC-31: The system shall require at least one region row to save; IF every region row is removed,
+  THEN Save shall be disabled.
+  _(observable: removing the last remaining region row disables the Save button)_
+- AC-32: The system shall validate each region row inline such that `file` is non-empty AND
+  `start_line <= end_line`, marking any offending row as invalid; IF any region row is invalid, THEN
+  Save shall be disabled.
+  _(observable: a row with an empty file, or with start_line > end_line, is flagged invalid and disables Save; correcting it re-enables Save)_
+- AC-33: The Save button shall be enabled only WHEN `name` is non-empty AND an expectation is
+  selected AND every region row is valid — replacing the prior `EvalExpectedOutput.safeParse`-over-
+  raw-JSON-text disable logic entirely.
+  _(observable: Save is enabled exactly when name, expectation, and all region rows are valid; no code path gates Save on parsing an expected_output JSON string)_
+- AC-34: WHEN the Case Editor is opened with an `initial.expected_output` that conforms to
+  `EvalExpectedOutput` — whether a finding-derived draft carrying a single region (from
+  `buildCaseDraftFromFinding`) or an existing case carrying one or more regions — the form shall
+  preselect the stored expectation and render one prefilled region row per stored region.
+  _(observable: opening the modal on an accepted finding shows one region row prefilled with the finding's file:line and the must_find expectation; opening a stored must_not_flag case with two forbidden regions shows two prefilled rows and the must_not_flag expectation — never an empty row and never raw JSON)_
+- AC-35: Both existing entry points — the Evals tab "New eval case" action and `FindingCard`'s "Turn
+  into eval case" (via `FindingsPanel`) — shall continue to open this same Case Editor component and
+  persist the structured form (serialised to the frozen `EvalExpectedOutput` shape) through the
+  existing `POST /eval-cases`; no new entry point, page, or route shall be introduced.
+  _(observable: both entry points mount the one shared modal and fire the same single `POST /eval-cases` on Save; no new client route/page and no new server route are added)_
+
+**Trend chart tooltip (Addendum 2026-07-13, approved).** The following criteria (AC-36–AC-40)
+extend the "compare two runs" surface (AC-14/AC-16): they add prompt-version and cost context to
+the existing metric trend chart on the agent detail dashboard (`/eval/[agentId]`), so a slow,
+run-over-run drift in a metric is visible with *which prompt version and what it cost* attached to
+each point — "look at the trend first, thresholds come later." `EvalTrendPoint` gains one
+additive field (`agent_version`); no other contract, table, or migration change.
+
+- AC-36: WHEN the agent detail dashboard (`/eval/[agentId]`) renders the metric trend chart, the
+  system shall plot one point per eval batch (run), chronologically, for recall, precision, and
+  citation_accuracy — as it already does today (no behaviour change, restated so this addendum is
+  self-contained).
+  _(observable: the chart's point count equals the owner's batch count returned by history(); points are in ran_at-ascending order)_
+- AC-37: WHEN a user hovers a point on the trend chart, the system shall show a tooltip containing
+  the run's timestamp, the agent/prompt version (`agent_version`), and the run's cost (`cost_usd`,
+  formatted via the existing `formatCost` helper).
+  _(observable: hovering a point renders a tooltip with that batch's ran_at, agent_version, and formatCost(cost_usd))_
+- AC-38: IF `agent_version` is null for a run (e.g. a legacy row predating version tracking), THEN
+  the tooltip shall render a "—" placeholder for version rather than omitting the tooltip or
+  throwing.
+  _(observable: a mocked trend point with agent_version: null still renders a tooltip, showing "—" for version)_
+- AC-39: WHEN the trend series has fewer than 2 points, the system shall continue to suppress the
+  chart (existing guard against a degenerate single-point series) rather than attaching a tooltip
+  to an empty or broken chart.
+  _(observable: a trend array of length 0 or 1 renders no chart, matching current behaviour)_
+- AC-40: The system shall NOT add a chart to the Agent Editor's Evals tab (`EvalsTab.tsx`) — the
+  compact-tab-with-link-out design stands; this addendum only enhances the existing full-dashboard
+  chart.
+  _(observable: EvalsTab.tsx renders no chart/recharts import; its "View full dashboard →" link is unchanged)_
+
 ## Edge cases
 - Owner has zero cases and user runs the set → AC-23.
 - Owner has < 8 cases and no case regressed between the last two batches → floor-warning alert, still runnable → AC-17.
@@ -218,6 +332,24 @@ measurable ("old prompt vs new prompt") instead of guessed at. It ships as Lesso
   → excluded from batch history/compare grouping (which groups by `batch_id`); still visible as that
   case's own most-recent single-case run for pass/fail (AC-5) → accepted: defensive filtering in the
   repository layer, no `NOT NULL` constraint (avoids a migration-time backfill requirement).
+- **Case Editor** opened blank (new manual case) → form starts with exactly one empty region row;
+  Save disabled until name + expectation + that row are valid → AC-30/AC-31/AC-32/AC-33.
+- **Case Editor** region row with an empty `file`, or `start_line > end_line` → row flagged invalid,
+  Save disabled → AC-32.
+- **Case Editor** all region rows removed → Save disabled (a case with zero regions is unscoreable) →
+  AC-31.
+- **Case Editor** region row with `severity` / `category` left unset → saved region omits those
+  optional fields (valid per `EvalRegion`) → AC-28.
+- **Case Editor** hydrating a finding-derived draft (single region) or an existing multi-region case
+  → each stored region renders as its own prefilled row, expectation preselected → AC-34.
+- **Case Editor** a payload that is structurally valid client-side but still rejected by the server
+  (e.g. a line value the server considers out of range) → the existing `POST /eval-cases` `safeParse`
+  gate (AC-22) remains the final authority and returns 4xx, persisting nothing → accepted: no new
+  client handling beyond surfacing the error; the structured form makes this path rare, not
+  impossible.
+- **Trend chart tooltip** a batch's `eval_runs.agent_version` is null (see the existing `batch_id
+  IS NULL` / `agent_version IS NULL` edge case above — the columns are nullable at the DB level) →
+  the tooltip still renders, with "—" in place of the version → AC-38.
 
 ## Non-functional
 - **Security / access control (A01):** all eval endpoints are workspace-scoped via the existing
@@ -282,6 +414,10 @@ table, unchanged, and `EvalCase` / `EvalRun` / `EvalPerTrace` / `EvalOwnerKind` 
 `EvalCaseInput` / `EvalRunRecord` / `EvalRunResult` / `EvalTrendPoint` / `EvalDashboard`
 (`eval-ci.ts`) — no existing field is removed or retyped. Any *new* contract below must be added
 **lockstep** to both `server/src/vendor/shared/` and `client/src/vendor/shared/` (no auto-sync).
+
+**Addendum 2026-07-13 — additive field on `EvalTrendPoint`.** `EvalTrendPoint` gains
+`agent_version: number | null`, sourced the same way `EvalRunBatch.agent_version` already is (the
+batch's stamped `eval_runs.agent_version`) — no migration, no other field change (AC-36–AC-40).
 
 **Migration (decided 2026-07-10 — explicit columns over a `ran_at`-proxy):** add two **nullable**
 columns to `eval_runs` — `batch_id uuid` and `agent_version integer` — plus an index on `batch_id`.

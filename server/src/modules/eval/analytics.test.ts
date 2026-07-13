@@ -796,11 +796,13 @@ describe('EvalAnalytics.dashboard — shape', () => {
       batchId: 'b-old',
       ranAt: new Date('2024-01-01T00:00:00Z'),
       pass: true,
+      agentVersion: 1,
     });
     const newerRow = makeAggRunRow({
       batchId: 'b-new',
       ranAt: new Date('2024-02-01T00:00:00Z'),
       pass: true,
+      agentVersion: null,
     });
 
     const container = makeContainer({
@@ -817,6 +819,10 @@ describe('EvalAnalytics.dashboard — shape', () => {
     // trend must be oldest-first
     expect(dash.trend[0]!.ran_at).toBe('2024-01-01T00:00:00.000Z');
     expect(dash.trend[1]!.ran_at).toBe('2024-02-01T00:00:00.000Z');
+
+    // agent_version rides along per point, including a null (legacy/pre-version-tracking) row
+    expect(dash.trend[0]!.agent_version).toBe(1);
+    expect(dash.trend[1]!.agent_version).toBeNull();
   });
 
   it('workspace dashboard: owner_kind=null, owner_id=null, alert=null, has recent_runs', async () => {

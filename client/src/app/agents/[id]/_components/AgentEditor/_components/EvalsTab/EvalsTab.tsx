@@ -1,20 +1,23 @@
 /*
- * EvalsTab — Eval cases list, batch run, history, compare, and version promote.
+ * EvalsTab — Eval metrics strip + eval case management (run/edit/delete).
+ * Run history, batch compare, and version promote moved to the full
+ * dashboard at /eval/[agentId] (see client/INSIGHTS.md).
  * Lesson 06 — TC4.
  */
 "use client";
 import React, { useState } from "react";
+import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
-import { Badge, Icon, Skeleton } from "@devdigest/ui";
-import type { EvalCaseInput, EvalRunBatch, EvalCompare, EvalCaseListItem, EvalRun } from "@devdigest/shared";
+import { Badge, Button, Icon, IconBtn, Skeleton, SectionLabel } from "@devdigest/ui";
+import type { EvalCaseInput, EvalCaseListItem } from "@devdigest/shared";
 import { EvalCaseModal } from "@/components/EvalCaseModal";
 import {
   fetchEvalCases,
-  fetchEvalBatches,
-  fetchEvalCompare,
+  fetchEvalDashboard,
   runEvalBatch,
-  promoteVersion,
+  runEvalCase,
+  deleteEvalCase,
   evalQueryKeys,
 } from "@/lib/api";
 
@@ -43,21 +46,67 @@ function pct(v: number | null | undefined): string {
   return `${(v * 100).toFixed(0)}%`;
 }
 
-function formatDelta(v: number): React.ReactNode {
-  const color =
-    v > 0 ? "var(--ok)" : v < 0 ? "var(--crit)" : "var(--text-muted)";
-  const sign = v > 0 ? "+" : "";
-  return <span style={{ color }}>{sign}{(v * 100).toFixed(1)}%</span>;
-}
+// ---------------------------------------------------------------------------
+// Metric tile (RECALL / PRECISION / CITATION ACCURACY / TRACES PASSED)
+// ---------------------------------------------------------------------------
 
-function toPromptText(v: unknown): string {
-  if (v == null) return "";
-  if (typeof v === "string") return v;
-  try {
-    return JSON.stringify(v, null, 2);
-  } catch {
-    return String(v);
-  }
+function MetricTile({
+  label,
+  value,
+  color,
+  deltaPts,
+}: {
+  label: string;
+  value: string;
+  color: string;
+  deltaPts?: number;
+}) {
+  const flat = deltaPts === 0;
+  const up = (deltaPts ?? 0) > 0;
+  const dc = flat ? "var(--text-muted)" : up ? "var(--ok)" : "var(--crit)";
+  const DeltaIcon = flat ? Icon.Slash : up ? Icon.ArrowUp : Icon.ArrowDown;
+  return (
+    <div
+      style={{
+        flex: 1,
+        background: "var(--bg-elevated)",
+        border: "1px solid var(--border)",
+        borderRadius: 9,
+        padding: "14px 16px",
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: "0.05em",
+          color: "var(--text-muted)",
+        }}
+      >
+        {label}
+      </div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 8 }}>
+        <span className="tnum" style={{ fontSize: 26, fontWeight: 700, color }}>
+          {value}
+        </span>
+        {deltaPts != null && (
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 2,
+              fontSize: 12,
+              fontWeight: 600,
+              color: dc,
+            }}
+          >
+            <DeltaIcon size={11} />
+            <span className="tnum">{Math.abs(deltaPts)}pt</span>
+          </span>
+        )}
+      </div>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -66,10 +115,10 @@ function toPromptText(v: unknown): string {
 
 export function EvalsTab({
   agentId,
-  agentVersion,
+  agentName,
 }: {
   agentId: string;
-  agentVersion: number;
+  agentName: string;
 }) {
   const t = useTranslations("agents");
   const qc = useQueryClient();
@@ -80,29 +129,30 @@ export function EvalsTab({
     queryFn: () => fetchEvalCases(agentId),
   });
 
-  const { data: batches, isLoading: batchesLoading } = useQuery({
-    queryKey: evalQueryKeys.batches(agentId),
-    queryFn: () => fetchEvalBatches(agentId),
+  const { data: dashboard } = useQuery({
+    queryKey: evalQueryKeys.dashboard(agentId),
+    queryFn: () => fetchEvalDashboard(agentId),
   });
 
   // ── Local state ──────────────────────────────────────────────────────────────
   const [editingCase, setEditingCase] = useState<EvalCaseListItem | null>(null);
   const [newCaseOpen, setNewCaseOpen] = useState(false);
 
-  // batch run
   const [runningBatch, setRunningBatch] = useState(false);
-  const [lastBatchResult, setLastBatchResult] = useState<EvalRun | null>(null);
+  const [lastBatchResult, setLastBatchResult] = useState<{
+    recall: number;
+    precision: number;
+    citation_accuracy: number;
+  } | null>(null);
 
-  // compare: up to 2 selected batch_ids
-  const [selectedBatches, setSelectedBatches] = useState<string[]>([]);
-  const [compareData, setCompareData] = useState<EvalCompare | null>(null);
-  const [comparing, setComparing] = useState(false);
-
-  // promote
-  const [promoting, setPromoting] = useState(false);
-  const [promotedVersion, setPromotedVersion] = useState<number | null>(null);
+  const [runningCaseId, setRunningCaseId] = useState<string | null>(null);
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
+
+  function invalidateAll() {
+    void qc.invalidateQueries({ queryKey: evalQueryKeys.cases(agentId) });
+    void qc.invalidateQueries({ queryKey: evalQueryKeys.dashboard(agentId) });
+  }
 
   const handleRunAll = async () => {
     if (runningBatch) return;
@@ -111,49 +161,27 @@ export function EvalsTab({
     try {
       const result = await runEvalBatch(agentId);
       setLastBatchResult(result);
-      void qc.invalidateQueries({ queryKey: evalQueryKeys.cases(agentId) });
-      void qc.invalidateQueries({ queryKey: evalQueryKeys.batches(agentId) });
-      void qc.invalidateQueries({ queryKey: evalQueryKeys.dashboard(agentId) });
+      invalidateAll();
     } finally {
       setRunningBatch(false);
     }
   };
 
-  const toggleBatchSelect = async (batchId: string) => {
-    let next: string[];
-    if (selectedBatches.includes(batchId)) {
-      next = selectedBatches.filter((id) => id !== batchId);
-    } else if (selectedBatches.length < 2) {
-      next = [...selectedBatches, batchId];
-    } else {
-      // replace the oldest selection (first in array) with the new one
-      next = [selectedBatches[1]!, batchId];
-    }
-    setSelectedBatches(next);
-    setCompareData(null);
-
-    if (next.length === 2) {
-      setComparing(true);
-      try {
-        const data = await fetchEvalCompare(agentId, next[0]!, next[1]!);
-        setCompareData(data);
-      } finally {
-        setComparing(false);
-      }
+  const handleRunCase = async (caseId: string) => {
+    if (runningCaseId) return;
+    setRunningCaseId(caseId);
+    try {
+      await runEvalCase(caseId);
+      invalidateAll();
+    } finally {
+      setRunningCaseId(null);
     }
   };
 
-  const handlePromote = async (version: number) => {
-    if (promoting) return;
-    setPromoting(true);
-    setPromotedVersion(null);
-    try {
-      await promoteVersion(agentId, version);
-      setPromotedVersion(version);
-      void qc.invalidateQueries({ queryKey: ["agents"] });
-    } finally {
-      setPromoting(false);
-    }
+  const handleDeleteCase = async (c: EvalCaseListItem) => {
+    if (!window.confirm(t("evals.deleteConfirm", { name: c.name }))) return;
+    await deleteEvalCase(c.id);
+    invalidateAll();
   };
 
   // ── Derived values ────────────────────────────────────────────────────────────
@@ -182,6 +210,9 @@ export function EvalsTab({
     notes: null,
   };
 
+  const casesList = cases ?? [];
+  const passedCount = casesList.filter((c) => c.latest_run?.pass === true).length;
+
   // ── Status icon ───────────────────────────────────────────────────────────────
 
   function statusIcon(latestRun: EvalCaseListItem["latest_run"] | undefined) {
@@ -190,9 +221,9 @@ export function EvalsTab({
         <span
           role="img"
           aria-label={t("evals.neverRun")}
-          style={{ display: "inline-flex", alignItems: "center" }}
+          style={{ display: "inline-flex", alignItems: "center", flexShrink: 0 }}
         >
-          <Icon.Info size={14} style={{ color: "var(--text-muted)" }} />
+          <Icon.Dot size={18} style={{ color: "var(--text-muted)" }} />
         </span>
       );
     }
@@ -201,9 +232,9 @@ export function EvalsTab({
         <span
           role="img"
           aria-label={t("evals.passed")}
-          style={{ display: "inline-flex", alignItems: "center" }}
+          style={{ display: "inline-flex", alignItems: "center", flexShrink: 0 }}
         >
-          <Icon.CheckCircle size={14} style={{ color: "var(--ok)" }} />
+          <Icon.CheckCircle size={16} style={{ color: "var(--ok)" }} />
         </span>
       );
     }
@@ -211,17 +242,89 @@ export function EvalsTab({
       <span
         role="img"
         aria-label={t("evals.failed")}
-        style={{ display: "inline-flex", alignItems: "center" }}
+        style={{ display: "inline-flex", alignItems: "center", flexShrink: 0 }}
       >
-        <Icon.XCircle size={14} style={{ color: "var(--crit)" }} />
+        <Icon.XCircle size={16} style={{ color: "var(--crit)" }} />
       </span>
     );
+  }
+
+  // ── Row subtitle: "expected N finding(s), got M" derived from recall ──────────
+
+  function rowSubtitle(c: EvalCaseListItem): string {
+    if (!c.latest_run) return t("evals.neverRun");
+    const expected = c.expected_output as ExpectedOutput | null;
+    const n = expected?.regions?.length ?? 0;
+    const got = Math.round((c.latest_run.recall ?? 0) * n);
+    return t("evals.expectedGot", { expected: n, got });
   }
 
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
-    <div style={{ maxWidth: 800, paddingBottom: 40 }}>
+    <div style={{ maxWidth: 1040, paddingBottom: 40 }}>
+      {/* ── Eval metrics strip ── */}
+      <SectionLabel
+        icon="Gauge"
+        right={
+          <Link
+            href={`/eval/${agentId}`}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 12,
+              fontWeight: 600,
+              color: "var(--accent)",
+              textDecoration: "none",
+            }}
+          >
+            {t("evals.viewFullDashboard")}
+            <Icon.ArrowRight size={12} />
+          </Link>
+        }
+      >
+        {t("evals.metricsTitle")}
+      </SectionLabel>
+
+      {/* Delta is only meaningful once a prior batch exists to compare against —
+          a lone first batch defaults delta to 0 server-side, which would render
+          as a misleading "flat, unchanged" badge rather than "no baseline yet". */}
+      {(() => {
+        const hasBaseline = (dashboard?.trend.length ?? 0) >= 2;
+        return (
+          <div style={{ display: "flex", gap: 12, marginBottom: 28 }}>
+            <MetricTile
+              label={t("evals.tiles.recall")}
+              value={pct(dashboard?.current.recall)}
+              color="var(--accent)"
+              deltaPts={hasBaseline ? Math.round(dashboard!.delta.recall * 100) : undefined}
+            />
+            <MetricTile
+              label={t("evals.tiles.precision")}
+              value={pct(dashboard?.current.precision)}
+              color="var(--ok)"
+              deltaPts={hasBaseline ? Math.round(dashboard!.delta.precision * 100) : undefined}
+            />
+            <MetricTile
+              label={t("evals.tiles.citationAccuracy")}
+              value={pct(dashboard?.current.citation_accuracy)}
+              color="var(--warn)"
+              deltaPts={hasBaseline ? Math.round(dashboard!.delta.citation_accuracy * 100) : undefined}
+            />
+            <MetricTile
+              label={t("evals.tiles.tracesPassed")}
+              value={
+                dashboard
+                  ? `${dashboard.current.traces_passed}/${dashboard.current.traces_total}`
+                  : "—"
+              }
+              color="var(--text-primary)"
+            />
+          </div>
+        );
+      })()}
+
       {/* ── Case list header ── */}
       <div
         style={{
@@ -234,40 +337,22 @@ export function EvalsTab({
         <span style={{ fontSize: 14, fontWeight: 600 }}>
           {t("evals.casesHeading")}
         </span>
-        <button
-          onClick={() => setNewCaseOpen(true)}
-          style={{
-            marginLeft: "auto",
-            background: "var(--bg-surface)",
-            border: "1px solid var(--border)",
-            borderRadius: 5,
-            padding: "5px 12px",
-            fontSize: 12,
-            cursor: "pointer",
-            color: "var(--text-primary)",
-          }}
-        >
-          {t("evals.newCase")}
-        </button>
-        <button
-          onClick={() => void handleRunAll()}
-          disabled={runningBatch}
-          style={{
-            background: "var(--accent)",
-            border: "none",
-            borderRadius: 5,
-            padding: "5px 12px",
-            fontSize: 12,
-            cursor: runningBatch ? "not-allowed" : "pointer",
-            color: "#fff",
-            opacity: runningBatch ? 0.7 : 1,
-          }}
-        >
-          {runningBatch ? t("evals.running") : t("evals.runAll")}
-        </button>
+        {casesList.length > 0 && (
+          <Badge color="var(--ok)" bg="var(--ok-bg)">
+            {t("evals.passingCount", { passed: passedCount, total: casesList.length })}
+          </Badge>
+        )}
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          <Button kind="secondary" icon="Play" onClick={() => void handleRunAll()} loading={runningBatch}>
+            {runningBatch ? t("evals.running") : t("evals.runAll")}
+          </Button>
+          <Button kind="primary" icon="Plus" onClick={() => setNewCaseOpen(true)}>
+            {t("evals.newCase")}
+          </Button>
+        </div>
       </div>
 
-      {/* ── Batch run result metrics ── */}
+      {/* ── Batch run result ── */}
       {lastBatchResult && (
         <div
           style={{
@@ -290,7 +375,7 @@ export function EvalsTab({
       {/* ── Cases ── */}
       {casesLoading ? (
         <Skeleton height={120} />
-      ) : (cases ?? []).length === 0 ? (
+      ) : casesList.length === 0 ? (
         <p
           style={{
             fontSize: 13,
@@ -302,9 +387,12 @@ export function EvalsTab({
         </p>
       ) : (
         <div style={{ marginBottom: 24 }}>
-          {(cases ?? []).map((c) => {
+          {casesList.map((c) => {
             const expected = c.expected_output as ExpectedOutput | null;
             const region = expected?.regions?.[0];
+            const isEmptyExpectation =
+              expected?.expectation === "must_not_flag" && (expected.regions?.length ?? 0) === 0;
+            const isRunningThis = runningCaseId === c.id;
             return (
               <div
                 key={c.id}
@@ -317,8 +405,8 @@ export function EvalsTab({
                 style={{
                   display: "flex",
                   alignItems: "center",
-                  gap: 10,
-                  padding: "8px 12px",
+                  gap: 12,
+                  padding: "10px 12px",
                   borderRadius: 6,
                   marginBottom: 4,
                   border: "1px solid var(--border)",
@@ -327,34 +415,44 @@ export function EvalsTab({
                 }}
               >
                 {statusIcon(c.latest_run)}
-                <span style={{ fontSize: 13, fontWeight: 500, flex: 1 }}>
-                  {c.name}
-                </span>
-                {expected?.expectation && (
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{c.name}</div>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
+                    {rowSubtitle(c)}
+                  </div>
+                </div>
+                {isEmptyExpectation ? (
                   <Badge color="var(--text-secondary)" mono>
-                    {expected.expectation}
+                    {t("evals.emptyExpectation")}
                   </Badge>
-                )}
-                {region && (
-                  <span
-                    style={{
-                      fontSize: 11,
-                      color: "var(--text-muted)",
-                      fontFamily: "monospace",
-                    }}
-                  >
-                    {region.file}:{region.start_line}
-                  </span>
-                )}
-                {region?.severity && (
-                  <Badge color="var(--warn)" mono>
-                    {region.severity}
-                  </Badge>
-                )}
-                {region?.category && (
+                ) : region?.severity || region?.category ? (
                   <Badge color="var(--text-secondary)" mono>
-                    {region.category}
+                    {[region.severity, region.category].filter(Boolean).join(" · ")}
                   </Badge>
+                ) : null}
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ display: "flex", gap: 2, flexShrink: 0 }}
+                >
+                  <IconBtn
+                    icon="Play"
+                    label={t("evals.runCaseLabel")}
+                    onClick={() => void handleRunCase(c.id)}
+                  />
+                  <IconBtn
+                    icon="Edit"
+                    label={t("evals.editCaseLabel")}
+                    onClick={() => setEditingCase(c)}
+                  />
+                  <IconBtn
+                    icon="Trash"
+                    label={t("evals.deleteCaseLabel")}
+                    danger
+                    onClick={() => void handleDeleteCase(c)}
+                  />
+                </div>
+                {isRunningThis && (
+                  <Icon.RefreshCw size={13} style={{ animation: "ddspin 1s linear infinite", color: "var(--text-muted)" }} />
                 )}
               </div>
             );
@@ -362,337 +460,26 @@ export function EvalsTab({
         </div>
       )}
 
-      {/* ── Run history ── */}
-      <div style={{ marginTop: 8, marginBottom: 24 }}>
-        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>
-          {t("evals.history")}
-        </div>
-        {batchesLoading ? (
-          <Skeleton height={80} />
-        ) : (batches ?? []).length === 0 ? (
-          <p style={{ fontSize: 13, color: "var(--text-muted)" }}>
-            {t("evals.noHistory")}
-          </p>
-        ) : (
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              fontSize: 12,
-            }}
-          >
-            <thead>
-              <tr
-                style={{
-                  borderBottom: "1px solid var(--border)",
-                  textAlign: "left",
-                  color: "var(--text-muted)",
-                }}
-              >
-                <th style={{ padding: "4px 8px" }}>{t("evals.table.ranAt")}</th>
-                <th style={{ padding: "4px 8px" }}>{t("evals.table.version")}</th>
-                <th style={{ padding: "4px 8px" }}>{t("evals.table.recall")}</th>
-                <th style={{ padding: "4px 8px" }}>{t("evals.table.precision")}</th>
-                <th style={{ padding: "4px 8px" }}>{t("evals.table.citation")}</th>
-                <th style={{ padding: "4px 8px" }}>{t("evals.table.passedOf")}</th>
-                <th style={{ padding: "4px 8px" }}>{t("evals.table.compare")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(batches ?? []).map((b: EvalRunBatch) => {
-                const isSelected = selectedBatches.includes(b.batch_id);
-                return (
-                  <tr
-                    key={b.batch_id}
-                    style={{
-                      borderBottom: "1px solid var(--border)",
-                      background: isSelected
-                        ? "var(--bg-subtle, var(--bg-surface))"
-                        : undefined,
-                    }}
-                  >
-                    <td style={{ padding: "6px 8px" }}>
-                      {new Date(b.ran_at).toLocaleString()}
-                    </td>
-                    <td style={{ padding: "6px 8px" }}>
-                      {b.agent_version != null ? `v${b.agent_version}` : "—"}
-                    </td>
-                    <td style={{ padding: "6px 8px" }}>{pct(b.recall)}</td>
-                    <td style={{ padding: "6px 8px" }}>{pct(b.precision)}</td>
-                    <td style={{ padding: "6px 8px" }}>
-                      {pct(b.citation_accuracy)}
-                    </td>
-                    <td style={{ padding: "6px 8px" }}>
-                      {b.traces_passed}/{b.traces_total}
-                    </td>
-                    <td style={{ padding: "6px 8px" }}>
-                      <button
-                        onClick={() => void toggleBatchSelect(b.batch_id)}
-                        style={{
-                          background: isSelected
-                            ? "var(--accent)"
-                            : "var(--bg-surface)",
-                          border: "1px solid var(--border)",
-                          borderRadius: 4,
-                          padding: "2px 8px",
-                          fontSize: 11,
-                          cursor: "pointer",
-                          color: isSelected ? "#fff" : "var(--text-secondary)",
-                        }}
-                      >
-                        {isSelected ? "✓" : t("evals.compare")}
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {/* ── Compare panel ── */}
-      {selectedBatches.length === 2 && (
-        <div
-          style={{
-            border: "1px solid var(--border)",
-            borderRadius: 8,
-            padding: 16,
-            background: "var(--bg-surface)",
-            marginBottom: 24,
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              marginBottom: 14,
-            }}
-          >
-            <span style={{ fontSize: 14, fontWeight: 600 }}>
-              {t("evals.compareHeading")}
-            </span>
-            <button
-              onClick={() => {
-                setSelectedBatches([]);
-                setCompareData(null);
-              }}
-              style={{
-                marginLeft: "auto",
-                background: "none",
-                border: "1px solid var(--border)",
-                borderRadius: 4,
-                padding: "2px 8px",
-                fontSize: 11,
-                cursor: "pointer",
-                color: "var(--text-secondary)",
-              }}
-            >
-              {t("evals.clearCompare")}
-            </button>
-          </div>
-
-          {comparing ? (
-            <Skeleton height={80} />
-          ) : compareData ? (
-            <>
-              {/* Delta metrics */}
-              <div
-                style={{
-                  display: "flex",
-                  gap: 24,
-                  marginBottom: 16,
-                  fontSize: 13,
-                }}
-              >
-                <div>
-                  <span style={{ color: "var(--text-muted)", fontSize: 11 }}>
-                    {t("evals.deltaRecall")}
-                  </span>
-                  <div>{formatDelta(compareData.delta.recall)}</div>
-                </div>
-                <div>
-                  <span style={{ color: "var(--text-muted)", fontSize: 11 }}>
-                    {t("evals.deltaPrecision")}
-                  </span>
-                  <div>{formatDelta(compareData.delta.precision)}</div>
-                </div>
-                <div>
-                  <span style={{ color: "var(--text-muted)", fontSize: 11 }}>
-                    {t("evals.deltaCitation")}
-                  </span>
-                  <div>{formatDelta(compareData.delta.citation_accuracy)}</div>
-                </div>
-              </div>
-
-              {/* Batch A → B summary */}
-              <div
-                style={{
-                  fontSize: 12,
-                  color: "var(--text-muted)",
-                  marginBottom: 14,
-                }}
-              >
-                {t("evals.promptBefore")}:{" "}
-                <strong style={{ color: "var(--text-primary)" }}>
-                  v{compareData.a.agent_version ?? "?"}
-                </strong>{" "}
-                · {pct(compareData.a.recall)} / {pct(compareData.a.precision)} /{" "}
-                {pct(compareData.a.citation_accuracy)}
-                {"  →  "}
-                {t("evals.promptAfter")}:{" "}
-                <strong style={{ color: "var(--text-primary)" }}>
-                  v{compareData.b.agent_version ?? "?"}
-                </strong>{" "}
-                · {pct(compareData.b.recall)} / {pct(compareData.b.precision)} /{" "}
-                {pct(compareData.b.citation_accuracy)}
-              </div>
-
-              {/* Prompt diff */}
-              {compareData.prompt_diff != null && (
-                <div style={{ marginBottom: 14 }}>
-                  <div
-                    style={{
-                      fontSize: 12,
-                      fontWeight: 600,
-                      marginBottom: 6,
-                      color: "var(--text-secondary)",
-                    }}
-                  >
-                    {t("evals.promptDiff")}
-                  </div>
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "1fr 1fr",
-                      gap: 8,
-                    }}
-                  >
-                    <div>
-                      <div
-                        style={{
-                          fontSize: 11,
-                          color: "var(--text-muted)",
-                          marginBottom: 4,
-                        }}
-                      >
-                        {t("evals.promptBefore")}
-                      </div>
-                      <pre
-                        style={{
-                          fontSize: 11,
-                          background: "var(--bg-muted, var(--bg-surface))",
-                          borderRadius: 4,
-                          padding: 8,
-                          overflow: "auto",
-                          maxHeight: 200,
-                          margin: 0,
-                          whiteSpace: "pre-wrap",
-                          wordBreak: "break-word",
-                          border: "1px solid var(--border)",
-                        }}
-                      >
-                        {toPromptText(
-                          (compareData.prompt_diff as { old?: string | null; new?: string | null } | null)?.old
-                        )}
-                      </pre>
-                    </div>
-                    <div>
-                      <div
-                        style={{
-                          fontSize: 11,
-                          color: "var(--text-muted)",
-                          marginBottom: 4,
-                        }}
-                      >
-                        {t("evals.promptAfter")}
-                      </div>
-                      <pre
-                        style={{
-                          fontSize: 11,
-                          background: "var(--bg-muted, var(--bg-surface))",
-                          borderRadius: 4,
-                          padding: 8,
-                          overflow: "auto",
-                          maxHeight: 200,
-                          margin: 0,
-                          whiteSpace: "pre-wrap",
-                          wordBreak: "break-word",
-                          border: "1px solid var(--border)",
-                        }}
-                      >
-                        {toPromptText(
-                          (compareData.prompt_diff as { old?: string | null; new?: string | null } | null)?.new
-                        )}
-                      </pre>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Promote button */}
-              {(() => {
-                // Promote the batch version that is NOT the current agent version
-                const batchA = compareData.a;
-                const batchB = compareData.b;
-                const nonCurrentBatch =
-                  batchA.agent_version !== agentVersion ? batchA : batchB;
-                const versionToPromote = nonCurrentBatch.agent_version;
-                const alreadyCurrent =
-                  versionToPromote === agentVersion || versionToPromote == null;
-                return (
-                  <button
-                    onClick={() => {
-                      if (versionToPromote != null)
-                        void handlePromote(versionToPromote);
-                    }}
-                    disabled={alreadyCurrent || promoting}
-                    style={{
-                      background: "var(--accent)",
-                      border: "none",
-                      borderRadius: 5,
-                      padding: "6px 14px",
-                      fontSize: 12,
-                      cursor:
-                        alreadyCurrent || promoting ? "not-allowed" : "pointer",
-                      color: "#fff",
-                      opacity: alreadyCurrent || promoting ? 0.5 : 1,
-                    }}
-                  >
-                    {promoting
-                      ? t("evals.promoting")
-                      : promotedVersion === versionToPromote
-                        ? t("evals.promoted")
-                        : versionToPromote != null
-                          ? t("evals.promote", { version: versionToPromote })
-                          : t("evals.promote", { version: "?" })}
-                  </button>
-                );
-              })()}
-            </>
-          ) : null}
-        </div>
-      )}
-
       {/* ── Modals ── */}
       {newCaseOpen && (
         <EvalCaseModal
+          agentName={agentName}
           initial={blankInitial}
           onSaved={() => {
             setNewCaseOpen(false);
-            void qc.invalidateQueries({ queryKey: evalQueryKeys.cases(agentId) });
+            invalidateAll();
           }}
           onClose={() => setNewCaseOpen(false)}
         />
       )}
       {editingCase && (
         <EvalCaseModal
+          agentName={agentName}
           caseId={editingCase.id}
           initial={buildInitialFromCase(editingCase)}
           onSaved={() => {
             setEditingCase(null);
-            void qc.invalidateQueries({ queryKey: evalQueryKeys.cases(agentId) });
+            invalidateAll();
           }}
           onClose={() => setEditingCase(null)}
         />

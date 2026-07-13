@@ -1,13 +1,16 @@
 /* AgentEvalCard — per-agent eval metrics card. Fetches its own dashboard slice
-   so the parent list can render incrementally without a waterfall. */
+   so the parent list can render incrementally without a waterfall. The parent
+   passes down its already-fetched batch history (`batches`) purely to source
+   the "Last run vN · date" line — no extra fetch happens here. */
 "use client";
 
 import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
+import { Icon, Badge } from "@devdigest/ui";
 import { fetchEvalDashboard, evalQueryKeys } from "@/lib/api";
-import type { Agent } from "@devdigest/shared";
+import type { Agent, EvalRunBatch } from "@devdigest/shared";
 
 // ---------------------------------------------------------------------------
 // Sparkline — simple SVG polyline for recall trend
@@ -35,23 +38,33 @@ function Sparkline({ points }: { points: number[] }) {
       aria-hidden="true"
       style={{ display: "block", flexShrink: 0 }}
     >
-      <polyline points={coords} fill="none" stroke="var(--ok)" strokeWidth="1.5" />
+      <polyline points={coords} fill="none" stroke="var(--accent)" strokeWidth="1.5" />
     </svg>
   );
 }
 
 // ---------------------------------------------------------------------------
-// DeltaBadge — directional arrow + signed percentage
+// Stat — a labeled, colored metric value in the card's right-hand cluster
 // ---------------------------------------------------------------------------
 
-function DeltaBadge({ value }: { value: number }) {
-  if (value === 0) return <span style={{ color: "var(--text-muted)", fontSize: 11 }}>—</span>;
-  const isPos = value > 0;
+function Stat({ label, value, color }: { label: string; value: number; color: string }) {
   return (
-    <span style={{ color: isPos ? "var(--ok)" : "var(--crit)", fontSize: 11 }}>
-      {isPos ? "▲" : "▼"} {isPos ? "+" : ""}
-      {Math.round(value * 100)}%
-    </span>
+    <div style={{ textAlign: "center", minWidth: 44 }}>
+      <p
+        style={{
+          fontSize: 10,
+          fontWeight: 600,
+          color: "var(--text-muted)",
+          letterSpacing: "0.04em",
+          margin: "0 0 2px",
+        }}
+      >
+        {label}
+      </p>
+      <p className="tnum" style={{ fontSize: 15, fontWeight: 700, color, margin: 0 }}>
+        {Math.round(value * 100)}%
+      </p>
+    </div>
   );
 }
 
@@ -61,9 +74,10 @@ function DeltaBadge({ value }: { value: number }) {
 
 interface Props {
   agent: Agent;
+  batches?: EvalRunBatch[];
 }
 
-export function AgentEvalCard({ agent }: Props) {
+export function AgentEvalCard({ agent, batches }: Props) {
   const t = useTranslations("eval");
 
   const { data, isLoading } = useQuery({
@@ -72,12 +86,22 @@ export function AgentEvalCard({ agent }: Props) {
   });
 
   const hasBatches = (data?.trend.length ?? 0) >= 1;
-  const showDelta = (data?.trend.length ?? 0) >= 2;
   const recallPoints = data?.trend.map((p) => p.recall) ?? [];
+  const latestBatch = batches?.[0];
+
+  const lastRunLabel =
+    latestBatch != null && data
+      ? t("dashboard.lastRun", {
+          version: latestBatch.agent_version ?? "—",
+          date: new Date(latestBatch.ran_at).toLocaleString(),
+          passed: data.current.traces_passed,
+          total: data.current.traces_total,
+        })
+      : null;
 
   return (
     <Link
-      href={`/agents/${agent.id}?tab=evals`}
+      href={`/eval/${agent.id}`}
       style={{
         display: "block",
         textDecoration: "none",
@@ -107,56 +131,73 @@ export function AgentEvalCard({ agent }: Props) {
         </div>
       )}
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+        {/* Agent icon */}
+        <div
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 8,
+            background: "var(--accent-bg)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+          }}
+        >
+          <Icon.Cpu size={18} style={{ color: "var(--accent)" }} />
+        </div>
+
         <div style={{ minWidth: 0, flex: 1 }}>
-          <p style={{ fontWeight: 600, marginBottom: 8, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-            {agent.name}
-          </p>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+            <span
+              style={{
+                fontWeight: 600,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {agent.name}
+            </span>
+            {agent.model && <Badge mono>{agent.model}</Badge>}
+          </div>
 
           {isLoading ? (
-            <p style={{ color: "var(--text-muted)", fontSize: 12 }}>{t("dashboard.loading")}</p>
+            <p style={{ color: "var(--text-muted)", fontSize: 12, margin: 0 }}>
+              {t("dashboard.loading")}
+            </p>
           ) : !hasBatches ? (
-            <p style={{ color: "var(--text-muted)", fontSize: 12 }}>{t("dashboard.noBatches")}</p>
+            <p style={{ color: "var(--text-muted)", fontSize: 12, margin: 0 }}>
+              {t("dashboard.noBatches")}
+            </p>
           ) : (
-            <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
-              {/* Recall */}
-              <div>
-                <p style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 2 }}>
-                  {t("dashboard.metrics.recall")}
-                </p>
-                <p style={{ fontWeight: 600, marginBottom: 2 }}>
-                  {Math.round((data?.current.recall ?? 0) * 100)}%
-                </p>
-                {showDelta && <DeltaBadge value={data?.delta.recall ?? 0} />}
-              </div>
-
-              {/* Precision */}
-              <div>
-                <p style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 2 }}>
-                  {t("dashboard.metrics.precision")}
-                </p>
-                <p style={{ fontWeight: 600, marginBottom: 2 }}>
-                  {Math.round((data?.current.precision ?? 0) * 100)}%
-                </p>
-                {showDelta && <DeltaBadge value={data?.delta.precision ?? 0} />}
-              </div>
-
-              {/* Citation accuracy */}
-              <div>
-                <p style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 2 }}>
-                  {t("dashboard.metrics.citationAccuracy")}
-                </p>
-                <p style={{ fontWeight: 600, marginBottom: 2 }}>
-                  {Math.round((data?.current.citation_accuracy ?? 0) * 100)}%
-                </p>
-                {showDelta && <DeltaBadge value={data?.delta.citation_accuracy ?? 0} />}
-              </div>
-            </div>
+            <p style={{ color: "var(--text-muted)", fontSize: 12, margin: 0 }}>{lastRunLabel}</p>
           )}
         </div>
 
-        {/* Sparkline — show when at least 2 trend points exist */}
-        {recallPoints.length >= 2 && <Sparkline points={recallPoints} />}
+        {/* Sparkline + stats + chevron — only once real metrics exist */}
+        {hasBatches && (
+          <div style={{ display: "flex", alignItems: "center", gap: 24, flexShrink: 0 }}>
+            {recallPoints.length >= 2 && <Sparkline points={recallPoints} />}
+            <Stat
+              label={t("dashboard.metrics.recall")}
+              value={data?.current.recall ?? 0}
+              color="var(--accent)"
+            />
+            <Stat
+              label={t("dashboard.metrics.precision")}
+              value={data?.current.precision ?? 0}
+              color="var(--ok)"
+            />
+            <Stat
+              label={t("dashboard.metrics.citationAccuracy")}
+              value={data?.current.citation_accuracy ?? 0}
+              color="var(--warn)"
+            />
+            <Icon.ChevronRight size={18} style={{ color: "var(--text-muted)" }} />
+          </div>
+        )}
       </div>
     </Link>
   );

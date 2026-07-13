@@ -163,6 +163,54 @@ export async function createCase(
 }
 
 // ---------------------------------------------------------------------------
+// updateCase
+// ---------------------------------------------------------------------------
+
+/**
+ * Update an existing eval case in place (the ONE function that calls
+ * `repo.updateCase`). Mirrors `createCase`'s validation: `safeParse`s
+ * `expected_output` and verifies the owner belongs to the caller's workspace.
+ * Throws NotFoundError if the case doesn't exist in this workspace.
+ */
+export async function updateCase(
+  container: Container,
+  workspaceId: string,
+  caseId: string,
+  input: EvalCaseInput,
+): Promise<EvalCaseRow> {
+  const parseResult = EvalExpectedOutput.safeParse(input.expected_output);
+  if (!parseResult.success) {
+    throw new ValidationError('Invalid expected_output', parseResult.error.issues);
+  }
+
+  if (input.owner_kind === 'skill') {
+    const skill = await container.skillsRepo.getById(workspaceId, input.owner_id);
+    if (!skill) {
+      throw new NotFoundError('Skill not found in workspace');
+    }
+  } else {
+    const agent = await container.agentsRepo.getById(workspaceId, input.owner_id);
+    if (!agent) {
+      throw new NotFoundError('Agent not found in workspace');
+    }
+  }
+
+  const row = await container.evalRepo.updateCase(workspaceId, caseId, {
+    workspaceId,
+    ownerKind: input.owner_kind,
+    ownerId: input.owner_id,
+    name: input.name,
+    inputDiff: input.input_diff ?? '',
+    inputFiles: input.input_files ?? null,
+    inputMeta: input.input_meta ?? null,
+    expectedOutput: input.expected_output,
+    notes: input.notes ?? null,
+  });
+  if (!row) throw new NotFoundError('Eval case not found');
+  return row;
+}
+
+// ---------------------------------------------------------------------------
 // listCases
 // ---------------------------------------------------------------------------
 

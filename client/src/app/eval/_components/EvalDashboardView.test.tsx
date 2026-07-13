@@ -1,9 +1,9 @@
 import React from "react";
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, within, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NextIntlClientProvider } from "next-intl";
-import type { EvalDashboard } from "@devdigest/shared";
+import type { EvalDashboard, EvalRunBatch } from "@devdigest/shared";
 import messages from "../../../../messages/en/eval.json";
 
 // ---- Mocks ----------------------------------------------------------------
@@ -30,10 +30,30 @@ vi.mock("@/components/app-shell", () => ({
   AppShell: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
-// Skeleton renders a placeholder div
+// Design-system primitives — stubbed down to their text/interaction surface.
 vi.mock("@devdigest/ui", () => ({
   Skeleton: ({ height }: { height: number }) => (
     <div data-testid="skeleton" style={{ height }} />
+  ),
+  Button: ({
+    children,
+    onClick,
+    disabled,
+  }: {
+    children?: React.ReactNode;
+    onClick?: () => void;
+    disabled?: boolean;
+  }) => (
+    <button onClick={onClick} disabled={disabled}>
+      {children}
+    </button>
+  ),
+  SectionLabel: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  ProgressBar: () => <div data-testid="progress-bar" />,
+  Badge: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
+  Icon: new Proxy(
+    {},
+    { get: () => () => <svg data-testid="icon" /> },
   ),
 }));
 
@@ -45,6 +65,7 @@ vi.mock("@/lib/hooks/agents", () => ({
 // API functions
 vi.mock("@/lib/api", () => ({
   fetchEvalDashboard: vi.fn(),
+  fetchEvalBatches: vi.fn(),
   runEvalBatch: vi.fn(),
   evalQueryKeys: {
     cases: (agentId: string) => ["eval-cases", agentId],
@@ -55,7 +76,7 @@ vi.mock("@/lib/api", () => ({
 }));
 
 import { useAgents } from "@/lib/hooks/agents";
-import { fetchEvalDashboard, runEvalBatch } from "@/lib/api";
+import { fetchEvalDashboard, fetchEvalBatches, runEvalBatch } from "@/lib/api";
 import { EvalDashboardView } from "./EvalDashboardView";
 
 // ---- Fixtures ---------------------------------------------------------------
@@ -87,6 +108,7 @@ const AGENT1_DASHBOARD: EvalDashboard = {
       citation_accuracy: 0.74,
       pass_rate: 0.8,
       cost_usd: null,
+      agent_version: null,
     },
     {
       ran_at: "2026-07-08T00:00:00Z",
@@ -95,6 +117,7 @@ const AGENT1_DASHBOARD: EvalDashboard = {
       citation_accuracy: 0.75,
       pass_rate: 0.8,
       cost_usd: null,
+      agent_version: null,
     },
   ],
   recent_runs: [],
@@ -113,17 +136,34 @@ const AGENT2_DASHBOARD: EvalDashboard = {
   alert: null,
 };
 
-/** Workspace-level: recent_runs empty (documents current server behaviour) */
-const WORKSPACE_DASHBOARD: EvalDashboard = {
-  owner_kind: null,
-  owner_id: null,
-  cases_total: 0,
-  current: { recall: 0, precision: 0, citation_accuracy: 0, traces_passed: 0, traces_total: 0, cost_usd: null },
-  delta: { recall: 0, precision: 0, citation_accuracy: 0 },
-  trend: [],
-  recent_runs: [],
-  alert: null,
-};
+/** ag1 batch history — newest first, matches AGENT1_DASHBOARD.current for the latest row */
+const AG1_BATCHES: EvalRunBatch[] = [
+  {
+    batch_id: "batch-2",
+    ran_at: "2026-07-08T00:00:00Z",
+    agent_version: 3,
+    recall: 0.82,
+    precision: 0.91,
+    citation_accuracy: 0.75,
+    traces_passed: 8,
+    traces_total: 10,
+    cost_usd: 0.23,
+  },
+  {
+    batch_id: "batch-1",
+    ran_at: "2026-07-01T00:00:00Z",
+    agent_version: 2,
+    recall: 0.77,
+    precision: 0.93,
+    citation_accuracy: 0.74,
+    traces_passed: 7,
+    traces_total: 10,
+    cost_usd: 0.21,
+  },
+];
+
+/** ag2 has no batch history yet */
+const AG2_BATCHES: EvalRunBatch[] = [];
 
 // ---- Helpers ----------------------------------------------------------------
 
@@ -161,9 +201,13 @@ function setDefaultMocks() {
   } as unknown as ReturnType<typeof useAgents>);
 
   vi.mocked(fetchEvalDashboard).mockImplementation(async (agentId?: string): Promise<EvalDashboard> => {
-    if (!agentId) return WORKSPACE_DASHBOARD;
     if (agentId === "ag1") return AGENT1_DASHBOARD;
     return AGENT2_DASHBOARD;
+  });
+
+  vi.mocked(fetchEvalBatches).mockImplementation(async (agentId: string): Promise<EvalRunBatch[]> => {
+    if (agentId === "ag1") return AG1_BATCHES;
+    return AG2_BATCHES;
   });
 
   vi.mocked(runEvalBatch).mockResolvedValue({
@@ -192,24 +236,28 @@ describe("EvalDashboardView", () => {
     expect(await screen.findByText("Security Reviewer")).toBeInTheDocument();
     expect(screen.getByText("Style Checker")).toBeInTheDocument();
 
-    // Real metrics for ag1 (recall=82%, precision=91%, citation=75%)
-    expect(await screen.findByText("82%")).toBeInTheDocument();
-    expect(screen.getByText("91%")).toBeInTheDocument();
-    expect(screen.getByText("75%")).toBeInTheDocument();
+    // Real metrics for ag1 (recall=82%, precision=91%, citation=75%) — each
+    // value legitimately appears twice once batches resolve too (the card's
+    // own stat AND the recent-runs table row for the same latest batch).
+    expect((await screen.findAllByText("82%")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("91%").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("75%").length).toBeGreaterThan(0);
 
     // ag2 has no batches — shows "No runs yet." placeholder
     expect(screen.getByText("No runs yet.")).toBeInTheDocument();
   });
 
-  it("shows empty state for workspace recent_runs table when recent_runs is []", async () => {
+  it("shows empty state for the recent runs table when no agent has batch history", async () => {
+    vi.mocked(fetchEvalBatches).mockResolvedValue([]);
+
     renderWithProviders(<EvalDashboardView />);
 
     // Wait for agents to render
     await screen.findByText("Security Reviewer");
 
-    // The empty state message for the workspace-level table
+    // The empty state message for the workspace-wide table
     expect(
-      screen.getByText("No recent eval runs across all agents."),
+      await screen.findByText("No recent eval runs across all agents."),
     ).toBeInTheDocument();
 
     // No table rows
@@ -242,7 +290,6 @@ describe("EvalDashboardView", () => {
 
   it("renders alert banner when an agent has an alert", async () => {
     vi.mocked(fetchEvalDashboard).mockImplementation(async (agentId?: string): Promise<EvalDashboard> => {
-      if (!agentId) return WORKSPACE_DASHBOARD;
       if (agentId === "ag1") {
         return {
           ...AGENT1_DASHBOARD,
@@ -263,14 +310,13 @@ describe("EvalDashboardView", () => {
     expect(screen.getByRole("alert")).toBeInTheDocument();
   });
 
-  it("clicking 'Run all' invalidates eval-dashboard queries on success", async () => {
+  it("clicking 'Run all' invalidates eval-dashboard and eval-batches queries on success", async () => {
     const qc = makeQueryClient();
     const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
 
     renderWithClient(<EvalDashboardView />, qc);
 
-    // Wait for agents to appear (agents hook resolves synchronously in mock,
-    // but query for workspace dashboard is async — wait for card names)
+    // Wait for agents to appear
     await screen.findByText("Security Reviewer");
 
     fireEvent.click(screen.getByRole("button", { name: /run all agents/i }));
@@ -278,6 +324,9 @@ describe("EvalDashboardView", () => {
     await waitFor(() => {
       expect(invalidateSpy).toHaveBeenCalledWith(
         expect.objectContaining({ queryKey: ["eval-dashboard"] }),
+      );
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: ["eval-batches"] }),
       );
     });
   });
@@ -294,40 +343,19 @@ describe("EvalDashboardView", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("network error");
   });
 
-  it("renders workspace recent_runs table rows when data is populated", async () => {
-    const runRow = {
-      id: "run-1",
-      case_id: "case-1",
-      case_name: "stripe-key-leak",
-      ran_at: "2026-07-10T12:00:00Z",
-      actual_output: null,
-      pass: true,
-      recall: 0.9,
-      precision: 0.85,
-      citation_accuracy: 0.8,
-      duration_ms: null,
-      cost_usd: null,
-      batch_id: "batch-1",
-      agent_version: 1,
-    };
-
-    vi.mocked(fetchEvalDashboard).mockImplementation(async (agentId?: string): Promise<EvalDashboard> => {
-      if (!agentId) return { ...WORKSPACE_DASHBOARD, recent_runs: [runRow] };
-      if (agentId === "ag1") return AGENT1_DASHBOARD;
-      return AGENT2_DASHBOARD;
-    });
-
+  it("renders recent runs table rows sourced from agent batch history", async () => {
     renderWithProviders(<EvalDashboardView />);
 
-    // Wait for the table to appear (workspace dashboard resolves asynchronously)
+    // Table appears once every agent's batch query has resolved
     const table = await screen.findByRole("table");
     expect(table).toBeInTheDocument();
 
-    // Empty-state message should be gone once real data is in
     expect(screen.queryByText("No recent eval runs across all agents.")).not.toBeInTheDocument();
 
-    // Row values: recall 0.9 = 90%
-    expect(screen.getByText("90%")).toBeInTheDocument();
-    expect(screen.getByText("pass")).toBeInTheDocument();
+    // Newest ag1 batch (v3): version badge, agent name, pass fraction, recall bar %
+    expect(within(table).getByText("v3")).toBeInTheDocument();
+    expect(within(table).getAllByText("Security Reviewer").length).toBeGreaterThan(0);
+    expect(within(table).getByText("8/10")).toBeInTheDocument();
+    expect(within(table).getAllByText("82%").length).toBeGreaterThan(0);
   });
 });

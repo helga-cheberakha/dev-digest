@@ -49,11 +49,7 @@ export function Button({
       color: "var(--text-primary)",
       borderColor: "var(--border-strong)",
     },
-    tertiary: {
-      background: active ? "var(--bg-hover)" : "transparent",
-      color: active ? "var(--text-primary)" : "var(--text-secondary)",
-      borderColor: "transparent",
-    },
+    tertiary: { background: "transparent", color: "var(--text-secondary)", borderColor: "transparent" },
     ghost: { background: "transparent", color: "var(--text-secondary)", borderColor: "var(--border)" },
     danger: { background: "transparent", color: "var(--crit)", borderColor: "var(--border-strong)" },
   };
@@ -65,6 +61,14 @@ export function Button({
     danger: { background: "var(--crit-bg)", borderColor: "var(--crit)" },
   };
   const hover = h ? hoverMap[kind] : {};
+  // `active` = "this represents the current/pressed state" (e.g. a toggle
+  // that's already on), independent of `kind` — previously only wired for
+  // `kind="tertiary"`, so `active` silently did nothing on every other kind.
+  // Kept generic/neutral here; callers needing a semantic tint (e.g. green
+  // for "accepted") pass it via the `style` prop, which wins below.
+  const activeStyle: React.CSSProperties = active
+    ? { background: "var(--bg-hover)", color: "var(--text-primary)", borderColor: "var(--text-muted)" }
+    : {};
   return (
     <button
       {...rest}
@@ -73,6 +77,7 @@ export function Button({
         ...base,
         ...kinds[kind],
         ...hover,
+        ...activeStyle,
         ...(disabled || loading ? { opacity: 0.6, cursor: "not-allowed" } : {}),
         ...style,
       }}

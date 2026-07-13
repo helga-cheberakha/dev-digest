@@ -106,5 +106,84 @@ describe.skipIf(!process.env.DATABASE_URL)(
       // Both batched runs count toward the total; the null run is excluded.
       expect(batches[0]!.tracesTotal).toBe(2);
     });
+
+    it('updateCase updates the row in place (same id, no duplicate); is workspace-scoped', async () => {
+      const ownerId = randomUUID();
+      const ec = await repo.insertCase({
+        workspaceId,
+        ownerKind: 'agent',
+        ownerId,
+        name: 'updateCase-case',
+        inputDiff: 'original diff',
+      });
+
+      // A different workspace cannot update this case.
+      const [otherWs] = await handle.db
+        .insert(t.workspaces)
+        .values({ name: `eval-repo-test-other-${randomUUID()}` })
+        .returning();
+      const updatedByOther = await repo.updateCase(otherWs!.id, ec.id, {
+        workspaceId: otherWs!.id,
+        ownerKind: 'agent',
+        ownerId,
+        name: 'hijacked',
+        inputDiff: 'hijacked diff',
+      });
+      expect(updatedByOther).toBeUndefined();
+      await handle.db.delete(t.workspaces).where(eq(t.workspaces.id, otherWs!.id));
+
+      const updated = await repo.updateCase(workspaceId, ec.id, {
+        workspaceId,
+        ownerKind: 'agent',
+        ownerId,
+        name: 'renamed-case',
+        inputDiff: 'updated diff',
+      });
+
+      // Same id — this is an in-place update, not a new row.
+      expect(updated!.id).toBe(ec.id);
+      expect(updated!.name).toBe('renamed-case');
+      expect(updated!.inputDiff).toBe('updated diff');
+
+      const fetched = await repo.getCase(workspaceId, ec.id);
+      expect(fetched!.name).toBe('renamed-case');
+
+      // No duplicate row was created for this owner.
+      const all = await repo.listCases(workspaceId, 'agent', ownerId);
+      expect(all).toHaveLength(1);
+    });
+
+    it('deleteCase removes the case and cascades its runs; is workspace-scoped', async () => {
+      const ownerId = randomUUID();
+      const ec = await repo.insertCase({
+        workspaceId,
+        ownerKind: 'agent',
+        ownerId,
+        name: 'deleteCase-case',
+        inputDiff: '',
+      });
+      await repo.insertRun(ec.id, { batchId: randomUUID(), agentVersion: 1, pass: true, recall: 1, precision: 1, citationAccuracy: 1 });
+
+      // A different workspace cannot delete this case.
+      const [otherWs] = await handle.db
+        .insert(t.workspaces)
+        .values({ name: `eval-repo-test-other-${randomUUID()}` })
+        .returning();
+      const deletedByOther = await repo.deleteCase(otherWs!.id, ec.id);
+      expect(deletedByOther).toBe(false);
+      expect(await repo.getCase(workspaceId, ec.id)).toBeDefined();
+      await handle.db.delete(t.workspaces).where(eq(t.workspaces.id, otherWs!.id));
+
+      const deleted = await repo.deleteCase(workspaceId, ec.id);
+      expect(deleted).toBe(true);
+      expect(await repo.getCase(workspaceId, ec.id)).toBeUndefined();
+
+      // Runs cascade-deleted with the case.
+      const runs = await repo.runsForCase(workspaceId, ec.id);
+      expect(runs).toHaveLength(0);
+
+      // Deleting again (already gone) reports no row deleted.
+      expect(await repo.deleteCase(workspaceId, ec.id)).toBe(false);
+    });
   },
 );

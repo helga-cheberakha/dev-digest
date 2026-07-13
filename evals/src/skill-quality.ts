@@ -36,7 +36,14 @@ function evaluate(skillDir: string): Report {
   if (!existsSync(skillMd)) {
     return { skill: name, errors: [`SKILL.md not found in ${skillDir}`], warnings: [], verdict: "FAIL" };
   }
-  const { data: fm, content: body } = matter(readFileSync(skillMd, "utf8"));
+  let fm: Record<string, unknown>;
+  let body: string;
+  try {
+    ({ data: fm, content: body } = matter(readFileSync(skillMd, "utf8")));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { skill: name, errors: [`failed to parse frontmatter: ${msg}`], warnings: [], verdict: "FAIL" };
+  }
   const errors: string[] = [];
   const warnings: string[] = [];
 

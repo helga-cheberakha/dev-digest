@@ -63,6 +63,7 @@ export const EvalTrendPoint = z.object({
   citation_accuracy: z.number(),
   pass_rate: z.number(),
   cost_usd: z.number().nullable(),
+  agent_version: z.number().int().nullable(),
 });
 export type EvalTrendPoint = z.infer<typeof EvalTrendPoint>;
 
@@ -321,6 +322,8 @@ export const EvalRunBatch = z.object({
   citation_accuracy: z.number(),
   traces_passed: z.number().int(),
   traces_total: z.number().int(),
+  /** Sum of per-run cost_usd across the batch; null-cost runs contribute 0. */
+  cost_usd: z.number(),
 });
 export type EvalRunBatch = z.infer<typeof EvalRunBatch>;
 
@@ -333,6 +336,7 @@ export const EvalCompare = z.object({
     recall: z.number(),
     precision: z.number(),
     citation_accuracy: z.number(),
+    cost_usd: z.number(),
   }),
 });
 export type EvalCompare = z.infer<typeof EvalCompare>;

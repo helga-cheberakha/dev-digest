@@ -175,6 +175,14 @@ export async function createEvalCase(input: EvalCaseInput): Promise<EvalCase> {
   return api.post<EvalCase>(`/eval-cases`, input);
 }
 
+/** Update an existing eval case in place (edit mode — does NOT create a duplicate row). */
+export async function updateEvalCase(
+  caseId: string,
+  input: EvalCaseInput,
+): Promise<EvalCase> {
+  return api.put<EvalCase>(`/eval-cases/${caseId}`, input);
+}
+
 /** List all eval cases for an agent, each augmented with the latest run outcome. */
 export async function fetchEvalCases(agentId: string): Promise<EvalCaseListItem[]> {
   return api.get<EvalCaseListItem[]>(`/agents/${agentId}/eval-cases`);

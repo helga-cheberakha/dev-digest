@@ -47,6 +47,7 @@ import type { EvalCaseInput, EvalCase } from "@devdigest/shared";
 // ---------------------------------------------------------------------------
 vi.mock("@/lib/api", () => ({
   createEvalCase: vi.fn(),
+  updateEvalCase: vi.fn(),
   runEvalCase: vi.fn(),
   fetchEvalCases: vi.fn(),
   evalQueryKeys: {
@@ -56,6 +57,7 @@ vi.mock("@/lib/api", () => ({
 
 import {
   createEvalCase,
+  updateEvalCase,
   runEvalCase,
   fetchEvalCases,
 } from "@/lib/api";
@@ -163,6 +165,7 @@ function renderModal(
 
 beforeEach(() => {
   vi.mocked(createEvalCase).mockResolvedValue(SAVED_CASE);
+  vi.mocked(updateEvalCase).mockResolvedValue(SAVED_CASE);
   vi.mocked(runEvalCase).mockResolvedValue(FRESH_RUN_RESULT);
   vi.mocked(fetchEvalCases).mockResolvedValue([]);
 });
@@ -276,6 +279,20 @@ describe("EvalCaseModal", () => {
       expect(runEvalCase).toHaveBeenCalledWith("case-1");
     });
     expect(createEvalCase).not.toHaveBeenCalled();
+  });
+
+  it("clicking Save in edit mode calls updateEvalCase(caseId, input) — does not duplicate via createEvalCase", async () => {
+    const onSaved = vi.fn();
+    renderModal({ caseId: "case-1", onSaved });
+
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(updateEvalCase).toHaveBeenCalledOnce();
+    });
+    expect(updateEvalCase).toHaveBeenCalledWith("case-1", expect.objectContaining({ name: INITIAL.name }));
+    expect(createEvalCase).not.toHaveBeenCalled();
+    expect(onSaved).toHaveBeenCalledWith(SAVED_CASE);
   });
 
   it("after Run case resolves, the status line shows the rich expected/got/duration/cost summary", async () => {

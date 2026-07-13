@@ -18,6 +18,7 @@ import {
   type Category,
 } from "@devdigest/ui";
 import type { FindingRecord, FindingActionKind } from "@devdigest/shared";
+import { Tooltip } from "@/components/Tooltip";
 import { SEV_COLOR, SEV_COLOR_FALLBACK } from "./constants";
 import { lineLabel } from "./helpers";
 import { githubBlobUrl } from "../../../../../../../lib/github-urls";
@@ -32,6 +33,7 @@ export function FindingCard({
   pending,
   repoFullName,
   headSha,
+  hasEvalCase,
 }: {
   f: FindingRecord;
   focused?: boolean;
@@ -41,6 +43,10 @@ export function FindingCard({
   pending?: boolean;
   repoFullName?: string | null;
   headSha?: string | null;
+  /** Whether an eval case already exists for this finding — when true, the
+   *  "Turn into eval case" control opens that case instead of drafting a
+   *  duplicate. */
+  hasEvalCase?: boolean;
 }) {
   const t = useTranslations("prReview");
   const [expanded, setExpanded] = React.useState(defaultExpanded ?? false);
@@ -54,8 +60,8 @@ export function FindingCard({
   const muted = accepted || dismissed;
 
   return (
-    <div data-finding-id={f.id} style={s.card(!!focused, sevColor, muted)}>
-      <div onClick={() => setExpanded((e) => !e)} style={s.header}>
+    <div data-finding-id={f.id} style={s.card(!!focused, sevColor)}>
+      <div onClick={() => setExpanded((e) => !e)} style={s.header(muted)}>
         <div style={s.badgeWrap}>
           <SeverityBadge severity={f.severity as Severity} compact />
         </div>
@@ -91,35 +97,84 @@ export function FindingCard({
           )}
 
           <div style={s.actions}>
-            <Button
-              kind="secondary"
-              size="sm"
-              icon="Check"
-              disabled={pending}
-              active={accepted}
-              onClick={() => onAction?.("accept")}
+            <Tooltip label={accepted ? t("finding.alreadyAcceptedHint") : undefined}>
+              <Button
+                kind="secondary"
+                size="sm"
+                icon="Check"
+                disabled={pending || accepted}
+                active={accepted}
+                style={accepted ? { borderColor: "var(--ok)", color: "var(--ok)" } : undefined}
+                onClick={() => onAction?.("accept")}
+              >
+                {t("finding.accept")}
+              </Button>
+            </Tooltip>
+            <Tooltip label={dismissed ? t("finding.alreadyDismissedHint") : undefined}>
+              <Button
+                kind="ghost"
+                size="sm"
+                icon="X"
+                disabled={pending || dismissed}
+                active={dismissed}
+                onClick={() => onAction?.("dismiss")}
+              >
+                {t("finding.dismiss")}
+              </Button>
+            </Tooltip>
+            <Tooltip
+              label={
+                !muted
+                  ? t("finding.turnIntoEvalCaseDisabledHint")
+                  : hasEvalCase
+                    ? t("finding.evalCaseAlreadyCreatedHint")
+                    : undefined
+              }
             >
-              {t("finding.accept")}
-            </Button>
-            <Button
-              kind="ghost"
-              size="sm"
-              icon="X"
-              disabled={pending}
-              active={dismissed}
-              onClick={() => onAction?.("dismiss")}
-            >
-              {t("finding.dismiss")}
-            </Button>
-            <Button
-              kind="ghost"
-              size="sm"
-              disabled={!muted}
-              aria-label={t("finding.turnIntoEvalCaseAria")}
-              onClick={() => onCreateEvalCase?.(f.id)}
-            >
-              {t("finding.turnIntoEvalCase")}
-            </Button>
+              <Button
+                kind="ghost"
+                size="sm"
+                icon="FlaskConical"
+                disabled={!muted}
+                active={hasEvalCase}
+                style={hasEvalCase ? { borderColor: "var(--ok)", color: "var(--ok)" } : undefined}
+                aria-label={
+                  hasEvalCase
+                    ? t("finding.viewEvalCaseAria")
+                    : t("finding.turnIntoEvalCaseAria")
+                }
+                onClick={() => onCreateEvalCase?.(f.id)}
+              >
+                {hasEvalCase ? t("finding.viewEvalCase") : t("finding.turnIntoEvalCase")}
+              </Button>
+              {!muted && (
+                <Icon.Info
+                  size={11}
+                  style={{
+                    position: "absolute",
+                    top: -4,
+                    right: -4,
+                    color: "var(--text-muted)",
+                    background: "var(--bg-elevated)",
+                    borderRadius: "50%",
+                    border: "1px solid var(--border-strong)",
+                  }}
+                />
+              )}
+              {muted && hasEvalCase && (
+                <Icon.CheckCircle
+                  size={11}
+                  style={{
+                    position: "absolute",
+                    top: -4,
+                    right: -4,
+                    color: "var(--ok)",
+                    background: "var(--bg-elevated)",
+                    borderRadius: "50%",
+                  }}
+                />
+              )}
+            </Tooltip>
           </div>
         </div>
       )}

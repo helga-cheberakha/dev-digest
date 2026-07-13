@@ -425,6 +425,7 @@ export class EvalAnalytics {
       citation_accuracy: b.citation_accuracy,
       pass_rate: b.traces_total > 0 ? b.traces_passed / b.traces_total : 1,
       cost_usd: b.cost_usd,
+      agent_version: b.agent_version,
     }));
 
     return {

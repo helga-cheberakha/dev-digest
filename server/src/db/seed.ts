@@ -3,6 +3,7 @@ import { createDb, type Db } from './client.js';
 import * as t from './schema.js';
 import { eq, and } from 'drizzle-orm';
 import type { Brief } from '@devdigest/shared';
+import { AgentsRepository } from '../modules/agents/repository.js';
 import {
   GENERAL_REVIEWER_PROMPT,
   SECURITY_REVIEWER_PROMPT,
@@ -32,6 +33,8 @@ export const DEFAULT_WORKSPACE_NAME = 'default';
 export const SYSTEM_USER_EMAIL = 'you@local';
 
 export async function seed(db: Db): Promise<{ workspaceId: string; userId: string }> {
+  const agentsRepo = new AgentsRepository(db);
+
   // ---- workspace + user (no-auth defaults) ----
   let [ws] = await db
     .select()
@@ -247,7 +250,39 @@ export async function seed(db: Db): Promise<{ workspaceId: string; userId: strin
       .select()
       .from(t.agents)
       .where(and(eq(t.agents.workspaceId, workspaceId), eq(t.agents.name, a.name)));
-    if (!existing) await db.insert(t.agents).values(a);
+    if (!existing) {
+      // Insert via the repository so version 1 gets snapshotted into
+      // agent_versions (needed by eval compare's prompt diff).
+      await agentsRepo.insert({
+        workspaceId,
+        name: a.name,
+        description: a.description,
+        provider: a.provider,
+        model: a.model,
+        systemPrompt: a.systemPrompt,
+        createdBy: a.createdBy ?? null,
+      });
+    } else {
+      // Backfill: this agent predates the repository-insert path above, so
+      // its version-1 snapshot was never written — even if it's since been
+      // edited (which bumps to version 2+ and snapshots correctly via
+      // AgentsRepository.update()). Version 1 always used these seed
+      // constants, so reconstruct it from `a`, not from `existing`'s
+      // possibly-since-edited row. Idempotent (onConflictDoNothing).
+      await agentsRepo.snapshotVersion(
+        {
+          ...existing,
+          provider: a.provider,
+          model: a.model,
+          systemPrompt: a.systemPrompt,
+          outputSchema: null,
+          strategy: 'single-pass',
+          ciFailOn: 'critical',
+          repoIntel: true,
+        },
+        1,
+      );
+    }
   }
 
   // ---- skill catalog ----
@@ -474,24 +509,42 @@ Flag tests where mocking undermines the test's validity.
   // ---- Test Quality Reviewer + linked skills ----
   const [testAgent] = await db.select().from(t.agents).where(and(eq(t.agents.workspaceId, workspaceId), eq(t.agents.name, 'Test Quality Reviewer')));
   if (!testAgent) {
-    const [tqRow] = await db.insert(t.agents).values({
+    // Insert via the repository so version 1 gets snapshotted into
+    // agent_versions (needed by eval compare's prompt diff).
+    const tqRow = await agentsRepo.insert({
       workspaceId,
       name: 'Test Quality Reviewer',
       description: 'Reviews PRs for test coverage gaps, mock overuse, and flaky patterns.',
       provider: DEFAULT_PROVIDER,
       model: DEFAULT_MODEL,
       systemPrompt: TEST_QUALITY_REVIEWER_PROMPT,
-      enabled: true,
-      version: 1,
       createdBy: userId,
-    }).returning();
+    });
     // Link 3 skills (4th will be imported live in demo)
     const tqSkillsToLink = ['uncovered-branches', 'edge-case-coverage', 'mock-overuse-gate'];
     for (const [i, name] of tqSkillsToLink.entries()) {
       if (skillIds[name]) {
-        await db.insert(t.agentSkills).values({ agentId: tqRow!.id, skillId: skillIds[name]!, order: i }).onConflictDoNothing();
+        await db.insert(t.agentSkills).values({ agentId: tqRow.id, skillId: skillIds[name]!, order: i }).onConflictDoNothing();
       }
     }
+  } else {
+    // Backfill: this agent predates the repository-insert path above, so its
+    // version-1 snapshot was never written. Reconstruct it from the seed
+    // constants above (what version 1 actually was), not from `testAgent`'s
+    // possibly-since-edited row. Idempotent (onConflictDoNothing).
+    await agentsRepo.snapshotVersion(
+      {
+        ...testAgent,
+        provider: DEFAULT_PROVIDER,
+        model: DEFAULT_MODEL,
+        systemPrompt: TEST_QUALITY_REVIEWER_PROMPT,
+        outputSchema: null,
+        strategy: 'single-pass',
+        ciFailOn: 'critical',
+        repoIntel: true,
+      },
+      1,
+    );
   }
 
   // ---- Eval cases for General Reviewer (AC-17: ≥8 cases, no floor-warning) ----

@@ -18,6 +18,7 @@ import { EvalAnalytics } from './analytics.js';
 import {
   buildCaseDraftFromFinding,
   createCase,
+  updateCase,
   listCases,
   deleteCase,
   runCaseOnce,
@@ -36,6 +37,7 @@ const EmptyBody = z.object({});
  *
  *   POST /findings/:id/eval-case            → draft a case from a finding (no DB write)
  *   POST /eval-cases                         → persist a new eval case (201)
+ *   PUT  /eval-cases/:id                    → update an existing eval case in place
  *   GET  /agents/:id/eval-cases             → list cases with latest-run badge data
  *   DELETE /eval-cases/:id                  → delete a case (and its run history)
  *   POST /eval-cases/:id/run                → run a single case once
@@ -95,6 +97,37 @@ export default async function evalRoutes(appBase: FastifyInstance) {
       const { workspaceId } = await getContext(app.container, req);
       const row = await createCase(app.container, workspaceId, req.body);
       reply.status(201);
+      return {
+        id: row.id,
+        owner_kind: row.ownerKind,
+        owner_id: row.ownerId,
+        name: row.name,
+        input_diff: row.inputDiff ?? '',
+        input_files: row.inputFiles,
+        input_meta: row.inputMeta,
+        expected_output: row.expectedOutput,
+        notes: row.notes,
+      };
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // PUT /eval-cases/:id
+  //
+  // Update an existing eval case in place. Returns 200 with the updated row.
+  // ---------------------------------------------------------------------------
+  app.put(
+    '/eval-cases/:id',
+    {
+      schema: {
+        params: CaseIdParams,
+        body: EvalCaseInput,
+        response: { 200: EvalCase },
+      },
+    },
+    async (req) => {
+      const { workspaceId } = await getContext(app.container, req);
+      const row = await updateCase(app.container, workspaceId, req.params.id, req.body);
       return {
         id: row.id,
         owner_kind: row.ownerKind,
