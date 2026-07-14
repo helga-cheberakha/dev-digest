@@ -1,7 +1,7 @@
 ---
 name: onion-architecture
 description: "Onion / ports-and-adapters layering for the DevDigest backend (server/ + reviewer-core/). Use when adding or reviewing a backend module — placing routes/services/repositories/adapters, deciding where a DB query or an external SDK call (LLM, GitHub, git, ripgrep, ast-grep) may live, wiring DI in platform/container.ts, defining a new port in @devdigest/shared, or keeping reviewer-core pure. Enforces the dependency rule (imports point inward) and ships a dependency-cruiser gate. NOT for the client/ frontend (use frontend-architecture) or React code."
-version: "1.0.0"
+version: "1.2.0"
 ---
 
 # Onion Architecture — DevDigest backend
@@ -51,14 +51,14 @@ place allowed to know both a port and its concrete adapter, because its job is t
 Full table with allowed/forbidden imports per layer and real file references:
 → **[layer-map.md](layer-map.md)**. Summary:
 
-| Layer | Path | May import | Must NOT import |
-|-------|------|-----------|-----------------|
-| Core | `reviewer-core/src/**` | itself, shared contract **types** | any I/O: `fastify`, `drizzle-orm`, `octokit`, `simple-git`, `postgres`, `src/adapters/**`, `db/**` |
-| Ports | `@devdigest/shared` (`src/vendor/shared/**`) | other shared types | anything concrete |
-| Application | `modules/*/service.ts`, `run-executor.ts` | ports, `container`, own `repository`/`helpers` | `src/adapters/**` (concrete SDKs) |
-| Infrastructure | `src/adapters/**`, `db/**`, `modules/*/repository*.ts` | ports, drivers/SDKs, `db/schema` | `modules/**` (a feature) |
-| Composition root | `platform/container.ts` | everything (binds ports↔adapters) | — |
-| Transport | `modules/*/routes.ts` + plugins | own `service`, `_shared`, contracts | `src/adapters/**`, `db/schema` (go through the service) |
+| Layer            | Path                                                   | May import                                     | Must NOT import                                                                                    |
+|------------------|--------------------------------------------------------|------------------------------------------------|----------------------------------------------------------------------------------------------------|
+| Core             | `reviewer-core/src/**`                                 | itself, shared contract **types**              | any I/O: `fastify`, `drizzle-orm`, `octokit`, `simple-git`, `postgres`, `src/adapters/**`, `db/**` |
+| Ports            | `@devdigest/shared` (`src/vendor/shared/**`)           | other shared types                             | anything concrete                                                                                  |
+| Application      | `modules/*/service.ts`, `run-executor.ts`              | ports, `container`, own `repository`/`helpers` | `src/adapters/**` (concrete SDKs)                                                                  |
+| Infrastructure   | `src/adapters/**`, `db/**`, `modules/*/repository*.ts` | ports, drivers/SDKs, `db/schema`               | `modules/**` (a feature)                                                                           |
+| Composition root | `platform/container.ts`                                | everything (binds ports↔adapters)              | —                                                                                                  |
+| Transport        | `modules/*/routes.ts` + plugins                        | own `service`, `_shared`, contracts            | `src/adapters/**`, `db/schema` (go through the service)                                            |
 
 ## Decision framework (placing a change)
 
@@ -80,6 +80,47 @@ Apply in order:
 6. **Cross-module need?** Reach the other capability through `container.*` (e.g.
    `container.repoIntel.*`, `container.agentsRepo`), never by importing another
    `modules/<other>/` internal file.
+
+## The rule judges the import *closure*, not the first hop
+
+A violation is rarely sitting in the file you were asked to review. Layering gets laundered
+through innocent-looking local helpers: `service.ts` imports `./helpers/render.ts` (pure by
+its name), which imports `./stats.ts`, which quietly queries `db/schema`. Every file in that
+chain is part of the service's dependency closure — and the dependency rule judges the
+closure. A service whose helper's helper opens a DB connection *is* a service that queries
+the DB.
+
+So when reviewing, do not declare a file clean until you have walked its **relative** imports
+at least two hops out:
+
+1. List the file's imports. Package/SDK/node imports (`drizzle-orm`, `octokit`, `node:fs`,
+   `process.env` access) **end** a chain — classify them by the layer map right there.
+2. Relative imports (`./`, `../`) **continue** the chain — open each one (or grep it for
+   `^import` and `process.env`) and repeat.
+3. Attribute what you find to the entry point: report the full chain
+   (`service.ts → render.ts → stats.ts → db/schema`), not just the leaf, so the author sees
+   why their "clean" file is implicated.
+
+`dependency-cruiser` sees the whole graph and will catch these edges — but a diff reviewer
+who stops at hop one approves laundered I/O long before the gate runs.
+
+## Reviewing with this skill (scope & severity)
+
+This skill is an **additional lens**, not the whole review. Layer placement is one class of
+defect; a review that names every violated rule but misses a real bug has failed the author.
+
+- **Keep hunting functional bugs.** After the layering pass, re-read the code for state and
+  data-flow errors — a flag inserted but never updated, a "pending" query that will re-send
+  what was already sent, a retry that double-fires. These matter more to the author than any
+  import edge, and they are exactly what a layering-focused read tends to tunnel past.
+- **Calibrate severity like `code-review-conventions` does.** CRITICAL is reserved for
+  verified functional bugs, security holes, or data loss. Pure layering drift — an import
+  pointing the wrong way with **no runtime defect** — is HIGH at most: it trips the gate
+  ratchet, it does not break the user.
+- **End every review with the gate.** Analysis names the rule a change would trip; the gate
+  proves it. Every review of `server/` or `reviewer-core/` code must close by telling the
+  author to run `cd server && npm run depcruise` (or `npm run depcruise:all` when
+  reviewer-core is touched) before merging.
 
 ## Adding a new external dependency (the canonical move)
 

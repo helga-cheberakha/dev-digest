@@ -162,6 +162,7 @@ export function ReviewRunAccordion({
             repoFullName={repoFullName}
             headSha={headSha}
             targetFindingId={targetFindingId}
+            agentId={review.agent_id}
           />
         </div>
       )}

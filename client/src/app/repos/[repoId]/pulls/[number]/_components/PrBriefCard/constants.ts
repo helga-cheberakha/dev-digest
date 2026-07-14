@@ -18,6 +18,3 @@ export const METRIC_ICONS = {
   cost: "DollarSign",
   tokens: "Hash",
 } satisfies Record<string, IconName>;
-
-/** Max file refs rendered per Review Focus item before truncating. */
-export const MAX_FILE_REFS = 6;

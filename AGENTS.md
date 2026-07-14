@@ -9,11 +9,13 @@ user asks about FIRST — these are curated and may already answer it — then r
 ## Session protocol (engineering-insights loop)
 - **Start:** before touching a package, read its `INSIGHTS.md` and summarize the top 3
   relevant points back — this forces an active read and catches a silently-failed load.
-- **Before recording an insight:** re-read that package's `INSIGHTS.md` and do not duplicate
-  what's already there.
-- **End of session:** run `/engineering-insights`. Record only substantial, file-grounded,
-  non-duplicate findings; if nothing substantial came up, write nothing — but don't skip the
-  check. Writes are strictly append-only (never overwrite an `INSIGHTS.md`).
+- **Mid-session, on a genuine discovery:** the moment you solve a gotcha, hit a dead end, or land
+  a concrete decision worth keeping, invoke `/engineering-insights` right away — don't wait for
+  session end. Re-read that package's `INSIGHTS.md` first and do not duplicate what's already there.
+- **End of session:** run `/engineering-insights` again as a summary pass. Record only substantial,
+  file-grounded, non-duplicate findings not already captured mid-session; if nothing substantial
+  came up, write nothing — but don't skip the check. Writes are strictly append-only (never
+  overwrite an `INSIGHTS.md`).
 
 ## Token optimization
 
@@ -21,7 +23,9 @@ user asks about FIRST — these are curated and may already answer it — then r
 - Use `grep` before `Read` for targeted symbol lookups (function name, export, constant).
 - Read files in one wider range rather than several small chunks.
 - After research completes, write the implementation plan **inline**; do not spawn a Plan agent when research already answers what to build and where.
-- Run `/engineering-insights` exactly **once** — after implementation is complete and tests pass, never before.
+- Run the end-of-session `/engineering-insights` summary pass exactly **once** — after implementation
+  is complete and tests pass. A genuine mid-session discovery is captured immediately instead (see
+  Session protocol above) — that's a separate invocation, not a violation of the once-per-session rule.
 
 ### Before using Read
 
@@ -54,7 +58,8 @@ Before closing a session verify:
 - [ ] Plan agent not spawned after research was already complete.
 - [ ] `grep` used before targeted `Read` calls.
 - [ ] `db:generate` not run when the schema change was a column rename (see `server/CLAUDE.md`).
-- [ ] `/engineering-insights` run only after tests passed, and only once.
+- [ ] the end-of-session `/engineering-insights` summary pass run only after tests passed, and only
+      once (mid-session discovery invocations are separate and don't count against this).
 
 ## Conventions (not obvious from code)
 - NOT a monorepo workspace — each package has its own package.json/lockfile; cross-package code is shared via tsconfig path aliases.
@@ -68,3 +73,5 @@ Before closing a session verify:
 - Stack, commands, architecture, how to run → read `README.md`
 - Working inside a package → read that package's AGENTS.md: `server/AGENTS.md`, `client/AGENTS.md`, `reviewer-core/AGENTS.md`, `e2e/AGENTS.md`
 - Agent prompt templates → read `docs/agent-prompts/`
+
+<!-- CI trigger test: harness-evals workflow (workflow tier via AGENTS.md) -->

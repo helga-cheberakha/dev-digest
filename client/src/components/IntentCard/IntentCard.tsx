@@ -5,12 +5,7 @@ import { Icon, SectionLabel } from "@devdigest/ui";
 import { usePrIntent, useClassifyIntent } from "@/lib/hooks/intent";
 import type { PrIntentRecord, Risk, RiskAreaKind, RiskSeverity } from "@devdigest/shared";
 import { s } from "./styles";
-
-/** Navigation target derived from a `Risk.file_refs` entry (AC-14). */
-export interface FileRefTarget {
-  path: string;
-  line?: number;
-}
+import { type FileRefTarget, parseFileRef } from "@/lib/parseFileRef";
 
 const KIND_ICON: Record<RiskAreaKind, keyof typeof Icon> = {
   security: "Shield",
@@ -26,23 +21,6 @@ const SEVERITY_COLOR: Record<RiskSeverity, { color: string; bg: string }> = {
   medium: { color: "var(--warn)", bg: "var(--warn-bg)" },
   low: { color: "var(--ok)", bg: "var(--ok-bg)" },
 };
-
-/**
- * Parses a `file_ref` (`"path"`, `"path:line"`, or `"path:start-end"`) into a
- * navigable target. A range contributes its start line (m2); a suffix that
- * isn't a recognised line/range falls back to treating the whole ref as a
- * bare path (defensive — grounding already guarantees the path portion is a
- * known file, but the suffix shape isn't validated there).
- */
-function parseFileRef(ref: string): FileRefTarget {
-  const idx = ref.lastIndexOf(":");
-  if (idx === -1) return { path: ref };
-  const path = ref.slice(0, idx);
-  const suffix = ref.slice(idx + 1);
-  const match = suffix.match(/^(\d+)(?:-\d+)?$/);
-  if (!match) return { path: ref };
-  return { path, line: Number(match[1]) };
-}
 
 // ---- Skeleton shown while loading -----------------------------------------
 

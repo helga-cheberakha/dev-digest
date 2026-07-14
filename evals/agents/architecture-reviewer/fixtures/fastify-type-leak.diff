@@ -1,0 +1,15 @@
+diff --git a/server/src/modules/checkout/domain/checkout.ts b/server/src/modules/checkout/domain/checkout.ts
+index 1111111..2222222 100644
+--- a/server/src/modules/checkout/domain/checkout.ts
++++ b/server/src/modules/checkout/domain/checkout.ts
+@@ -1,5 +1,6 @@
++import type { FastifyReply } from "fastify";
+ export interface CheckoutOrder {
+   id: string;
+   total: number;
+ }
+
+-export function priceOrder(order: CheckoutOrder): number {
++export function priceOrder(order: CheckoutOrder, reply?: FastifyReply): number {
+   return order.total;
+ }

@@ -19,9 +19,9 @@ Before flagging any issue, **trace the data flow** and confirm the input source.
 | **MEDIUM** | Vulnerable pattern, input source unclear | **Note** for manual verification |
 | **LOW** | Theoretical / best-practice deviation | **Do not report** — mention only if asked |
 
-**Do NOT flag**: test files, dead code, server-controlled values (env vars, config constants), framework-mitigated patterns (React JSX escaping, Mongoose parameterized queries), development-only code gated by `NODE_ENV`.
+**Do NOT flag**: test files, dead code, server-controlled values (env vars, config constants) — this applies whether the value is used as **input** (e.g. a URL fetched from config) or **echoed back in a response** (e.g. a health-check endpoint returning `process.env.STATUS_MESSAGE`) — framework-mitigated patterns (React JSX escaping, Mongoose parameterized queries), development-only code gated by `NODE_ENV`.
 
-> **Golden rule**: `fetch(process.env.API_URL)` = safe. `fetch(req.query.url)` = vulnerable. Always ask: **"Can an attacker control this value?"**
+> **Golden rule**: `fetch(process.env.API_URL)` = safe. `fetch(req.query.url)` = vulnerable. Always ask: **"Can an attacker control this value?"** This applies to values an endpoint *returns* too — a server-set env var reflected in a response is not an information-disclosure finding unless it's shown to actually contain a secret.
 
 ---
 
@@ -240,11 +240,12 @@ Relevant to AI content generation features (Gemini API):
 ## Security Review Process
 
 1. **Detect context** — API endpoint, auth logic, DB query, file handling, frontend, config, or dependency change
-2. **Load relevant rules** — Only the OWASP categories that apply to this context
+2. **List every matching category** — Enumerate ALL OWASP categories that apply to this context, not just the first one noticed. A single route often matches several at once (e.g. a login endpoint touches A01, A05, A07, and A09 together).
 3. **Trace data flow** — Where does the input come from? Is it attacker-controlled?
 4. **Check upstream controls** — Middleware, framework defaults, validation already applied?
 5. **Verify exploitability** — Can an attacker actually reach and control this?
-6. **Report HIGH confidence only** — Include file, line, exploit scenario, specific fix
+6. **Confirm full coverage** — Before writing the report, revisit the list from step 2 and check off every category on it. A visible issue (e.g. a stray `console.log`) draws attention and can cause a less obvious one (e.g. an unsanitized query operand a few lines above it) to be skipped entirely. Enumerating categories is not license to lower the confidence bar: for each candidate finding this step surfaces, re-check it against the Core Philosophy do-not-flag list before including it.
+7. **Report HIGH confidence only** — Include file, line, exploit scenario, specific fix
 
 ---
 

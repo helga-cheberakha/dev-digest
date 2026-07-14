@@ -32,7 +32,12 @@ export function SkillsListView() {
       {importUrlOpen && <ImportUrlDrawer onClose={() => setImportUrlOpen(false)} />}
       <div style={{ padding: "24px 32px", maxWidth: 960, margin: "0 auto" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-          <h1 style={{ fontSize: 22, fontWeight: 700, flex: 1 }}>Skills</h1>
+          <div style={{ flex: 1 }}>
+            <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Skills</h1>
+            <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: "4px 0 0" }}>
+              Reusable prompt context — attach a skill to any agent's system prompt.
+            </p>
+          </div>
           <div
             style={{
               display: "flex",

@@ -159,5 +159,69 @@
     "bodyLabel": "Skill body (Markdown)",
     "bodyHint": "Saving a changed body creates a new immutable version.",
     "version": "v{version}"
+  },
+  "evals": {
+    "metricsTitle": "Eval metrics",
+    "tiles": {
+      "recall": "RECALL",
+      "precision": "PRECISION",
+      "citationAccuracy": "CITATION ACCURACY",
+      "tracesPassed": "TRACES PASSED"
+    },
+    "casesHeading": "Eval cases",
+    "passingCount": "{passed}/{total} passing",
+    "newCase": "New eval case",
+    "runAll": "Run all evals",
+    "running": "Running…",
+    "batchResult": "Recall {recall}% · Precision {precision}% · Citation {citation}%",
+    "passed": "passed",
+    "failed": "failed",
+    "neverRun": "never run",
+    "emptyCases": "No eval cases yet. Create one to assert expected findings on a sample diff.",
+    "expectedGot": "expected {expected, plural, one {# finding} other {# findings}}, got {got}",
+    "expectedOnly": "expected {expected, plural, one {# finding} other {# findings}}",
+    "emptyExpectation": "empty []",
+    "runCaseLabel": "Run case",
+    "editCaseLabel": "Edit case",
+    "deleteCaseLabel": "Delete case",
+    "deleteConfirm": "Delete eval case \"{name}\"? This cannot be undone.",
+    "benchmark": "Benchmark vs no-skill",
+    "benchmarking": "Benchmarking…",
+    "benchmarkPanel": {
+      "heading": "Benchmark results",
+      "candidateLabel": "With skill",
+      "baselineLabel": "No skill",
+      "tiles": {
+        "recall": "RECALL",
+        "precision": "PRECISION",
+        "citationAccuracy": "CITATION ACCURACY"
+      },
+      "lift": {
+        "recall": "RECALL LIFT",
+        "precision": "PRECISION LIFT",
+        "citation": "CITATION LIFT"
+      },
+      "table": {
+        "candidatePass": "With skill pass",
+        "baselinePass": "No skill pass"
+      }
+    },
+    "batchHistory": "Batch history",
+    "compareSelected": "Compare selected",
+    "compare": {
+      "title": "Compare runs · v{old} → v{new}",
+      "subtitle": "Skill body diff — metric deltas on the {count}-trace gold set",
+      "close": "Close",
+      "bodyDiff": "Body diff",
+      "oldLabel": "v{version} (old)",
+      "newLabel": "v{version} (new)",
+      "noBody": "No skill body available for one or both versions.",
+      "metrics": {
+        "recall": "RECALL",
+        "precision": "PRECISION",
+        "citation": "CITATION",
+        "cost": "COST"
+      }
+    }
   }
 }

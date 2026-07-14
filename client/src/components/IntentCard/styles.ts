@@ -1,14 +1,9 @@
 import type { CSSProperties } from "react";
+import { cardStyle } from "@/lib/cardStyle";
 
 /** Co-located styles for IntentCard (incl. the Risk Areas accordion, AC-13). */
 export const s = {
-  card: {
-    border: "1px solid var(--border)",
-    borderRadius: 8,
-    background: "var(--bg-elevated)",
-    padding: 18,
-    marginBottom: 16,
-  } satisfies CSSProperties,
+  card: cardStyle satisfies CSSProperties,
   summary: {
     fontStyle: "italic",
     fontSize: 14,

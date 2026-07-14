@@ -1,0 +1,361 @@
+import React from "react";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+import { render, screen, within, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { NextIntlClientProvider } from "next-intl";
+import type { EvalDashboard, EvalRunBatch } from "@devdigest/shared";
+import messages from "../../../../messages/en/eval.json";
+
+// ---- Mocks ----------------------------------------------------------------
+
+// next/link renders an <a> in the test environment
+vi.mock("next/link", () => ({
+  default: ({
+    href,
+    children,
+    style,
+  }: {
+    href: string;
+    children: React.ReactNode;
+    style?: React.CSSProperties;
+  }) => (
+    <a href={href} style={style}>
+      {children}
+    </a>
+  ),
+}));
+
+// AppShell renders children directly (shell depends on global context not needed here)
+vi.mock("@/components/app-shell", () => ({
+  AppShell: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+// Design-system primitives — stubbed down to their text/interaction surface.
+vi.mock("@devdigest/ui", () => ({
+  Skeleton: ({ height }: { height: number }) => (
+    <div data-testid="skeleton" style={{ height }} />
+  ),
+  Button: ({
+    children,
+    onClick,
+    disabled,
+  }: {
+    children?: React.ReactNode;
+    onClick?: () => void;
+    disabled?: boolean;
+  }) => (
+    <button onClick={onClick} disabled={disabled}>
+      {children}
+    </button>
+  ),
+  SectionLabel: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  ProgressBar: () => <div data-testid="progress-bar" />,
+  Badge: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
+  Icon: new Proxy(
+    {},
+    { get: () => () => <svg data-testid="icon" /> },
+  ),
+}));
+
+// Agents hook
+vi.mock("@/lib/hooks/agents", () => ({
+  useAgents: vi.fn(),
+}));
+
+// API functions
+vi.mock("@/lib/api", () => ({
+  fetchEvalDashboard: vi.fn(),
+  fetchEvalBatches: vi.fn(),
+  runEvalBatch: vi.fn(),
+  evalQueryKeys: {
+    cases: (agentId: string) => ["eval-cases", agentId],
+    batches: (agentId: string) => ["eval-batches", agentId],
+    compare: (agentId: string, a: string, b: string) => ["eval-compare", agentId, a, b],
+    dashboard: (agentId?: string) => ["eval-dashboard", agentId],
+  },
+}));
+
+import { useAgents } from "@/lib/hooks/agents";
+import { fetchEvalDashboard, fetchEvalBatches, runEvalBatch } from "@/lib/api";
+import { EvalDashboardView } from "./EvalDashboardView";
+
+// ---- Fixtures ---------------------------------------------------------------
+
+const AGENTS = [
+  { id: "ag1", name: "Security Reviewer", enabled: true },
+  { id: "ag2", name: "Style Checker", enabled: true },
+];
+
+/** ag1 has 2 batches — real non-zero metrics + delta + sparkline */
+const AGENT1_DASHBOARD: EvalDashboard = {
+  owner_kind: "agent",
+  owner_id: "ag1",
+  cases_total: 10,
+  current: {
+    recall: 0.82,
+    precision: 0.91,
+    citation_accuracy: 0.75,
+    traces_passed: 8,
+    traces_total: 10,
+    cost_usd: null,
+  },
+  delta: { recall: 0.05, precision: -0.02, citation_accuracy: 0.01 },
+  trend: [
+    {
+      ran_at: "2026-07-01T00:00:00Z",
+      recall: 0.77,
+      precision: 0.93,
+      citation_accuracy: 0.74,
+      pass_rate: 0.8,
+      cost_usd: null,
+      agent_version: null,
+    },
+    {
+      ran_at: "2026-07-08T00:00:00Z",
+      recall: 0.82,
+      precision: 0.91,
+      citation_accuracy: 0.75,
+      pass_rate: 0.8,
+      cost_usd: null,
+      agent_version: null,
+    },
+  ],
+  recent_runs: [],
+  alert: null,
+};
+
+/** ag2 has no batches yet */
+const AGENT2_DASHBOARD: EvalDashboard = {
+  owner_kind: "agent",
+  owner_id: "ag2",
+  cases_total: 0,
+  current: { recall: 0, precision: 0, citation_accuracy: 0, traces_passed: 0, traces_total: 0, cost_usd: null },
+  delta: { recall: 0, precision: 0, citation_accuracy: 0 },
+  trend: [],
+  recent_runs: [],
+  alert: null,
+};
+
+/** ag1 batch history — newest first, matches AGENT1_DASHBOARD.current for the latest row */
+const AG1_BATCHES: EvalRunBatch[] = [
+  {
+    batch_id: "batch-2",
+    ran_at: "2026-07-08T00:00:00Z",
+    agent_version: 3,
+    recall: 0.82,
+    precision: 0.91,
+    citation_accuracy: 0.75,
+    traces_passed: 8,
+    traces_total: 10,
+    cost_usd: 0.23,
+  },
+  {
+    batch_id: "batch-1",
+    ran_at: "2026-07-01T00:00:00Z",
+    agent_version: 2,
+    recall: 0.77,
+    precision: 0.93,
+    citation_accuracy: 0.74,
+    traces_passed: 7,
+    traces_total: 10,
+    cost_usd: 0.21,
+  },
+];
+
+/** ag2 has no batch history yet */
+const AG2_BATCHES: EvalRunBatch[] = [];
+
+// ---- Helpers ----------------------------------------------------------------
+
+function makeQueryClient() {
+  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+}
+
+function renderWithProviders(ui: React.ReactElement) {
+  return render(
+    <QueryClientProvider client={makeQueryClient()}>
+      <NextIntlClientProvider locale="en" messages={{ eval: messages }}>
+        {ui}
+      </NextIntlClientProvider>
+    </QueryClientProvider>,
+  );
+}
+
+function renderWithClient(ui: React.ReactElement, qc: QueryClient) {
+  return render(
+    <QueryClientProvider client={qc}>
+      <NextIntlClientProvider locale="en" messages={{ eval: messages }}>
+        {ui}
+      </NextIntlClientProvider>
+    </QueryClientProvider>,
+  );
+}
+
+// ---- Default mock setup -------------------------------------------------------
+
+function setDefaultMocks() {
+  vi.mocked(useAgents).mockReturnValue({
+    data: AGENTS,
+    isLoading: false,
+    isError: false,
+  } as unknown as ReturnType<typeof useAgents>);
+
+  vi.mocked(fetchEvalDashboard).mockImplementation(async (agentId?: string): Promise<EvalDashboard> => {
+    if (agentId === "ag1") return AGENT1_DASHBOARD;
+    return AGENT2_DASHBOARD;
+  });
+
+  vi.mocked(fetchEvalBatches).mockImplementation(async (agentId: string): Promise<EvalRunBatch[]> => {
+    if (agentId === "ag1") return AG1_BATCHES;
+    return AG2_BATCHES;
+  });
+
+  vi.mocked(runEvalBatch).mockResolvedValue({
+    recall: 0.8,
+    precision: 0.9,
+    citation_accuracy: 0.7,
+    traces_passed: 8,
+    traces_total: 10,
+    duration_ms: 1200,
+    cost_usd: null,
+    per_trace: [],
+  });
+}
+
+afterEach(cleanup);
+
+// ---- Tests ------------------------------------------------------------------
+
+describe("EvalDashboardView", () => {
+  beforeEach(setDefaultMocks);
+
+  it("renders one card per agent with real non-zero metrics after data loads", async () => {
+    renderWithProviders(<EvalDashboardView />);
+
+    // Both agent names appear (cards for ag1 and ag2)
+    expect(await screen.findByText("Security Reviewer")).toBeInTheDocument();
+    expect(screen.getByText("Style Checker")).toBeInTheDocument();
+
+    // Real metrics for ag1 (recall=82%, precision=91%, citation=75%) — each
+    // value legitimately appears twice once batches resolve too (the card's
+    // own stat AND the recent-runs table row for the same latest batch).
+    expect((await screen.findAllByText("82%")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("91%").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("75%").length).toBeGreaterThan(0);
+
+    // ag2 has no batches — shows "No runs yet." placeholder
+    expect(screen.getByText("No runs yet.")).toBeInTheDocument();
+  });
+
+  it("shows empty state for the recent runs table when no agent has batch history", async () => {
+    vi.mocked(fetchEvalBatches).mockResolvedValue([]);
+
+    renderWithProviders(<EvalDashboardView />);
+
+    // Wait for agents to render
+    await screen.findByText("Security Reviewer");
+
+    // The empty state message for the workspace-wide table
+    expect(
+      await screen.findByText("No recent eval runs across all agents."),
+    ).toBeInTheDocument();
+
+    // No table rows
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+
+  it("shows loading skeletons while agents are fetching", () => {
+    vi.mocked(useAgents).mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+    } as unknown as ReturnType<typeof useAgents>);
+
+    renderWithProviders(<EvalDashboardView />);
+
+    expect(screen.getAllByTestId("skeleton").length).toBeGreaterThan(0);
+  });
+
+  it("shows no-agents message when agent list is empty", () => {
+    vi.mocked(useAgents).mockReturnValue({
+      data: [] as (typeof AGENTS)[number][],
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useAgents>);
+
+    renderWithProviders(<EvalDashboardView />);
+
+    expect(screen.getByText("No agents configured.")).toBeInTheDocument();
+  });
+
+  it("renders alert banner when an agent has an alert", async () => {
+    vi.mocked(fetchEvalDashboard).mockImplementation(async (agentId?: string): Promise<EvalDashboard> => {
+      if (agentId === "ag1") {
+        return {
+          ...AGENT1_DASHBOARD,
+          alert: "Regression: case 'stripe-key-leak' no longer finds the expected issue.",
+        };
+      }
+      return AGENT2_DASHBOARD;
+    });
+
+    renderWithProviders(<EvalDashboardView />);
+
+    expect(
+      await screen.findByText(
+        "Regression: case 'stripe-key-leak' no longer finds the expected issue.",
+      ),
+    ).toBeInTheDocument();
+    // rendered as role="alert"
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+
+  it("clicking 'Run all' invalidates eval-dashboard and eval-batches queries on success", async () => {
+    const qc = makeQueryClient();
+    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+    renderWithClient(<EvalDashboardView />, qc);
+
+    // Wait for agents to appear
+    await screen.findByText("Security Reviewer");
+
+    fireEvent.click(screen.getByRole("button", { name: /run all agents/i }));
+
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: ["eval-dashboard"] }),
+      );
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: ["eval-batches"] }),
+      );
+    });
+  });
+
+  it("clicking 'Run all' surfaces error state when runEvalBatch rejects", async () => {
+    vi.mocked(runEvalBatch).mockRejectedValue(new Error("network error"));
+
+    renderWithProviders(<EvalDashboardView />);
+
+    await screen.findByText("Security Reviewer");
+
+    fireEvent.click(screen.getByRole("button", { name: /run all agents/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("network error");
+  });
+
+  it("renders recent runs table rows sourced from agent batch history", async () => {
+    renderWithProviders(<EvalDashboardView />);
+
+    // Table appears once every agent's batch query has resolved
+    const table = await screen.findByRole("table");
+    expect(table).toBeInTheDocument();
+
+    expect(screen.queryByText("No recent eval runs across all agents.")).not.toBeInTheDocument();
+
+    // Newest ag1 batch (v3): version badge, agent name, pass fraction, recall bar %
+    expect(within(table).getByText("v3")).toBeInTheDocument();
+    expect(within(table).getAllByText("Security Reviewer").length).toBeGreaterThan(0);
+    expect(within(table).getByText("8/10")).toBeInTheDocument();
+    expect(within(table).getAllByText("82%").length).toBeGreaterThan(0);
+  });
+});

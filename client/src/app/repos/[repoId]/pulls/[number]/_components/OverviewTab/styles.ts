@@ -11,4 +11,9 @@ export const s = {
     whiteSpace: "pre-wrap",
     lineHeight: 1.55,
   } satisfies CSSProperties,
+  intentBlastGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
+    gap: 16,
+  } satisfies CSSProperties,
 } as const;

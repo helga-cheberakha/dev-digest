@@ -2,9 +2,10 @@
    composed-`PrBrief` fixtures (deleted contract) to the new `Brief` shape.
    Covers AC-10 (banner colour-by-risk_level + what/why), AC-11 (all five
    review metrics), AC-12 (no-review nudge + Run Review button), AC-15
-   (Regenerate posts force=true + disables in flight), and the m2 file_ref
-   parsing branch (range -> start line, bare path -> no line). `fireEvent`
-   only — `userEvent` is not installed (client/INSIGHTS.md 2026-07-06). */
+   (Regenerate posts force=true + disables in flight). The m2 file_ref
+   parsing branch (range -> start line, bare path -> no line) moved with
+   Review Focus to ReviewFocusSection.test.tsx. `fireEvent` only —
+   `userEvent` is not installed (client/INSIGHTS.md 2026-07-06). */
 import React from "react";
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
@@ -63,15 +64,10 @@ const BRIEF: Brief = {
       title: "Possible secret in diff",
       explanation: "Looks like a hard-coded API key in the diff.",
       severity: "high",
-      file_refs: ["src/mw/ratelimit.ts"],
+      file_refs: [],
     },
   ],
-  review_focus: [
-    {
-      label: "Check the rate limiter's window boundary logic.",
-      file_refs: ["src/mw/ratelimit.ts:12-20", "src/api/public.ts"],
-    },
-  ],
+  review_focus: [],
 };
 
 const REVIEW: ReviewRecord = {
@@ -93,7 +89,7 @@ const REVIEW: ReviewRecord = {
       severity: "CRITICAL",
       category: "security",
       title: "Blocker finding",
-      file: "src/mw/ratelimit.ts",
+      file: "src/main.ts",
       start_line: 1,
       end_line: 2,
       rationale: "r",
@@ -107,7 +103,7 @@ const REVIEW: ReviewRecord = {
       severity: "CRITICAL",
       category: "bug",
       title: "Dismissed finding (not a blocker)",
-      file: "src/mw/ratelimit.ts",
+      file: "src/main.ts",
       start_line: 5,
       end_line: 6,
       rationale: "r",
@@ -121,7 +117,7 @@ const REVIEW: ReviewRecord = {
       severity: "WARNING",
       category: "style",
       title: "Warning finding",
-      file: "src/mw/ratelimit.ts",
+      file: "src/main.ts",
       start_line: 9,
       end_line: 9,
       rationale: "r",
@@ -136,12 +132,12 @@ const REVIEW: ReviewRecord = {
   cost_usd: 0.1234,
 };
 
-function renderCard(onOpenFile?: (ref: { path: string; line?: number }) => void) {
+function renderCard() {
   const qc = new QueryClient();
   return render(
     <QueryClientProvider client={qc}>
       <NextIntlClientProvider locale="en" messages={{ prBrief: prBriefMessages, prReview: prReviewMessages }}>
-        <PrBriefCard prId={PR_ID} onOpenFile={onOpenFile} />
+        <PrBriefCard prId={PR_ID} />
       </NextIntlClientProvider>
     </QueryClientProvider>,
   );
@@ -157,12 +153,11 @@ describe("PrBriefCard", () => {
     } as unknown as ReturnType<typeof usePrBrief>);
   });
 
-  it("renders the risk banner + what/why and all five review metrics, and parses review_focus file_refs (AC-10, AC-11, m2)", () => {
+  it("renders the risk banner + what/why and all five review metrics (AC-10, AC-11)", () => {
     vi.mocked(usePrReviews).mockReturnValue({
       data: [REVIEW],
     } as unknown as ReturnType<typeof usePrReviews>);
-    const onOpenFile = vi.fn();
-    renderCard(onOpenFile);
+    renderCard();
 
     // AC-10: banner colour-by-risk_level (asserted via the translated label,
     // not CSS) + what/why text.
@@ -184,14 +179,6 @@ describe("PrBriefCard", () => {
 
     // No-review nudge must NOT render alongside a completed review.
     expect(screen.queryByText("Review not run yet")).not.toBeInTheDocument();
-
-    // m2: a "path:12-20" ref invokes onOpenFile with line = 12 (range start).
-    fireEvent.click(screen.getByText("src/mw/ratelimit.ts:12-20"));
-    expect(onOpenFile).toHaveBeenCalledWith({ path: "src/mw/ratelimit.ts", line: 12 });
-
-    // m2: a bare path ref invokes onOpenFile with no line.
-    fireEvent.click(screen.getByText("src/api/public.ts"));
-    expect(onOpenFile).toHaveBeenLastCalledWith({ path: "src/api/public.ts" });
   });
 
   it("shows the AC-12 nudge with a Run Review action when no completed review exists", () => {

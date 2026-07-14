@@ -79,6 +79,7 @@ import {
   Workflow,
   PanelRight,
   CornerDownRight,
+  GitCompare,
   type LucideIcon,
 } from "lucide-react";
 
@@ -162,6 +163,7 @@ export const Icon = {
   Workflow,
   PanelRight,
   CornerDownRight,
+  GitCompare,
 } satisfies Record<string, LucideIcon>;
 
 export type IconName = keyof typeof Icon;

@@ -20,9 +20,14 @@ coverage/
 clones/
 playwright-report/
 test-results/
+.stryker-tmp/
+server/reports/
 
 # emdash worktree config (local)
 .emdash.json
 
 # pr-self-review local gate state (per-dev, regenerated each run)
 .pr-self-review.json
+
+# skill-creator iteration scratch (benchmarks, grading, blind-eval snapshots)
+.claude/skills/*-workspace/

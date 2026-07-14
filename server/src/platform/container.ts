@@ -25,6 +25,7 @@ import { PriceBook } from './price-book.js';
 import { ConfigError } from './errors.js';
 import { AgentsRepository } from '../modules/agents/repository.js';
 import { BlastRepository } from '../modules/blast/repository.js';
+import { EvalRepository } from '../modules/eval/repository.js';
 import { SkillsRepository } from '../modules/skills/repository.js';
 import { ReviewRepository } from '../modules/reviews/repository.js';
 import { ConventionsRepository } from '../modules/conventions/repository.js';
@@ -56,6 +57,7 @@ export interface ContainerOverrides {
   depgraph?: DepGraph;
   tokenizer?: Tokenizer;
   blastRepo?: BlastRepository;
+  evalRepo?: EvalRepository;
 }
 
 export class Container {
@@ -77,6 +79,7 @@ export class Container {
   // `container.agentsRepo` instead of reaching into another module's folder.
   private _agentsRepo?: AgentsRepository;
   private _blastRepo?: BlastRepository;
+  private _evalRepo?: EvalRepository;
   private _reviewRepo?: ReviewRepository;
   private _skillsRepo?: SkillsRepository;
   private _conventionsRepo?: ConventionsRepository;
@@ -108,6 +111,11 @@ export class Container {
   get blastRepo(): BlastRepository {
     if (this.overrides.blastRepo) return this.overrides.blastRepo;
     return (this._blastRepo ??= new BlastRepository(this.db));
+  }
+
+  get evalRepo(): EvalRepository {
+    if (this.overrides.evalRepo) return this.overrides.evalRepo;
+    return (this._evalRepo ??= new EvalRepository(this.db));
   }
 
   get skillsRepo(): SkillsRepository {

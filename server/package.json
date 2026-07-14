@@ -12,6 +12,8 @@
     "depcruise": "depcruise src --config .dependency-cruiser.cjs",
     "depcruise:all": "depcruise src ../reviewer-core/src --config .dependency-cruiser.cjs",
     "verify:l03": "vitest run src/modules/smart-diff/classifier.test.ts",
+    "verify:l06": "vitest run src/modules/eval/scoring.test.ts",
+    "test:mutation": "stryker run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:seed": "tsx src/db/seed.ts"
@@ -26,11 +28,11 @@
     "@vscode/ripgrep": "^1.15.9",
     "dependency-cruiser": "^17.4.3",
     "dotenv": "^16.4.7",
-    "fflate": "^0.8.2",
     "drizzle-orm": "^0.38.3",
     "fastify": "^5.2.0",
     "fastify-sse-v2": "^4.2.1",
     "fastify-type-provider-zod": "^4.0.2",
+    "fflate": "^0.8.2",
     "graphology": "^0.26.0",
     "graphology-metrics": "^2.4.0",
     "js-tiktoken": "^1.0.21",
@@ -42,6 +44,8 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "^9.6.1",
+    "@stryker-mutator/vitest-runner": "^9.6.1",
     "@testcontainers/postgresql": "^10.16.0",
     "@types/node": "^22.10.0",
     "drizzle-kit": "^0.30.1",

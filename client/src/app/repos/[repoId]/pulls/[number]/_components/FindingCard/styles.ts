@@ -2,7 +2,7 @@ import type { CSSProperties } from "react";
 
 /** Co-located styles for FindingCard (extracted from inline styles). */
 export const s = {
-  card: (focused: boolean, sevColor: string, muted: boolean): CSSProperties => ({
+  card: (focused: boolean, sevColor: string): CSSProperties => ({
     borderRadius: 8,
     // All-longhand (never mix `border` shorthand with `borderLeft` — React warns
     // about updating shorthand + non-shorthand on the same rerender).
@@ -15,17 +15,22 @@ export const s = {
     borderLeftColor: sevColor,
     background: "var(--bg-elevated)",
     overflow: "hidden",
-    opacity: muted ? 0.6 : 1,
-    transition: "opacity .2s, border-color .12s, box-shadow .12s",
+    transition: "border-color .12s, box-shadow .12s",
     boxShadow: focused ? "0 0 0 1px " + sevColor : "none",
   }),
-  header: {
+  // Opacity lives on the header only (not the whole card) so a resolved
+  // finding's title/badges recede visually while its still-interactive body
+  // (rationale, suggestion, action buttons — Accept/Dismiss remain togglable,
+  // Turn into eval case becomes enabled) stays at full, clearly-clickable opacity.
+  header: (muted: boolean): CSSProperties => ({
     display: "flex",
     alignItems: "flex-start",
     gap: 12,
     padding: "14px 16px",
     cursor: "pointer",
-  } satisfies CSSProperties,
+    opacity: muted ? 0.6 : 1,
+    transition: "opacity .2s",
+  }),
   badgeWrap: { paddingTop: 1 } satisfies CSSProperties,
   headerMain: { flex: 1, minWidth: 0 } satisfies CSSProperties,
   titleRow: {

@@ -7,6 +7,7 @@ import { PreviewTab } from "./_components/PreviewTab";
 import { VersionsTab } from "./_components/VersionsTab";
 import { StatsTab } from "./_components/StatsTab";
 import { ContextTab } from "./_components/ContextTab";
+import { EvalsTab } from "./_components/EvalsTab";
 
 const TABS = [
   { key: "config", label: "Config", icon: "Settings" as const },
@@ -14,6 +15,7 @@ const TABS = [
   { key: "versions", label: "Versions", icon: "GitBranch" as const },
   { key: "stats", label: "Stats", icon: "BarChart" as const },
   { key: "context", label: "Context", icon: "FileText" as const },
+  { key: "evals", label: "Evals", icon: "FlaskConical" as const },
 ];
 
 export function SkillEditor({ skill, tab, onTab }: { skill: Skill; tab: string; onTab: (t: string) => void }) {
@@ -28,6 +30,7 @@ export function SkillEditor({ skill, tab, onTab }: { skill: Skill; tab: string; 
         {tab === "versions" && <VersionsTab skillId={skill.id} />}
         {tab === "stats" && <StatsTab skillId={skill.id} />}
         {tab === "context" && <ContextTab skillId={skill.id} />}
+        {tab === "evals" && <EvalsTab skillId={skill.id} skillName={skill.name} />}
       </div>
     </div>
   );
