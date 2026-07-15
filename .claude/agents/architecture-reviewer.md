@@ -103,7 +103,7 @@ interfaces (`@devdigest/shared`), not classes."
 **Check:** is `new ConcreteRepository()` / `new ConcreteAdapter()` / `new ConcreteService()`
 constructed anywhere outside `server/src/platform/container.ts`?
 
-#### `reviewer-core-zero-io`
+#### `reviewer-core-no-io`
 **Source:** `reviewer-core/CLAUDE.md` — "Iron rule: No I/O — no DB, fs, GitHub, or persistence.
 Only the injected `LLMProvider`."
 **Check:** does any file under `reviewer-core/src/` import `fs`, `node:fs`, `pg`, `octokit`, or any
