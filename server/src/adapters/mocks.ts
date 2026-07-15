@@ -17,6 +17,7 @@ import type {
   OpenPrPayload,
   CommitFilesPayload,
   IssueMeta,
+  CiWorkflowRun,
   GitClient,
   CloneOptions,
   UnifiedDiff,
@@ -127,6 +128,14 @@ export interface MockGitHubOptions {
   login?: string;
   /** Existing inline review comments returned by listReviewComments. */
   comments?: PrReviewComment[];
+  /** Seeded workflow runs returned by listWorkflowRuns. */
+  workflowRuns?: CiWorkflowRun[];
+  /**
+   * Seeded artifact bytes returned by downloadRunArtifact.
+   * Pass `null` to simulate an absent or oversized artifact.
+   * When undefined, a minimal JSON fixture is returned.
+   */
+  artifactBuffer?: Buffer | null;
 }
 
 export class MockGitHubClient implements GitHubClient {
@@ -238,6 +247,42 @@ export class MockGitHubClient implements GitHubClient {
 
   async currentLogin(): Promise<string> {
     return this.opts.login ?? 'mock-user';
+  }
+
+  async listWorkflowRuns(
+    _repo: RepoRef,
+    _workflowFile: string,
+  ): Promise<CiWorkflowRun[]> {
+    return (
+      this.opts.workflowRuns ?? [
+        {
+          runId: 1001,
+          status: 'completed',
+          conclusion: 'success',
+          htmlUrl: 'https://github.com/mock/mock/actions/runs/1001',
+          headBranch: 'main',
+        },
+      ]
+    );
+  }
+
+  async downloadRunArtifact(
+    _repo: RepoRef,
+    _runId: number,
+    _artifactName: string,
+  ): Promise<Buffer | null> {
+    if (this.opts.artifactBuffer !== undefined) {
+      return this.opts.artifactBuffer;
+    }
+    // Default fixture: a minimal CiResultArtifact JSON payload.
+    return Buffer.from(
+      JSON.stringify({
+        findings_count: 0,
+        cost_usd: 0.001,
+        agent: 'mock-agent',
+        duration_ms: 500,
+      }),
+    );
   }
 }
 

@@ -221,6 +221,7 @@ export const CiRun = z.object({
   source: z.string().nullable(),
   agent: z.string().nullish(),
   duration_s: z.number().nullish(),
+  github_run_id: z.string().nullish(),
 });
 export type CiRun = z.infer<typeof CiRun>;
 

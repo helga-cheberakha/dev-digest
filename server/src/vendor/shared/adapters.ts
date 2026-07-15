@@ -95,6 +95,16 @@ export interface Embedder {
 }
 
 // ---------- GitHub (Octokit REST, thin) ----------
+
+/** A single GitHub Actions workflow run, for pull-based CI-runs ingestion. */
+export interface CiWorkflowRun {
+  runId: number;
+  status: string | null;
+  conclusion: string | null;
+  htmlUrl: string;
+  headBranch: string | null;
+}
+
 export interface RepoRef {
   owner: string;
   name: string;
@@ -164,6 +174,29 @@ export interface GitHubClient {
   getIssue(repo: RepoRef, n: number): Promise<IssueMeta>;
   /** GET /user — for "posting as @user". */
   currentLogin(): Promise<string>;
+  /**
+   * List workflow runs for a given workflow file (e.g. `devdigest-review.yml`).
+   * Used by the pull-based CI-runs ingestion to discover new completed runs.
+   */
+  listWorkflowRuns(repo: RepoRef, workflowFile: string): Promise<CiWorkflowRun[]>;
+  /**
+   * Download the artifact named `artifactName` from a specific workflow run,
+   * unzip in-memory, and return the raw bytes of `devdigest-result.json` inside.
+   *
+   * Returns `null` when:
+   *  - the artifact does not exist on the run, OR
+   *  - the compressed artifact exceeds the size cap (zip-bomb guard — checked
+   *    BEFORE any decompression), OR
+   *  - any transport / decompression error occurs.
+   *
+   * Raw bytes only — no JSON parsing or Zod validation here; that is the
+   * caller's responsibility.
+   */
+  downloadRunArtifact(
+    repo: RepoRef,
+    runId: number,
+    artifactName: string,
+  ): Promise<Buffer | null>;
 }
 
 // ---------- Git (simple-git, heavy) ----------

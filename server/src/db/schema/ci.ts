@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, integer, timestamp, doublePrecision } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, integer, timestamp, doublePrecision, unique } from 'drizzle-orm/pg-core';
 import { agents } from './agents';
 
 export const ciInstallations = pgTable('ci_installations', {
@@ -11,16 +11,23 @@ export const ciInstallations = pgTable('ci_installations', {
   installedAt: timestamp('installed_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
-export const ciRuns = pgTable('ci_runs', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  ciInstallationId: uuid('ci_installation_id').references(() => ciInstallations.id, {
-    onDelete: 'set null',
+export const ciRuns = pgTable(
+  'ci_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    ciInstallationId: uuid('ci_installation_id').references(() => ciInstallations.id, {
+      onDelete: 'set null',
+    }),
+    prNumber: integer('pr_number'),
+    ranAt: timestamp('ran_at', { withTimezone: true }),
+    status: text('status'),
+    findingsCount: integer('findings_count'),
+    costUsd: doublePrecision('cost_usd'),
+    githubUrl: text('github_url'),
+    source: text('source'),
+    githubRunId: text('github_run_id'),
+  },
+  (t) => ({
+    installRunUq: unique('ci_runs_install_run_uq').on(t.ciInstallationId, t.githubRunId),
   }),
-  prNumber: integer('pr_number'),
-  ranAt: timestamp('ran_at', { withTimezone: true }),
-  status: text('status'),
-  findingsCount: integer('findings_count'),
-  costUsd: doublePrecision('cost_usd'),
-  githubUrl: text('github_url'),
-  source: text('source'),
-});
+);
