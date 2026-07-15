@@ -23,6 +23,22 @@ function formatDurationMs(ms: number): string {
   return `${Math.round(ms / 1000)}s`;
 }
 
+/** Pre-run summary time = MAX of the given estimates' durations (parallel fan-out, not sum). */
+function computeMaxDurationMs(estimates: AgentEstimate[]): number | null {
+  const durations = estimates
+    .map((e) => e.est_duration_ms)
+    .filter((d): d is number => d !== null);
+  return durations.length > 0 ? Math.max(...durations) : null;
+}
+
+/** Pre-run summary cost = SUM of the given estimates' costs. */
+function computeSumCostUsd(estimates: AgentEstimate[]): number | null {
+  const costs = estimates
+    .map((e) => e.est_cost_usd)
+    .filter((c): c is number => c !== null);
+  return costs.length > 0 ? costs.reduce((s, c) => s + c, 0) : null;
+}
+
 // ---- Sub-components ---------------------------------------------------------
 
 interface AgentCardProps {
@@ -162,19 +178,8 @@ export function ConfigureRunView({ initialPrId }: ConfigureRunViewProps) {
   // cost = SUM of checked agents' est_cost_usd
   const selectedEstimates = estimates.filter((e: AgentEstimate) => checkedIds.has(e.agent_id));
 
-  const maxDurationMs: number | null = (() => {
-    const durations = selectedEstimates
-      .map((e: AgentEstimate) => e.est_duration_ms)
-      .filter((d): d is number => d !== null);
-    return durations.length > 0 ? Math.max(...durations) : null;
-  })();
-
-  const sumCostUsd: number | null = (() => {
-    const costs = selectedEstimates
-      .map((e: AgentEstimate) => e.est_cost_usd)
-      .filter((c): c is number => c !== null);
-    return costs.length > 0 ? costs.reduce((s, c) => s + c, 0) : null;
-  })();
+  const maxDurationMs = computeMaxDurationMs(selectedEstimates);
+  const sumCostUsd = computeSumCostUsd(selectedEstimates);
 
   // ---- Derived state -------------------------------------------------------
   const checkedCount = checkedIds.size;

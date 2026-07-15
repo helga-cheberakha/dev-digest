@@ -17,7 +17,6 @@ import {
   EmptyState,
   Icon,
   SeverityBadge,
-  type Category,
 } from "@devdigest/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
@@ -49,7 +48,7 @@ function getLiveStatus(
   const colEvts = events.filter((e) => e.runId === col.run_id);
   if (colEvts.some((e) => e.kind === "result")) return "done";
   if (colEvts.some((e) => e.kind === "error")) return "failed";
-  return col.status as "running" | "done" | "failed";
+  return col.status;
 }
 
 /** A conflict group has "mixed stances" when agents disagree (filter target). */
@@ -170,7 +169,7 @@ function ColumnCard({
                 key={f.id}
                 style={{ display: "flex", alignItems: "flex-start", gap: 6, fontSize: 12 }}
               >
-                <SeverityBadge severity={f.severity as "CRITICAL" | "WARNING" | "SUGGESTION"} compact />
+                <SeverityBadge severity={f.severity} compact />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <SafeMarkdown content={f.title} />
                 </div>
@@ -242,8 +241,8 @@ function TabsFindingCard({
           textAlign: "left",
         }}
       >
-        <SeverityBadge severity={f.severity as "CRITICAL" | "WARNING" | "SUGGESTION"} compact />
-        <CategoryTag category={f.category as Category} />
+        <SeverityBadge severity={f.severity} compact />
+        <CategoryTag category={f.category} />
         <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {f.title}
         </span>
@@ -397,20 +396,19 @@ function ConflictsSection({ conflicts }: { conflicts: Conflict[] }) {
 
 function ConflictTakeRow({ take }: { take: ConflictTake }) {
   const t = useTranslations("runs");
-  const isIgnored = take.verdict === "ignored";
 
   return (
     <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12 }}>
       <span style={{ fontWeight: 600, minWidth: 100, flexShrink: 0, color: "var(--text-secondary)" }}>
         {take.persona}
       </span>
-      {isIgnored ? (
+      {take.verdict === "ignored" ? (
         <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>
           {t("conflicts.didNotFlag")}
         </span>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          <SeverityBadge severity={take.verdict as "CRITICAL" | "WARNING" | "SUGGESTION"} compact />
+          <SeverityBadge severity={take.verdict} compact />
           {/* Don't render empty notes (always '' for ignored, but guard here too) */}
           {take.note && (
             <div style={{ marginTop: 2 }}>

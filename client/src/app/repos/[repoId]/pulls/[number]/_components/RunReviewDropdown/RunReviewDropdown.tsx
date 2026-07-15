@@ -110,6 +110,10 @@ export function RunReviewDropdown({
         onRunsStarted?.(res.run_ids);
         router.push(`/multi-agent/${res.id}`);
       }
+    } catch {
+      // Already surfaced to the user via the global MutationCache onError
+      // toast (providers.tsx) — this catch exists only so a rejected
+      // mutateAsync doesn't become an unhandled promise rejection here.
     } finally {
       onRunSettled?.();
     }

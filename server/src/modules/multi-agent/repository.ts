@@ -14,45 +14,45 @@ export class MultiAgentRepository {
 
   // ---- write: parent row + child runs ----------------------------------------
 
-  /** Insert a multi_agent_runs parent row; returns its id. */
-  async createRun(values: {
-    workspaceId: string;
-    prId: string;
-    agentIds: string[];
-  }): Promise<string> {
-    const [row] = await this.db
-      .insert(t.multiAgentRuns)
-      .values(values)
-      .returning({ id: t.multiAgentRuns.id });
-    return row!.id;
-  }
-
   /**
-   * Insert an agent_runs row in 'running' state with the multiAgentRunId FK set.
-   * Mirrors reviews/repository/run.repo.ts createAgentRun — adds the FK only.
+   * Insert the multi_agent_runs parent row and its N agent_runs rows (FK set)
+   * in a single transaction, so a failure partway through never leaves an
+   * orphaned parent whose agent_ids.length exceeds its actually-created runs.
+   * Returns the parent id and the created run ids, in the same order as `agents`.
    */
-  async createAgentRun(values: {
-    workspaceId: string;
-    agentId: string;
-    prId: string;
-    provider: string | null;
-    model: string | null;
-    multiAgentRunId: string;
-  }): Promise<string> {
-    const [row] = await this.db
-      .insert(t.agentRuns)
-      .values({
-        workspaceId: values.workspaceId,
-        agentId: values.agentId,
-        prId: values.prId,
-        provider: values.provider,
-        model: values.model,
-        multiAgentRunId: values.multiAgentRunId,
-        status: 'running',
-        source: 'local',
-      })
-      .returning({ id: t.agentRuns.id });
-    return row!.id;
+  async createRunWithAgentRuns(
+    parent: { workspaceId: string; prId: string; agentIds: string[] },
+    agents: {
+      agentId: string;
+      provider: string | null;
+      model: string | null;
+    }[],
+  ): Promise<{ id: string; run_ids: string[] }> {
+    return this.db.transaction(async (tx) => {
+      const [parentRow] = await tx
+        .insert(t.multiAgentRuns)
+        .values(parent)
+        .returning({ id: t.multiAgentRuns.id });
+      const parentId = parentRow!.id;
+
+      const runRows = await tx
+        .insert(t.agentRuns)
+        .values(
+          agents.map((agent) => ({
+            workspaceId: parent.workspaceId,
+            agentId: agent.agentId,
+            prId: parent.prId,
+            provider: agent.provider,
+            model: agent.model,
+            multiAgentRunId: parentId,
+            status: 'running' as const,
+            source: 'local' as const,
+          })),
+        )
+        .returning({ id: t.agentRuns.id });
+
+      return { id: parentId, run_ids: runRows.map((r) => r.id) };
+    });
   }
 
   // ---- read: parent row + PR number ------------------------------------------

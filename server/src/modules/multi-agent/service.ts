@@ -51,25 +51,22 @@ export class MultiAgentService {
       resolvedAgents.push(agent);
     }
 
-    // Create the multi_agent_runs parent row.
-    const parentId = await this.repo.createRun({ workspaceId, prId, agentIds });
-
-    // Create agent_runs rows with the FK set BEFORE handing off to the executor
-    // (executor expects the rows to already exist — mirrors ReviewService.runReview).
-    const jobs: { agent: AgentRow; runId: string }[] = [];
-    const run_ids: string[] = [];
-    for (const agent of resolvedAgents) {
-      const runId = await this.repo.createAgentRun({
-        workspaceId,
+    // Create the multi_agent_runs parent row + its N agent_runs rows (FK set)
+    // in a single transaction — a partial failure can't orphan the parent.
+    // Rows are created BEFORE handing off to the executor (it expects them to
+    // already exist — mirrors ReviewService.runReview).
+    const { id: parentId, run_ids } = await this.repo.createRunWithAgentRuns(
+      { workspaceId, prId, agentIds },
+      resolvedAgents.map((agent) => ({
         agentId: agent.id,
-        prId,
         provider: agent.provider,
         model: agent.model,
-        multiAgentRunId: parentId,
-      });
-      run_ids.push(runId);
-      jobs.push({ agent, runId });
-    }
+      })),
+    );
+    const jobs: { agent: AgentRow; runId: string }[] = resolvedAgents.map((agent, i) => ({
+      agent,
+      runId: run_ids[i]!,
+    }));
 
     // Fire-and-forget: mirrors ReviewService.runReview exactly.
     const executor = new ReviewRunExecutor(

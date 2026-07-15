@@ -145,7 +145,7 @@ export type CuratorResult = z.infer<typeof CuratorResult>;
 
 /** Request body for POST /pulls/:id/multi-agent-run. */
 export const MultiAgentRunRequest = z.object({
-  agent_ids: z.array(z.string()).min(1),
+  agent_ids: z.array(z.string().uuid()).min(1),
 });
 export type MultiAgentRunRequest = z.infer<typeof MultiAgentRunRequest>;
 
