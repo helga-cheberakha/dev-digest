@@ -2,6 +2,8 @@
   "runs": {
     "emptyTitle": "No CI runs yet",
     "emptyBody": "Once you export an agent to CI, every automated review shows up here.",
+    "emptyCta": "Set up CI for an agent",
+    "noMatch": "No runs match your current filters.",
     "title": "CI Runs",
     "subtitle": "Agent reviews executed inside CI · not local runs",
     "autoRefresh": "auto-refresh on",
@@ -9,14 +11,18 @@
     "refreshing": "Refreshing…",
     "filters": {
       "last7Days": "Last 7 days",
+      "allTime": "All time",
       "allAgents": "All agents",
       "allRepos": "All repos",
-      "allStatuses": "All statuses"
+      "allStatuses": "All statuses",
+      "allSources": "All sources"
     },
     "table": {
       "timestamp": "Timestamp",
       "pullRequest": "Pull request",
+      "agent": "Agent",
       "source": "Source",
+      "duration": "Duration",
       "findings": "Findings",
       "cost": "Cost",
       "status": "Status"
@@ -51,7 +57,7 @@
       "ghaDesc": "Runs on pull_request events",
       "circleDesc": "config.yml job",
       "jenkinsDesc": "Pipeline stage",
-      "cliDesc": "devdigest review --pr"
+      "cliDesc": "node .devdigest/runner/index.js"
     },
     "recommended": "recommended",
     "repoLabel": "Target repository",
@@ -68,9 +74,9 @@
       "none": "None (exit code only)"
     },
     "blockMergeTitle": "Block merge on findings",
-    "blockMergeDesc": "Requires a GitHub App — not available with PAT in local mode",
+    "blockMergeDesc": "Set a branch protection rule requiring this status check — no GitHub App needed",
     "installCardTitle": "Open a PR with these files",
-    "installCardBody": "DevDigest opens a PR in {repo} titled “Add DevDigest CI review” with the {count} generated files.",
+    "installCardBody": "DevDigest opens a PR in {repo} titled 'Add DevDigest CI review' with the {count} generated files.",
     "ownerRepo": "owner/repo",
     "secretNote": "Add {key} to the repo's Actions secrets before the workflow runs."
   },
@@ -81,7 +87,7 @@
     "publish": "Publish to CI",
     "update": "Update CI",
     "noRepo": "Connect a repository first",
-    "empty": "Not deployed to CI yet. Use “Publish to CI” to open a PR that adds the workflow + agent config.",
+    "empty": "Not deployed to CI yet. Use 'Publish to CI' to open a PR that adds the workflow + agent config.",
     "installed": "installed {date}"
   },
   "publishDialog": {

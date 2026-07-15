@@ -14,6 +14,10 @@ import type {
   EvalDashboard,
   EvalBenchmark,
   Agent,
+  CiRun,
+  CiInstallation,
+  CiExport,
+  CiExportInputBody,
 } from "@devdigest/shared";
 
 export const API_BASE =
@@ -291,6 +295,46 @@ export async function fetchSkillEvalCompare(
   return api.get<EvalCompare>(
     `/skills/${skillId}/eval-compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`,
   );
+}
+
+// ---- CI Export / CI Runs ----
+
+/** Stable query-key factory for CI cache. */
+export const ciQueryKeys = {
+  runs: () => ["ci-runs"] as const,
+  installations: (agentId: string) => ["ci-installations", agentId] as const,
+} as const;
+
+/** List all CI runs (returned newest-first from the server). */
+export async function fetchCiRuns(): Promise<CiRun[]> {
+  return api.get<CiRun[]>("/ci-runs");
+}
+
+/** List CI installations for a specific agent. */
+export async function fetchCiInstallations(agentId: string): Promise<CiInstallation[]> {
+  return api.get<CiInstallation[]>(`/agents/${agentId}/ci-installations`);
+}
+
+/**
+ * Trigger a refresh of CI run data from GitHub Actions artifacts.
+ *
+ * Sends `{}` so Fastify sets `application/json` on the body-schema route.
+ */
+export async function refreshCiRuns(): Promise<void> {
+  return api.post<void>("/ci-runs/refresh", {});
+}
+
+/**
+ * Export an agent's CI configuration, optionally opening a PR with the files.
+ *
+ * Sends `{}` as a minimum body so Fastify honours the body schema when the
+ * caller uses all-default options.
+ */
+export async function exportCi(
+  agentId: string,
+  input: CiExportInputBody,
+): Promise<CiExport> {
+  return api.post<CiExport>(`/agents/${agentId}/export-ci`, input);
 }
 
 /**
