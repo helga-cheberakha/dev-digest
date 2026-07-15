@@ -1,0 +1,284 @@
+/**
+ * CI service — export + refresh (ingestion) orchestration.
+ *
+ * T3: export()  — generate the CI bundle, commit files / open PR on GitHub,
+ *                 persist ci_installation, return CiExport.
+ * T4: refresh() — pull completed GHA workflow runs, download+parse artifacts,
+ *                 insert new ci_runs + agent_runs rows (deduped, transactional).
+ *
+ * Onion layer: Application (service). No route HTTP logic, no raw SQL. All DB
+ * access goes through CiRepository; all GitHub calls through the GitHubClient
+ * port on the container.
+ */
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { join, dirname } from 'node:path';
+import type { Container } from '../../platform/container.js';
+import { NotFoundError, ValidationError, AppError } from '../../platform/errors.js';
+import type {
+  CiExportInput,
+  CiExport,
+  CiInstallation,
+  CiRun,
+  CiResultArtifact,
+} from '@devdigest/shared';
+import { CiResultArtifact as CiResultArtifactSchema } from '@devdigest/shared';
+import { CiRepository } from './repository.js';
+import { RepoRepository } from '../repos/repository.js';
+import { buildCiBundle, skillSlugFromName } from './bundle.js';
+import { WORKFLOW_FILE_NAME } from './workflow.js';
+
+const _thisFile = fileURLToPath(import.meta.url);
+export const DEFAULT_RUNNER_PATH = join(dirname(_thisFile), 'assets', 'runner', 'index.js');
+
+/** Map a CiTarget value to its display name for the CI Runs page. */
+function targetDisplayName(targetType: string): string {
+  switch (targetType) {
+    case 'gha': return 'GitHub Actions';
+    case 'circle': return 'CircleCI';
+    case 'jenkins': return 'Jenkins';
+    case 'cli': return 'CLI';
+    default: return 'Unknown';
+  }
+}
+
+/** Parse "owner/name" → RepoRef. Throws ValidationError on bad format. */
+function parseRepoRef(fullName: string): { owner: string; name: string } {
+  const [owner, name] = fullName.split('/');
+  if (!owner || !name) {
+    throw new ValidationError(`Invalid repo full_name: "${fullName}" — expected "owner/name"`);
+  }
+  return { owner, name };
+}
+
+export class CiService {
+  private ciRepo: CiRepository;
+  private reposRepo: RepoRepository;
+
+  constructor(
+    private container: Container,
+    /** Overrideable for tests — defaults to the built-in runner asset. */
+    private runnerPath: string = DEFAULT_RUNNER_PATH,
+  ) {
+    this.ciRepo = container.ciRepo;
+    this.reposRepo = new RepoRepository(container.db);
+  }
+
+  // ---------------------------------------------------------------------------
+  // T3 — Export
+  // ---------------------------------------------------------------------------
+
+  async export(
+    workspaceId: string,
+    agentId: string,
+    input: CiExportInput,
+  ): Promise<CiExport> {
+    // 1. Resolve agent (workspace-scoped)
+    const agent = await this.container.agentsRepo.getById(workspaceId, agentId);
+    if (!agent) throw new NotFoundError('Agent not found');
+
+    // 2. Validate repo ownership — must belong to this workspace
+    const repoRow = await this.reposRepo.findByFullName(workspaceId, input.repo);
+    if (!repoRow) {
+      // Check that the workspace has ANY connected repos, to give a better error.
+      const allRepos = await this.reposRepo.list(workspaceId);
+      if (allRepos.length === 0) {
+        throw new ValidationError(
+          'No repositories connected to this workspace. Add a repo before exporting to CI.',
+        );
+      }
+      throw new ValidationError(
+        `Repository "${input.repo}" is not connected to this workspace. ` +
+          `Add it via Settings → Repositories first.`,
+      );
+    }
+    const repoRef = parseRepoRef(input.repo);
+
+    // 3. Read the runner asset (hard-fail if missing)
+    let runnerBytes: Buffer;
+    try {
+      runnerBytes = await readFile(this.runnerPath);
+    } catch {
+      throw new AppError(
+        'runner_asset_missing',
+        'CI runner asset missing — run `npm run build` in agent-runner ' +
+          'and copy dist/index.js to server/src/modules/ci/assets/runner/index.js',
+        500,
+      );
+    }
+
+    // 4. Resolve linked skills for this agent
+    const linkedSkills = await this.container.agentsRepo.linkedSkills(agentId);
+    const skillBodies = linkedSkills
+      .filter((ls) => ls.skill.enabled)
+      .map((ls) => ({
+        slug: skillSlugFromName(ls.skill.name),
+        body: ls.skill.body,
+      }));
+    const skillSlugs = skillBodies.map((s) => s.slug);
+
+    // 5. Build the CI bundle (pure, no I/O)
+    const files = buildCiBundle({
+      agent: {
+        name: agent.name,
+        provider: agent.provider as 'openai' | 'anthropic' | 'openrouter',
+        model: agent.model,
+        systemPrompt: agent.systemPrompt,
+        skillSlugs,
+        strategy: agent.strategy as 'auto' | 'single-pass' | 'map-reduce',
+        ciFailOn: agent.ciFailOn as 'never' | 'critical' | 'warning' | 'any',
+      },
+      skillBodies,
+      postAs: input.post_as,
+      triggers: input.triggers,
+      target: input.target,
+      runnerBytes,
+    });
+
+    // 6. Persist the installation row (regardless of action — tracks all exports)
+    const installationRow = await this.ciRepo.insertInstallation({
+      agentId,
+      repo: input.repo,
+      targetType: input.target,
+    });
+    const installation: CiInstallation = CiRepository.toInstallationDto(installationRow);
+
+    // 7. GitHub write (only for open_pr) — if this throws, the installation row
+    //    is already committed. That's acceptable: the installation tracks that the
+    //    user initiated the export; the missing pr_url signals the write failed.
+    //    Callers should rely on the thrown error for retry UX.
+    let pr_url: string | null = null;
+
+    if (input.action === 'open_pr') {
+      const gh = await this.container.github();
+
+      // Map CiFile[] to CommitFile[] (same shape, different type names)
+      const commitFiles = files.map((f) => ({ path: f.path, contents: f.contents }));
+
+      await gh.commitFiles(repoRef, {
+        branch: 'devdigest/ci',
+        base: input.base,
+        message: 'chore: add DevDigest CI review',
+        files: commitFiles,
+      });
+
+      // Re-use an existing open PR if one is already up, else open a new one.
+      const existing = await gh.findOpenPr(repoRef, 'devdigest/ci');
+      if (existing) {
+        pr_url = existing.url;
+      } else {
+        const opened = await gh.openPullRequest(repoRef, {
+          title: 'Add DevDigest CI review',
+          head: 'devdigest/ci',
+          base: input.base,
+          body:
+            '## DevDigest CI Integration\n\n' +
+            'This PR adds an automated code-review workflow powered by [DevDigest](https://devdigest.ai).\n\n' +
+            '- Agent: **' + agent.name + '**\n' +
+            '- Trigger: pull_request events\n\n' +
+            '_Generated by DevDigest Export to CI_',
+        });
+        pr_url = opened.url;
+      }
+    }
+
+    return { installation, files, pr_url };
+  }
+
+  // ---------------------------------------------------------------------------
+  // T3 — List installations for an agent
+  // ---------------------------------------------------------------------------
+
+  async listInstallations(workspaceId: string, agentId: string): Promise<CiInstallation[]> {
+    // Verify the agent belongs to this workspace
+    const agent = await this.container.agentsRepo.getById(workspaceId, agentId);
+    if (!agent) throw new NotFoundError('Agent not found');
+
+    const rows = await this.ciRepo.listInstallationsForAgent(agentId);
+    return rows.map(CiRepository.toInstallationDto);
+  }
+
+  // ---------------------------------------------------------------------------
+  // T4 — List CI runs for a workspace
+  // ---------------------------------------------------------------------------
+
+  async listCiRuns(workspaceId: string): Promise<CiRun[]> {
+    return this.ciRepo.listCiRuns(workspaceId);
+  }
+
+  // ---------------------------------------------------------------------------
+  // T4 — Refresh (pull-based ingestion)
+  // ---------------------------------------------------------------------------
+
+  async refresh(workspaceId: string): Promise<CiRun[]> {
+    const gh = await this.container.github();
+    const installations = await this.ciRepo.installationsForWorkspace(workspaceId);
+
+    for (const { installation, agent } of installations) {
+      const repoRef = parseRepoRef(installation.repo);
+
+      // Pre-check: which github_run_ids are already in the DB for this installation?
+      const existingRunIds = await this.ciRepo.existingRunIdsForInstallation(installation.id);
+
+      // Pull completed workflow runs from GitHub
+      let workflowRuns;
+      try {
+        workflowRuns = await gh.listWorkflowRuns(repoRef, WORKFLOW_FILE_NAME);
+      } catch {
+        // Network / auth failure for one repo — skip, don't abort the whole batch
+        continue;
+      }
+
+      // Only process completed runs not already ingested
+      const newRuns = workflowRuns.filter(
+        (run) => run.status === 'completed' && !existingRunIds.has(String(run.runId)),
+      );
+
+      for (const run of newRuns) {
+        // Download the artifact (null = missing / oversized / transport error → skip)
+        const buffer = await gh.downloadRunArtifact(repoRef, run.runId, 'devdigest-result');
+        if (buffer === null) continue;
+
+        // Parse the artifact JSON
+        let json: unknown;
+        try {
+          json = JSON.parse(buffer.toString('utf8'));
+        } catch {
+          // Malformed JSON — skip this run, continue the batch
+          continue;
+        }
+
+        const parsed = CiResultArtifactSchema.safeParse(json);
+        if (!parsed.success) {
+          // Schema mismatch — skip this run without aborting the batch
+          continue;
+        }
+
+        const artifact = parsed.data;
+        const displaySource = targetDisplayName(installation.targetType);
+
+        // Insert ci_runs + agent_runs in one transaction (ALWAYS INSERT, never upsert)
+        try {
+          await this.ciRepo.insertCiRunWithAgentRun({
+            ciInstallationId: installation.id,
+            workspaceId: agent.workspaceId,
+            agentId: agent.id,
+            prNumber: artifact.pr_number ?? null,
+            status: run.conclusion,
+            findingsCount: artifact.findings_count,
+            costUsd: artifact.cost_usd,
+            githubUrl: run.htmlUrl,
+            source: displaySource,
+            githubRunId: String(run.runId),
+            durationMs: artifact.duration_ms ?? null,
+          });
+        } catch {
+          // Unique constraint violation (race with a parallel refresh) — skip silently
+          continue;
+        }
+      }
+    }
+
+    return this.ciRepo.listCiRuns(workspaceId);
+  }
+}
