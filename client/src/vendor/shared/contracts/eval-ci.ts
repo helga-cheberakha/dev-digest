@@ -154,9 +154,9 @@ export const CiExportInput = z.object({
   triggers: z.array(z.enum(['opened', 'synchronize', 'reopened'])).default(['opened', 'synchronize', 'reopened']),
   base: z.string().default('main'),
   /**
-   * User-edited file contents from the Preview step. The server applies these
-   * overrides (matched by path) before committing / returning the file bundle.
-   * Only include files the user actually changed — send nothing for unedited ones.
+   * Per-file content overrides applied to the generated bundle before
+   * commit/return (AC-5). Each entry replaces the contents of the matching
+   * generated file; overrides for unknown paths are silently ignored.
    */
   file_overrides: z.array(z.object({ path: z.string(), contents: z.string() })).nullish(),
 });

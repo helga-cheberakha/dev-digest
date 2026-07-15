@@ -12,10 +12,11 @@
 import React, { useState } from "react";
 import { useTranslations } from "next-intl";
 import { Badge, Button, Icon, Skeleton } from "@devdigest/ui";
-import type { Agent, CiFailOn } from "@devdigest/shared";
+import type { Agent, CiFailOn, CiTarget } from "@devdigest/shared";
 import { useCiInstallations } from "@/lib/hooks/ci";
 import { useUpdateAgent } from "@/lib/hooks/agents";
 import { ExportWizard } from "./_components/ExportWizard";
+import { s } from "./styles";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -25,8 +26,6 @@ import { ExportWizard } from "./_components/ExportWizard";
 function targetLabel(t: CiTarget): string {
   return { gha: "GitHub Actions", circle: "CircleCI", jenkins: "Jenkins", cli: "CLI" }[t] ?? t;
 }
-
-type CiTarget = "gha" | "circle" | "jenkins" | "cli";
 
 // ---------------------------------------------------------------------------
 // Fail CI on selector
@@ -50,11 +49,11 @@ function FailOnControl({
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <span style={{ fontSize: 14, fontWeight: 600 }}>{t("ciTab.failOnLabel")}</span>
+    <div style={s.failOnWrap}>
+      <div style={s.failOnLabelRow}>
+        <span style={s.failOnLabel}>{t("ciTab.failOnLabel")}</span>
       </div>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      <div style={s.failOnOptions}>
         {FAIL_ON_OPTIONS.map((opt) => (
           <button
             key={opt}
@@ -76,7 +75,7 @@ function FailOnControl({
           </button>
         ))}
       </div>
-      <p style={{ fontSize: 12, color: "var(--text-muted)", margin: 0 }}>
+      <p style={s.failOnHelper}>
         {t("ciTab.failOnHelper")}
       </p>
     </div>
@@ -96,7 +95,7 @@ export function CITab({ agent }: { agent: Agent }) {
 
   if (isLoading) {
     return (
-      <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={s.loadingWrap}>
         <Skeleton height={24} width={180} />
         <Skeleton height={100} />
       </div>
@@ -104,25 +103,16 @@ export function CITab({ agent }: { agent: Agent }) {
   }
 
   return (
-    <div style={{ padding: "24px 28px", display: "flex", flexDirection: "column", gap: 24, maxWidth: 640 }}>
+    <div style={s.wrap}>
       {/* Empty state */}
       {!hasInstallations && (
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            gap: 16,
-            padding: "40px 24px",
-            textAlign: "center",
-          }}
-        >
+        <div style={s.emptyState}>
           <Icon.Workflow size={36} style={{ color: "var(--text-muted)" }} />
           <div>
-            <h2 style={{ fontSize: 18, fontWeight: 700, margin: "0 0 8px" }}>
+            <h2 style={s.emptyH2}>
               {t("ciTab.emptyTitle")}
             </h2>
-            <p style={{ fontSize: 14, color: "var(--text-secondary)", margin: 0 }}>
+            <p style={s.emptyBody}>
               {t("ciTab.emptyBody")}
             </p>
           </div>
@@ -136,14 +126,14 @@ export function CITab({ agent }: { agent: Agent }) {
       {hasInstallations && (
         <>
           {/* Header row */}
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>
+          <div style={s.headerRow}>
+            <h2 style={s.headerH2}>
               {t("ciTab.ciDeployment")}
             </h2>
             <Badge color="var(--ok)">
               {t("ciTab.activeBadge", { count: String(installations!.length) })}
             </Badge>
-            <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            <div style={s.headerActions}>
               <Button kind="secondary" size="sm" icon="RefreshCw" onClick={() => setWizardOpen(true)}>
                 {t("ciTab.updateConfig")}
               </Button>
@@ -154,28 +144,12 @@ export function CITab({ agent }: { agent: Agent }) {
           </div>
 
           {/* Installation rows */}
-          <div
-            style={{
-              border: "1px solid var(--border)",
-              borderRadius: 10,
-              overflow: "hidden",
-            }}
-          >
+          <div style={s.instList}>
             {installations!.map((inst) => (
-              <div
-                key={inst.id}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                  padding: "12px 16px",
-                  borderBottom: "1px solid var(--border)",
-                  fontSize: 14,
-                }}
-              >
+              <div key={inst.id} style={s.instRow}>
                 <Icon.GitBranch size={15} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
-                <span style={{ flex: 1, fontWeight: 500 }}>{inst.repo}</span>
-                <Badge color="var(--text-muted)">{targetLabel(inst.target_type as CiTarget)}</Badge>
+                <span style={s.instRepoName}>{inst.repo}</span>
+                <Badge color="var(--text-muted)">{targetLabel(inst.target_type)}</Badge>
                 <Badge color="var(--ok)">active</Badge>
                 <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
                   {t("ciTab.installed", {
@@ -188,22 +162,7 @@ export function CITab({ agent }: { agent: Agent }) {
             <button
               type="button"
               onClick={() => setWizardOpen(true)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 8,
-                width: "100%",
-                padding: "12px 16px",
-                border: "none",
-                borderTop: "none",
-                background: "transparent",
-                cursor: "pointer",
-                fontSize: 13,
-                color: "var(--text-muted)",
-                outline: "2px dashed var(--border-strong)",
-                outlineOffset: -2,
-              }}
+              style={s.addRepoBtn}
             >
               <Icon.Plus size={14} />
               {t("ciTab.addRepo")}
@@ -211,14 +170,7 @@ export function CITab({ agent }: { agent: Agent }) {
           </div>
 
           {/* Fail CI on */}
-          <div
-            style={{
-              padding: "16px",
-              border: "1px solid var(--border)",
-              borderRadius: 10,
-              background: "var(--bg-elevated)",
-            }}
-          >
+          <div style={s.failOnCard}>
             <FailOnControl agentId={agent.id} value={agent.ci_fail_on} t={t} />
           </div>
         </>
