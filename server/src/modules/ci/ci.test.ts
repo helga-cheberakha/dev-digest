@@ -287,43 +287,21 @@ describe('CiService.export — T3', () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
+  /**
+   * Fix A: CiService now uses container.reposRepo (a DI getter) instead of
+   * directly constructing RepoRepository(container.db). The mock container
+   * includes reposRepo directly — no complex DB select-chain patching needed.
+   */
   function makeContainer(opts: {
     agent?: { id: string; name: string; provider: string; model: string; systemPrompt: string; strategy: string; ciFailOn: string; workspaceId: string } | null;
     repo?: { id: string; fullName: string; owner: string; name: string } | null;
     repoList?: Array<{ fullName: string }>;
     githubClient?: MockGitHubClient;
     ciRepoOverride?: Partial<CiRepository>;
-  }): { container: Container; github: MockGitHubClient } {
+  }): { container: Container; github: MockGitHubClient; insertInstallationMock: ReturnType<typeof vi.fn> } {
     const github = opts.githubClient ?? new MockGitHubClient();
 
-    // Mock DB for select chains
-    let selectCount = 0;
-    const db = {
-      select: vi.fn(() => {
-        selectCount++;
-        return {
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({
-              orderBy: vi.fn().mockResolvedValue([]),
-            }),
-          }),
-        };
-      }),
-      insert: vi.fn().mockReturnValue({
-        values: vi.fn().mockReturnValue({
-          returning: vi.fn().mockResolvedValue([
-            {
-              id: 'install-1',
-              agentId: 'agent-1',
-              repo: 'owner/repo',
-              targetType: 'gha',
-              installedAt: new Date('2026-01-01'),
-            } satisfies CiInstallationRow,
-          ]),
-        }),
-      }),
-      transaction: vi.fn(),
-    } as unknown as Db;
+    const db = {} as unknown as Db;
 
     // Build mock agentsRepo
     const agentsRepo = {
@@ -331,15 +309,17 @@ describe('CiService.export — T3', () => {
       linkedSkills: vi.fn().mockResolvedValue([]),
     };
 
+    const insertInstallationMock = vi.fn().mockResolvedValue({
+      id: 'install-1',
+      agentId: 'agent-1',
+      repo: 'owner/repo',
+      targetType: 'gha',
+      installedAt: new Date('2026-01-01'),
+    } satisfies CiInstallationRow);
+
     // Build mock ciRepo
     const defaultCiRepo = {
-      insertInstallation: vi.fn().mockResolvedValue({
-        id: 'install-1',
-        agentId: 'agent-1',
-        repo: 'owner/repo',
-        targetType: 'gha',
-        installedAt: new Date('2026-01-01'),
-      } satisfies CiInstallationRow),
+      insertInstallation: insertInstallationMock,
       listInstallationsForAgent: vi.fn().mockResolvedValue([]),
       installationsForWorkspace: vi.fn().mockResolvedValue([]),
       existingRunIdsForInstallation: vi.fn().mockResolvedValue(new Set()),
@@ -348,21 +328,7 @@ describe('CiService.export — T3', () => {
     };
     const ciRepo = { ...defaultCiRepo, ...(opts.ciRepoOverride ?? {}) };
 
-    // Build mock reposRepo (accessed via new RepoRepository inside CiService)
-    // We patch the container's db to stub repo queries
-    // The simpler approach: use container with direct mocked methods
-
-    const container = {
-      db,
-      agentsRepo,
-      ciRepo,
-      github: vi.fn().mockResolvedValue(github),
-      auth: new MockAuthProvider(),
-    } as unknown as Container;
-
-    // Patch RepoRepository.findByFullName + list used inside CiService
-    // CiService instantiates RepoRepository(container.db) — we need to mock the DB
-    // for that. Instead, we'll patch the prototype for the test scope.
+    // Build mock reposRepo — directly on the container (Fix A: no DB patching)
     const repoRow = opts.repo
       ? {
           id: opts.repo.id,
@@ -377,40 +343,21 @@ describe('CiService.export — T3', () => {
           indexedAt: null,
         }
       : null;
+    const reposRepo = {
+      findByFullName: vi.fn().mockResolvedValue(repoRow ?? undefined),
+      list: vi.fn().mockResolvedValue(opts.repoList ?? []),
+    };
 
-    // Patch Drizzle select chain for repo queries
-    const repoSelectMock = vi.fn().mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(repoRow ? [repoRow] : []),
-      }),
-    });
-    (db as any).select = vi.fn().mockImplementation(() => {
-      return {
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockImplementation((cond: unknown) => ({
-            orderBy: vi.fn().mockResolvedValue([]),
-          })),
-        }),
-      };
-    });
+    const container = {
+      db,
+      agentsRepo,
+      ciRepo,
+      reposRepo, // Fix A: DI-provided, not constructed inside CiService
+      github: vi.fn().mockResolvedValue(github),
+      auth: new MockAuthProvider(),
+    } as unknown as Container;
 
-    // Use a simpler approach: override the DB with a function that tracks calls
-    let findByFullNameCalled = false;
-    let listCalled = false;
-    (db as any).select = vi.fn(() => ({
-      from: vi.fn(() => ({
-        where: vi.fn(() => {
-          if (!findByFullNameCalled) {
-            findByFullNameCalled = true;
-            return Promise.resolve(repoRow ? [repoRow] : []);
-          }
-          listCalled = true;
-          return Promise.resolve(opts.repoList ?? []);
-        }),
-      })),
-    }));
-
-    return { container, github };
+    return { container, github, insertInstallationMock };
   }
 
   const AGENT = {
@@ -431,8 +378,8 @@ describe('CiService.export — T3', () => {
     name: 'repo',
   };
 
-  it('open_pr: commits files and opens PR, returns CiExport', async () => {
-    const { container, github } = makeContainer({ agent: AGENT, repo: REPO });
+  it('open_pr: commits files and opens PR, returns CiExport with installation', async () => {
+    const { container, github, insertInstallationMock } = makeContainer({ agent: AGENT, repo: REPO });
     const service = new CiService(container, runnerPath);
 
     const result = await service.export('ws-1', 'agent-1', {
@@ -446,12 +393,15 @@ describe('CiService.export — T3', () => {
 
     expect(result.pr_url).toBeTruthy();
     expect(result.files.length).toBeGreaterThan(0);
-    expect(result.installation.agent_id).toBe('agent-1');
+    // Fix C: installation is persisted for open_pr success
+    expect(result.installation).not.toBeNull();
+    expect(result.installation?.agent_id).toBe('agent-1');
+    expect(insertInstallationMock).toHaveBeenCalledTimes(1);
     expect(github.committed).toHaveLength(1);
   });
 
-  it('files: returns files with pr_url: null, no GitHub write', async () => {
-    const { container, github } = makeContainer({ agent: AGENT, repo: REPO });
+  it('files: returns files with pr_url: null, no GitHub write, no installation persisted (Fix C)', async () => {
+    const { container, github, insertInstallationMock } = makeContainer({ agent: AGENT, repo: REPO });
     const service = new CiService(container, runnerPath);
 
     const result = await service.export('ws-1', 'agent-1', {
@@ -465,8 +415,85 @@ describe('CiService.export — T3', () => {
 
     expect(result.pr_url).toBeNull();
     expect(result.files.length).toBeGreaterThan(0);
+    // Fix C: files action NEVER persists an installation row
+    expect(result.installation).toBeNull();
+    expect(insertInstallationMock).not.toHaveBeenCalled();
     expect(github.committed).toHaveLength(0);
     expect(github.openedPrs).toHaveLength(0);
+  });
+
+  it('open_pr GitHub write failure: installation is NOT persisted (AC-22, Fix C)', async () => {
+    const failingGithub = new MockGitHubClient();
+    vi.spyOn(failingGithub, 'commitFiles').mockRejectedValue(new Error('GitHub API error'));
+
+    const { container, insertInstallationMock } = makeContainer({
+      agent: AGENT,
+      repo: REPO,
+      githubClient: failingGithub,
+    });
+    const service = new CiService(container, runnerPath);
+
+    await expect(
+      service.export('ws-1', 'agent-1', {
+        repo: 'owner/repo',
+        target: 'gha',
+        action: 'open_pr',
+        post_as: 'github_review',
+        triggers: ['opened'],
+        base: 'main',
+      }),
+    ).rejects.toThrow('GitHub API error');
+
+    // No installation row persisted because GitHub write failed
+    expect(insertInstallationMock).not.toHaveBeenCalled();
+  });
+
+  it('file_overrides: overridden file contents replace generated contents for both actions (Fix B)', async () => {
+    const { container } = makeContainer({ agent: AGENT, repo: REPO });
+    const service = new CiService(container, runnerPath);
+
+    // First, discover the path of the generated workflow file
+    const baseResult = await service.export('ws-1', 'agent-1', {
+      repo: 'owner/repo', target: 'gha', action: 'files',
+      post_as: 'github_review', triggers: ['opened'], base: 'main',
+    });
+    const workflowFile = baseResult.files.find((f) => f.path.endsWith('.yml'));
+    expect(workflowFile).toBeDefined();
+    const workflowPath = workflowFile!.path;
+
+    // Now apply a file_override for that path
+    const { container: c2 } = makeContainer({ agent: AGENT, repo: REPO });
+    const s2 = new CiService(c2, runnerPath);
+    const overrideResult = await s2.export('ws-1', 'agent-1', {
+      repo: 'owner/repo', target: 'gha', action: 'files',
+      post_as: 'github_review', triggers: ['opened'], base: 'main',
+      file_overrides: [{ path: workflowPath, contents: '# custom workflow content' }],
+    });
+
+    const overriddenFile = overrideResult.files.find((f) => f.path === workflowPath);
+    expect(overriddenFile?.contents).toBe('# custom workflow content');
+
+    // Other files are unmodified
+    const otherFiles = overrideResult.files.filter((f) => f.path !== workflowPath);
+    const origOtherFiles = baseResult.files.filter((f) => f.path !== workflowPath);
+    expect(otherFiles.map((f) => f.contents)).toEqual(origOtherFiles.map((f) => f.contents));
+  });
+
+  it('file_overrides: override for unknown path is ignored (Fix B)', async () => {
+    const { container } = makeContainer({ agent: AGENT, repo: REPO });
+    const service = new CiService(container, runnerPath);
+
+    const result = await service.export('ws-1', 'agent-1', {
+      repo: 'owner/repo', target: 'gha', action: 'files',
+      post_as: 'github_review', triggers: ['opened'], base: 'main',
+      file_overrides: [{ path: 'nonexistent/path.txt', contents: 'injected' }],
+    });
+
+    // No file with path 'nonexistent/path.txt' should appear in the bundle
+    const injected = result.files.find((f) => f.path === 'nonexistent/path.txt');
+    expect(injected).toBeUndefined();
+    // All generated files are still present
+    expect(result.files.length).toBeGreaterThan(0);
   });
 
   it('missing runner asset: throws AppError with descriptive message', async () => {
@@ -644,7 +671,7 @@ describe('CiService.refresh — T4 ingestion', () => {
     expect(insertCiRunMock).not.toHaveBeenCalled();
   });
 
-  it('source column: gha installation gets "GitHub Actions" display name', async () => {
+  it('Fix D: insertCiRunWithAgentRun is NOT passed a "source" display name (stored at insert time is removed)', async () => {
     const capturedData: unknown[] = [];
     const insertFn = vi.fn().mockImplementation((data: unknown) => {
       capturedData.push(data);
@@ -664,33 +691,10 @@ describe('CiService.refresh — T4 ingestion', () => {
     await service.refresh('ws-1');
 
     expect(capturedData).toHaveLength(1);
-    expect((capturedData[0] as any).source).toBe('GitHub Actions');
-  });
-
-  it('source column fallback: unknown target_type gets "Unknown"', async () => {
-    // CiRepository.listCiRuns returns what's stored — test mapping logic directly
-    // via the CiRepository method (pure logic, no DB needed for this path).
-    // The source display is stored at insert time (targetDisplayName in service.ts).
-    // We verify the service passes the right value by inspecting insertCiRunWithAgentRun.
-    const capturedData: unknown[] = [];
-    const insertFn = vi.fn().mockImplementation((data: unknown) => {
-      capturedData.push(data);
-      return Promise.resolve('run-1');
-    });
-
-    const { container } = makeRefreshContainer({
-      installations: [{
-        installationId: 'install-2',
-        agentId: 'agent-1',
-        repo: 'owner/repo',
-        targetType: 'circle', // a known target
-      }],
-      insertFn,
-    });
-    const service = new CiService(container);
-    await service.refresh('ws-1');
-
-    expect((capturedData[0] as any).source).toBe('CircleCI');
+    // Fix D: source must NOT be stored at insert time — it is derived at READ time
+    expect((capturedData[0] as any).source).toBeUndefined();
+    // The insert data still carries the installation id (for the join at read time)
+    expect((capturedData[0] as any).ciInstallationId).toBe('install-1');
   });
 
   it('no-installations workspace: returns empty list', async () => {
@@ -702,10 +706,118 @@ describe('CiService.refresh — T4 ingestion', () => {
 });
 
 // ============================================================================
-// 6. Parity test (AC-29): reviewPullRequest matches local pipeline
+// 6. CiRepository.listCiRuns — Fix D: source derived at read time, leftJoin
 // ============================================================================
 
-describe('AC-29: CI runner parity — reviewPullRequest produces same findings as local pipeline', () => {
+describe('CiRepository.listCiRuns — Fix D source derivation', () => {
+  /**
+   * Test the repository's row-mapper directly by supplying mock DB rows that
+   * simulate left-join results (including null targetType for orphaned rows).
+   * Drizzle's select chain is mocked to return controlled row objects.
+   */
+
+  function makeRepoWithMockRows(rows: unknown[]): CiRepository {
+    const db = {
+      select: vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          leftJoin: vi.fn().mockReturnValue({
+            leftJoin: vi.fn().mockReturnValue({
+              where: vi.fn().mockReturnValue({
+                orderBy: vi.fn().mockResolvedValue(rows),
+              }),
+            }),
+          }),
+        }),
+      }),
+    } as unknown as Db;
+    return new CiRepository(db);
+  }
+
+  it('normally-linked run: source derived from gha targetType → "GitHub Actions"', async () => {
+    const rows = [{
+      id: 'run-1',
+      ciInstallationId: 'install-1',
+      prNumber: 42,
+      ranAt: new Date('2026-01-01'),
+      status: 'success',
+      findingsCount: 3,
+      costUsd: 0.01,
+      githubUrl: 'https://github.com/a/b/actions/runs/1',
+      targetType: 'gha',        // from left-joined ci_installations
+      agentName: 'My Agent',    // from left-joined agents
+      githubRunId: '12345',
+    }];
+    const repo = makeRepoWithMockRows(rows);
+    const runs = await repo.listCiRuns('ws-1');
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.source).toBe('GitHub Actions');
+    expect(runs[0]!.agent).toBe('My Agent');
+  });
+
+  it('normally-linked run: source derived from circle targetType → "CircleCI"', async () => {
+    const rows = [{
+      id: 'run-2', ciInstallationId: 'install-2', prNumber: null,
+      ranAt: new Date(), status: 'failed', findingsCount: 0, costUsd: null,
+      githubUrl: 'https://example.com', targetType: 'circle', agentName: 'CI Bot', githubRunId: null,
+    }];
+    const repo = makeRepoWithMockRows(rows);
+    const [run] = await repo.listCiRuns('ws-1');
+    expect(run!.source).toBe('CircleCI');
+  });
+
+  it('orphaned run (ci_installation_id = null): source → "Unknown", not omitted (Fix D / AC-26)', async () => {
+    // Simulates a ci_runs row where the installation was deleted
+    // (onDelete:'set null') — left join gives null for targetType and agentName.
+    const rows = [{
+      id: 'run-orphan',
+      ciInstallationId: null,     // installation deleted, set to null
+      prNumber: 7,
+      ranAt: new Date('2025-12-01'),
+      status: 'success',
+      findingsCount: 1,
+      costUsd: 0.005,
+      githubUrl: 'https://github.com/a/b/actions/runs/99',
+      targetType: null,           // no installation to join → null from left join
+      agentName: null,            // no agent either
+      githubRunId: '99',
+    }];
+    const repo = makeRepoWithMockRows(rows);
+    const runs = await repo.listCiRuns('ws-1');
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.source).toBe('Unknown');
+    expect(runs[0]!.agent).toBeNull();
+    expect(runs[0]!.ci_installation_id).toBeNull();
+  });
+
+  it('mixed batch: orphaned run and normal run both returned, sources correct', async () => {
+    const rows = [
+      {
+        id: 'run-a', ciInstallationId: 'inst-a', prNumber: null, ranAt: new Date(),
+        status: 'success', findingsCount: 0, costUsd: null, githubUrl: 'https://x',
+        targetType: 'gha', agentName: 'Agent A', githubRunId: '1',
+      },
+      {
+        id: 'run-b', ciInstallationId: null, prNumber: null, ranAt: new Date(),
+        status: 'failed', findingsCount: 2, costUsd: 0.01, githubUrl: 'https://y',
+        targetType: null, agentName: null, githubRunId: '2',
+      },
+    ];
+    const repo = makeRepoWithMockRows(rows);
+    const runs = await repo.listCiRuns('ws-1');
+
+    expect(runs).toHaveLength(2);
+    expect(runs.find((r) => r.id === 'run-a')!.source).toBe('GitHub Actions');
+    expect(runs.find((r) => r.id === 'run-b')!.source).toBe('Unknown');
+  });
+});
+
+// ============================================================================
+// 7. Parity test (AC-29): reviewPullRequest matches local pipeline
+// ============================================================================
+
+describe('AC-29: CI runner parity — reviewPullRequest produces same findings as local pipeline (section 7)', () => {
   /**
    * This test ensures the SAME reviewer-core `reviewPullRequest` call path
    * produces identical grounded findings regardless of whether it's called

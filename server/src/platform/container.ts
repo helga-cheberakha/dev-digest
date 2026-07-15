@@ -29,6 +29,7 @@ import { CiRepository } from '../modules/ci/repository.js';
 import { EvalRepository } from '../modules/eval/repository.js';
 import { SkillsRepository } from '../modules/skills/repository.js';
 import { ReviewRepository } from '../modules/reviews/repository.js';
+import { RepoRepository } from '../modules/repos/repository.js';
 import { ConventionsRepository } from '../modules/conventions/repository.js';
 import { IntentRepository } from '../modules/intent/repository.js';
 import type { RepoIntel } from '../modules/repo-intel/types.js';
@@ -60,6 +61,7 @@ export interface ContainerOverrides {
   blastRepo?: BlastRepository;
   ciRepo?: CiRepository;
   evalRepo?: EvalRepository;
+  reposRepo?: RepoRepository;
 }
 
 export class Container {
@@ -85,6 +87,7 @@ export class Container {
   private _evalRepo?: EvalRepository;
   private _reviewRepo?: ReviewRepository;
   private _skillsRepo?: SkillsRepository;
+  private _reposRepo?: RepoRepository;
   private _conventionsRepo?: ConventionsRepository;
   private _intentRepo?: IntentRepository;
   private _repoIntel?: RepoIntel;
@@ -119,6 +122,11 @@ export class Container {
   get ciRepo(): CiRepository {
     if (this.overrides.ciRepo) return this.overrides.ciRepo;
     return (this._ciRepo ??= new CiRepository(this.db));
+  }
+
+  get reposRepo(): RepoRepository {
+    if (this.overrides.reposRepo) return this.overrides.reposRepo;
+    return (this._reposRepo ??= new RepoRepository(this.db));
   }
 
   get evalRepo(): EvalRepository {

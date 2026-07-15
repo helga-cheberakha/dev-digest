@@ -326,7 +326,7 @@ describe("ExportWizard — step navigation", () => {
     // Preview step shows the previewNote text
     expect(
       screen.getByText(
-        "Server-generated files. Inline edits apply to the Download path only; Open PR regenerates from the agent config.",
+        "Server-generated files. Edits you make here are applied when opening a PR or downloading — only changed files are sent.",
       ),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /generate preview/i })).toBeInTheDocument();
@@ -460,6 +460,85 @@ describe("ExportWizard — Install step", () => {
     expect(
       screen.getByRole("link", { name: /view pull request/i }),
     ).toHaveAttribute("href", "https://github.com/acme/payments-api/pull/42");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: file_overrides — AC-5 fix (preview edits reach the server for Open PR)
+// ---------------------------------------------------------------------------
+
+describe("ExportWizard — file_overrides in Open PR payload", () => {
+  it("includes only the edited file in file_overrides when Open PR is clicked after a preview edit", async () => {
+    // Wire mutate to call onSuccess synchronously for both preview and install calls
+    mockExportMutate.mockImplementation(
+      (_vars: unknown, options?: { onSuccess?: (data: CiExport) => void }) => {
+        options?.onSuccess?.(EXPORT_RESULT);
+      },
+    );
+
+    renderCITab();
+    fireEvent.click(screen.getByRole("button", { name: /add to ci/i }));
+
+    // Target → Preview
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+
+    // Generate preview (first mutation call — action:'files')
+    fireEvent.click(screen.getByRole("button", { name: /generate preview/i }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("textbox", { name: ".github/workflows/devdigest.yml" }),
+      ).toBeInTheDocument();
+    });
+
+    // Edit the editable file's content
+    const textarea = screen.getByRole("textbox", { name: ".github/workflows/devdigest.yml" });
+    fireEvent.change(textarea, { target: { value: "name: DevDigest-edited\n" } });
+
+    // Preview → Configure → Install
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+
+    // Click Open PR (second mutation call — action:'open_pr')
+    fireEvent.click(screen.getByRole("button", { name: /open a pr with these files/i }));
+
+    // Two calls total: one for preview, one for open_pr
+    expect(mockExportMutate).toHaveBeenCalledTimes(2);
+
+    const openPrCallArg = mockExportMutate.mock.calls[1]![0] as {
+      agentId: string;
+      input: { action: string; file_overrides?: Array<{ path: string; contents: string }> };
+    };
+    expect(openPrCallArg.input.action).toBe("open_pr");
+
+    // file_overrides carries the edit
+    expect(openPrCallArg.input.file_overrides).toEqual([
+      { path: ".github/workflows/devdigest.yml", contents: "name: DevDigest-edited\n" },
+    ]);
+
+    // The non-editable, unmodified file is NOT included
+    const overridePaths = openPrCallArg.input.file_overrides?.map((f) => f.path) ?? [];
+    expect(overridePaths).not.toContain(".devdigest/agent.yml");
+  });
+
+  it("omits file_overrides entirely when no preview was generated (no edits possible)", () => {
+    renderCITab();
+    fireEvent.click(screen.getByRole("button", { name: /add to ci/i }));
+
+    // Navigate directly to Install step without generating a preview
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+
+    fireEvent.click(screen.getByRole("button", { name: /open a pr with these files/i }));
+
+    expect(mockExportMutate).toHaveBeenCalledTimes(1);
+    const openPrCallArg = mockExportMutate.mock.calls[0]![0] as {
+      input: { file_overrides?: unknown };
+    };
+
+    // No edits → field is undefined, not an array
+    expect(openPrCallArg.input.file_overrides).toBeUndefined();
   });
 });
 

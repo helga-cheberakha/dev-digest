@@ -92,7 +92,7 @@
     "downloadFiles": "Download files",
     "done": "Done",
     "noRepo": "No active repository — select a repo to deploy to.",
-    "previewNote": "Server-generated files. Inline edits apply to the Download path only; Open PR regenerates from the agent config.",
+    "previewNote": "Server-generated files. Edits you make here are applied when opening a PR or downloading — only changed files are sent.",
     "blockMergeHint": "Only GitHub review can block merges",
     "openPrAction": "Open a PR with these files",
     "prOpened": "Pull request opened",

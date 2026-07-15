@@ -6,13 +6,24 @@
  * - No HTTP or business logic here — pure DB access
  * - `insertCiRunWithAgentRun` runs both inserts in one transaction (AC atomicity)
  */
-import { and, desc, eq, isNotNull, inArray } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, or, inArray } from 'drizzle-orm';
 import type { Db } from '../../db/client.js';
 import * as t from '../../db/schema.js';
 import type { CiInstallation, CiRun } from '@devdigest/shared';
 
 export type CiInstallationRow = typeof t.ciInstallations.$inferSelect;
 export type CiRunRow = typeof t.ciRuns.$inferSelect;
+
+/** Derive the CI Runs page display name from a ci_installations.target_type value. */
+function targetDisplayName(targetType: string): string {
+  switch (targetType) {
+    case 'gha': return 'GitHub Actions';
+    case 'circle': return 'CircleCI';
+    case 'jenkins': return 'Jenkins';
+    case 'cli': return 'CLI';
+    default: return 'Unknown';
+  }
+}
 
 export interface InsertInstallation {
   agentId: string;
@@ -29,8 +40,8 @@ export interface InsertCiRunData {
   findingsCount: number;
   costUsd: number | null;
   githubUrl: string;
-  /** Display name for the CI Runs page (e.g. "GitHub Actions"). Stored on ciRuns.source. */
-  source: string;
+  // Fix D: 'source' display name is no longer stored at insert time.
+  // It is derived from ci_installations.target_type at READ time in listCiRuns.
   githubRunId: string;
   durationMs: number | null;
 }
@@ -127,7 +138,8 @@ export class CiRepository {
           findingsCount: data.findingsCount,
           costUsd: data.costUsd,
           githubUrl: data.githubUrl,
-          source: data.source,
+          // Fix D: do NOT store a computed display name in ci_runs.source.
+          // Source is derived from ci_installations.target_type at READ time.
           githubRunId: data.githubRunId,
           ranAt: new Date(),
         })
@@ -150,10 +162,15 @@ export class CiRepository {
   /**
    * List all CI runs for a workspace, newest first.
    *
-   * Joined through `ci_installations` → `agents` to get workspace scoping
-   * and the agent name. The `source` column on `ci_runs` stores the display
-   * name (e.g. "GitHub Actions") set at insert time — so it survives if the
-   * installation is later deleted.
+   * Fix D: Both joins are LEFT JOIN so orphaned runs (whose installation or
+   * agent was deleted, setting ci_installation_id to null via onDelete:'set null')
+   * are returned rather than silently dropped. The workspace filter includes
+   * orphaned rows (ci_installation_id IS NULL) because they have no workspace
+   * association after their installation is deleted.
+   *
+   * Fix D: `source` is now DERIVED at read time from ci_installations.target_type
+   * via targetDisplayName(); the ci_runs.source column is no longer written at
+   * insert time and is not read here.
    */
   async listCiRuns(workspaceId: string): Promise<CiRun[]> {
     const rows = await this.db
@@ -166,14 +183,19 @@ export class CiRepository {
         findingsCount: t.ciRuns.findingsCount,
         costUsd: t.ciRuns.costUsd,
         githubUrl: t.ciRuns.githubUrl,
-        source: t.ciRuns.source,
+        targetType: t.ciInstallations.targetType, // derived source at read time
         agentName: t.agents.name,
         githubRunId: t.ciRuns.githubRunId,
       })
       .from(t.ciRuns)
-      .innerJoin(t.ciInstallations, eq(t.ciRuns.ciInstallationId, t.ciInstallations.id))
-      .innerJoin(t.agents, eq(t.ciInstallations.agentId, t.agents.id))
-      .where(eq(t.agents.workspaceId, workspaceId))
+      .leftJoin(t.ciInstallations, eq(t.ciRuns.ciInstallationId, t.ciInstallations.id))
+      .leftJoin(t.agents, eq(t.ciInstallations.agentId, t.agents.id))
+      .where(
+        or(
+          eq(t.agents.workspaceId, workspaceId),
+          isNull(t.ciRuns.ciInstallationId),
+        ),
+      )
       .orderBy(desc(t.ciRuns.ranAt));
 
     return rows.map((r) => ({
@@ -185,7 +207,9 @@ export class CiRepository {
       findings_count: r.findingsCount,
       cost_usd: r.costUsd,
       github_url: r.githubUrl,
-      source: r.source,
+      // Fix D: source derived from joined installation's target_type; "Unknown"
+      // when the installation has been deleted (targetType is null from left join).
+      source: r.targetType ? targetDisplayName(r.targetType) : 'Unknown',
       agent: r.agentName ?? null,
       github_run_id: r.githubRunId ?? null,
     }));

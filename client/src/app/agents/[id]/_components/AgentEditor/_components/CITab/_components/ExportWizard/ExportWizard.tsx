@@ -9,8 +9,8 @@
  *
  * Preview gap: the export endpoint has no dry-run mode. Calling action:'files'
  * in step 1 DOES persist a CI installation record. Inline edits in the Preview
- * step are stored client-side; they apply ONLY to the Download path — the
- * Open PR call regenerates files server-side from the agent config.
+ * step are stored client-side; they are sent as file_overrides on both the
+ * Open PR and Download paths — only actually-changed files are included.
  */
 "use client";
 
@@ -184,6 +184,13 @@ export function ExportWizard({ agentId, agentName, onClose }: ExportWizardProps)
 
   function handleOpenPr() {
     if (!repo) return;
+
+    // Build file_overrides: only include files the user actually changed.
+    // Sending unedited files as overrides would mask legitimate server regeneration.
+    const fileOverrides = previewFiles
+      .filter((f) => editedContents[f.path] !== undefined && editedContents[f.path] !== f.contents)
+      .map((f) => ({ path: f.path, contents: editedContents[f.path] as string }));
+
     installMutation.mutate(
       {
         agentId,
@@ -193,6 +200,7 @@ export function ExportWizard({ agentId, agentName, onClose }: ExportWizardProps)
           action: "open_pr",
           post_as: postAs,
           triggers: activeTriggers,
+          file_overrides: fileOverrides.length > 0 ? fileOverrides : undefined,
         },
       },
       {

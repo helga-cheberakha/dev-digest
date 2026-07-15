@@ -182,6 +182,12 @@ export const CiExportInput = z.object({
   post_as: z.enum(['github_review', 'pr_comment', 'none']).default('github_review'),
   triggers: z.array(z.string()).default(['opened', 'synchronize', 'reopened']),
   base: z.string().default('main'),
+  /**
+   * Per-file content overrides applied to the generated bundle before
+   * commit/return (AC-5). Each entry replaces the contents of the matching
+   * generated file; overrides for unknown paths are silently ignored.
+   */
+  file_overrides: z.array(z.object({ path: z.string(), contents: z.string() })).nullish(),
 });
 export type CiExportInput = z.infer<typeof CiExportInput>;
 /** Caller-facing input type — `.default()` fields stay optional (web hooks). */
@@ -199,7 +205,11 @@ export type CiInstallation = z.infer<typeof CiInstallation>;
 
 /** Response of `POST /agents/:id/export-ci`. */
 export const CiExport = z.object({
-  installation: CiInstallation,
+  /**
+   * Persisted installation row — null when action==='files' (Preview/Download
+   * path never persists an installation; only open_pr success does).
+   */
+  installation: CiInstallation.nullable(),
   files: z.array(CiFile),
   pr_url: z.string().nullable(),
 });

@@ -24,23 +24,11 @@ import type {
 } from '@devdigest/shared';
 import { CiResultArtifact as CiResultArtifactSchema } from '@devdigest/shared';
 import { CiRepository } from './repository.js';
-import { RepoRepository } from '../repos/repository.js';
 import { buildCiBundle, skillSlugFromName } from './bundle.js';
 import { WORKFLOW_FILE_NAME } from './workflow.js';
 
 const _thisFile = fileURLToPath(import.meta.url);
 export const DEFAULT_RUNNER_PATH = join(dirname(_thisFile), 'assets', 'runner', 'index.js');
-
-/** Map a CiTarget value to its display name for the CI Runs page. */
-function targetDisplayName(targetType: string): string {
-  switch (targetType) {
-    case 'gha': return 'GitHub Actions';
-    case 'circle': return 'CircleCI';
-    case 'jenkins': return 'Jenkins';
-    case 'cli': return 'CLI';
-    default: return 'Unknown';
-  }
-}
 
 /** Parse "owner/name" → RepoRef. Throws ValidationError on bad format. */
 function parseRepoRef(fullName: string): { owner: string; name: string } {
@@ -53,7 +41,7 @@ function parseRepoRef(fullName: string): { owner: string; name: string } {
 
 export class CiService {
   private ciRepo: CiRepository;
-  private reposRepo: RepoRepository;
+  private reposRepo: Container['reposRepo'];
 
   constructor(
     private container: Container,
@@ -61,7 +49,7 @@ export class CiService {
     private runnerPath: string = DEFAULT_RUNNER_PATH,
   ) {
     this.ciRepo = container.ciRepo;
-    this.reposRepo = new RepoRepository(container.db);
+    this.reposRepo = container.reposRepo; // Fix A: use container getter, not new RepoRepository(db)
   }
 
   // ---------------------------------------------------------------------------
@@ -118,7 +106,7 @@ export class CiService {
     const skillSlugs = skillBodies.map((s) => s.slug);
 
     // 5. Build the CI bundle (pure, no I/O)
-    const files = buildCiBundle({
+    const rawFiles = buildCiBundle({
       agent: {
         name: agent.name,
         provider: agent.provider as 'openai' | 'anthropic' | 'openrouter',
@@ -135,19 +123,23 @@ export class CiService {
       runnerBytes,
     });
 
-    // 6. Persist the installation row (regardless of action — tracks all exports)
-    const installationRow = await this.ciRepo.insertInstallation({
-      agentId,
-      repo: input.repo,
-      targetType: input.target,
-    });
-    const installation: CiInstallation = CiRepository.toInstallationDto(installationRow);
+    // 6. Apply caller-supplied file_overrides (AC-5 — edit-before-push / Preview edits).
+    //    For each override, replace the matching generated file's contents; overrides for
+    //    unknown paths are silently ignored (we never inject arbitrary new files).
+    const fileOverrides = input.file_overrides ?? [];
+    const files = fileOverrides.length > 0
+      ? rawFiles.map((f) => {
+          const ov = fileOverrides.find((o) => o.path === f.path);
+          return ov ? { ...f, contents: ov.contents } : f;
+        })
+      : rawFiles;
 
-    // 7. GitHub write (only for open_pr) — if this throws, the installation row
-    //    is already committed. That's acceptable: the installation tracks that the
-    //    user initiated the export; the missing pr_url signals the write failed.
-    //    Callers should rely on the thrown error for retry UX.
+    // 7. GitHub write (only for open_pr) AND installation persistence.
+    //    Fix C: only persist a ci_installations row when action==='open_pr' AND
+    //    the GitHub write actually succeeds — never for action==='files' (Preview),
+    //    and never if commitFiles or PR resolution throws (AC-22).
     let pr_url: string | null = null;
+    let installation: CiInstallation | null = null;
 
     if (input.action === 'open_pr') {
       const gh = await this.container.github();
@@ -180,6 +172,15 @@ export class CiService {
         });
         pr_url = opened.url;
       }
+
+      // Persist the installation row AFTER all GitHub writes succeed (AC-22: GitHub
+      // write failure → persist nothing).
+      const installationRow = await this.ciRepo.insertInstallation({
+        agentId,
+        repo: input.repo,
+        targetType: input.target,
+      });
+      installation = CiRepository.toInstallationDto(installationRow);
     }
 
     return { installation, files, pr_url };
@@ -255,9 +256,10 @@ export class CiService {
         }
 
         const artifact = parsed.data;
-        const displaySource = targetDisplayName(installation.targetType);
 
-        // Insert ci_runs + agent_runs in one transaction (ALWAYS INSERT, never upsert)
+        // Insert ci_runs + agent_runs in one transaction (ALWAYS INSERT, never upsert).
+        // Fix D: source is no longer stored at insert time — derived from
+        // ci_installations.target_type at READ time in CiRepository.listCiRuns.
         try {
           await this.ciRepo.insertCiRunWithAgentRun({
             ciInstallationId: installation.id,
@@ -268,7 +270,6 @@ export class CiService {
             findingsCount: artifact.findings_count,
             costUsd: artifact.cost_usd,
             githubUrl: run.htmlUrl,
-            source: displaySource,
             githubRunId: String(run.runId),
             durationMs: artifact.duration_ms ?? null,
           });
