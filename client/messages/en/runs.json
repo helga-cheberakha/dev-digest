@@ -130,5 +130,22 @@
       "cta": "Run all agents"
     },
     "crumb": "Multi-Agent Review"
+  },
+  "configure": {
+    "title": "Configure multi-agent review",
+    "subtitle": "Choose which agents to run on this PR in parallel",
+    "crumb": "Configure run",
+    "prLabel": "Pull Request",
+    "prValue": "#{number} · {title}",
+    "noPrSelected": "No PR selected",
+    "agentsTitle": "Agents to run",
+    "noPrBody": "Navigate here from a pull request to pre-select it.",
+    "noEstimate": "No estimate",
+    "summaryLabel": "Parallel fan-out",
+    "summaryTimeLabel": "time",
+    "summaryCostLabel": "cost",
+    "summaryDuration": "{seconds}s",
+    "runButton": "Run multi-agent review ({count})",
+    "running": "Running…"
   }
 }
