@@ -708,6 +708,63 @@ describe('CiService.refresh — T4 ingestion', () => {
     const result = await service.refresh('ws-1');
     expect(result).toEqual([]);
   });
+
+  it('multi-agent bundle: matches each installation to its OWN agent entry by name', async () => {
+    // Two agents exported to the SAME repo → two installation rows, one
+    // shared workflow run whose artifact is the combined bundle.
+    const insertFn = vi.fn().mockResolvedValue('run-x');
+    const gh = new MockGitHubClient({
+      workflowRuns: [
+        {
+          runId: 2001,
+          status: 'completed',
+          conclusion: 'success',
+          htmlUrl: 'https://github.com/mock/mock/actions/runs/2001',
+          headBranch: 'main',
+        },
+      ],
+      artifactBuffer: Buffer.from(
+        JSON.stringify({
+          version: '1',
+          agents: [
+            { findings_count: 1, cost_usd: 0.01, agent: 'General Reviewer', duration_ms: 500, pr_number: 7 },
+            { findings_count: 3, cost_usd: 0.02, agent: 'Security Reviewer', duration_ms: 900, pr_number: 7 },
+          ],
+        }),
+      ),
+    });
+    const ciRepo = {
+      installationsForWorkspace: vi.fn().mockResolvedValue([
+        {
+          installation: { id: 'install-general', agentId: 'agent-general', repo: 'owner/repo', targetType: 'gha', installedAt: new Date() } as CiInstallationRow,
+          agent: { id: 'agent-general', name: 'General Reviewer', workspaceId: 'ws-1' },
+        },
+        {
+          installation: { id: 'install-security', agentId: 'agent-security', repo: 'owner/repo', targetType: 'gha', installedAt: new Date() } as CiInstallationRow,
+          agent: { id: 'agent-security', name: 'Security Reviewer', workspaceId: 'ws-1' },
+        },
+      ]),
+      existingRunIdsForInstallation: vi.fn().mockResolvedValue(new Set()),
+      insertCiRunWithAgentRun: insertFn,
+      listCiRuns: vi.fn().mockResolvedValue([]),
+    };
+    const container = {
+      agentsRepo: { getById: vi.fn() },
+      ciRepo,
+      github: vi.fn().mockResolvedValue(gh),
+      auth: new MockAuthProvider(),
+    } as unknown as Container;
+
+    const service = new CiService(container);
+    await service.refresh('ws-1');
+
+    expect(insertFn).toHaveBeenCalledTimes(2);
+    const byInstallation = new Map(
+      insertFn.mock.calls.map((call: any[]) => [call[0].ciInstallationId, call[0]]),
+    );
+    expect(byInstallation.get('install-general').findingsCount).toBe(1);
+    expect(byInstallation.get('install-security').findingsCount).toBe(3);
+  });
 });
 
 // ============================================================================

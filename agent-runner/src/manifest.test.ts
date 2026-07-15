@@ -2,8 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { loadManifest, findManifestPath, loadAgentManifest } from './manifest.js';
+import { findManifestPaths, loadAgentManifest } from './manifest.js';
 import { RunnerError } from './errors.js';
+
+/** Convenience for the common single-manifest case: find + load the only file. */
+function loadManifest(devdigestDir: string) {
+  return loadAgentManifest(findManifestPaths(devdigestDir)[0]!);
+}
 
 const VALID_MANIFEST_YAML = `
 name: "Security Reviewer"
@@ -60,13 +65,23 @@ ci_fail_on: "sometimes"
 
   it('fails clearly when no manifest file exists', () => {
     rmSync(path.join(dir, 'agents', ), { recursive: true, force: true });
-    expect(() => findManifestPath(dir)).toThrow(/not found/i);
+    expect(() => findManifestPaths(dir)).toThrow(/not found/i);
   });
 
-  it('fails clearly when more than one manifest file exists', () => {
+  it('finds and loads every manifest when a repo has more than one (multi-agent CI review)', () => {
     writeFileSync(path.join(dir, 'agents', 'a.yaml'), VALID_MANIFEST_YAML);
-    writeFileSync(path.join(dir, 'agents', 'b.yaml'), VALID_MANIFEST_YAML);
-    expect(() => findManifestPath(dir)).toThrow(/exactly one/i);
+    writeFileSync(
+      path.join(dir, 'agents', 'b.yaml'),
+      VALID_MANIFEST_YAML.replace('Security Reviewer', 'General Reviewer'),
+    );
+
+    const paths = findManifestPaths(dir);
+    expect(paths).toHaveLength(2);
+    // Sorted for a deterministic run order.
+    expect(paths.map((p) => path.basename(p))).toEqual(['a.yaml', 'b.yaml']);
+
+    const manifests = paths.map((p) => loadAgentManifest(p));
+    expect(manifests.map((m) => m.name)).toEqual(['Security Reviewer', 'General Reviewer']);
   });
 
   it('fails clearly on malformed YAML', () => {

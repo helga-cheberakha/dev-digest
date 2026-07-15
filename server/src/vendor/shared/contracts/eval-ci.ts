@@ -252,6 +252,20 @@ export const CiResultArtifact = z.object({
 });
 export type CiResultArtifact = z.infer<typeof CiResultArtifact>;
 
+/**
+ * Multi-agent wrapper — the runner writes ONE of these per CI run (one
+ * `CiResultArtifact` entry per agent manifest found under `.devdigest/agents/`,
+ * AC-20). A bare single-object `devdigest-result.json` (pre-multi-agent
+ * runners already installed in a target repo) is still accepted by the
+ * ingest path as an equivalent one-element bundle — see
+ * `server/src/modules/ci/service.ts`.
+ */
+export const CiResultBundle = z.object({
+  version: z.string().nullish(),
+  agents: z.array(CiResultArtifact).min(1),
+});
+export type CiResultBundle = z.infer<typeof CiResultBundle>;
+
 // ===========================================================================
 // Conformance (PRD ↔ PR) — API record (the analysis shape is `Conformance`)
 // ===========================================================================

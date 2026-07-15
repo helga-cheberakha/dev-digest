@@ -22,7 +22,10 @@ import type {
   CiRun,
   CiResultArtifact,
 } from '@devdigest/shared';
-import { CiResultArtifact as CiResultArtifactSchema } from '@devdigest/shared';
+import {
+  CiResultArtifact as CiResultArtifactSchema,
+  CiResultBundle as CiResultBundleSchema,
+} from '@devdigest/shared';
 import { CiRepository } from './repository.js';
 import { buildCiBundle, skillSlugFromName } from './bundle.js';
 import { WORKFLOW_FILE_NAME } from './workflow.js';
@@ -264,13 +267,28 @@ export class CiService {
           continue;
         }
 
-        const parsed = CiResultArtifactSchema.safeParse(json);
-        if (!parsed.success) {
-          // Schema mismatch — skip this run without aborting the batch
-          continue;
+        // Accept either the multi-agent bundle shape ({ agents: [...] }) or a
+        // bare single-agent object (older runner versions already installed
+        // in a target repo, back-compat) as an equivalent one-element bundle.
+        let bundleAgents: CiResultArtifact[];
+        const asBundle = CiResultBundleSchema.safeParse(json);
+        if (asBundle.success) {
+          bundleAgents = asBundle.data.agents;
+        } else {
+          const asSingle = CiResultArtifactSchema.safeParse(json);
+          if (!asSingle.success) continue; // Schema mismatch — skip this run
+          bundleAgents = [asSingle.data];
         }
 
-        const artifact = parsed.data;
+        // Which per-agent entry belongs to THIS installation's agent? A
+        // one-element bundle always matches (the common case — one agent
+        // exported to this repo); a genuine multi-agent bundle is
+        // disambiguated by the manifest's declared name.
+        const artifact =
+          bundleAgents.length === 1
+            ? bundleAgents[0]
+            : bundleAgents.find((a) => a.agent === agent.name);
+        if (!artifact) continue; // this installation's agent wasn't in the run's bundle
 
         // Insert ci_runs + agent_runs in one transaction (ALWAYS INSERT, never upsert).
         // Fix D: source is no longer stored at insert time — derived from

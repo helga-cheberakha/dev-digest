@@ -49,13 +49,19 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     writeFile: writeFileSync,
   });
 
-  if (result.artifact === null) {
+  if (result.agents === null) {
     console.error(`[agent-runner] FAILED: ${result.error}`);
   } else {
-    console.log(
-      `[agent-runner] findings=${result.artifact.findings_count} blockers=${result.blockers} ` +
-        `gateTriggered=${result.gateTriggered} posted=${result.posted.kind}`,
-    );
+    for (const agent of result.agents) {
+      if (agent.ok) {
+        console.log(
+          `[agent-runner] agent="${agent.agentName}" findings=${agent.artifact.findings_count} ` +
+            `blockers=${agent.blockers} gateTriggered=${agent.gateTriggered} posted=${agent.posted.kind}`,
+        );
+      } else {
+        console.error(`[agent-runner] agent="${agent.agentName}" FAILED: ${agent.error}`);
+      }
+    }
   }
   return result.exitCode;
 }
