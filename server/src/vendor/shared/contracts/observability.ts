@@ -138,3 +138,22 @@ export const CuratorResult = z.object({
   dry_run: z.boolean(),
 });
 export type CuratorResult = z.infer<typeof CuratorResult>;
+
+// ---------------------------------------------------------------------------
+// Multi-Agent Run Request / Pre-run Estimates (T1 additions)
+// ---------------------------------------------------------------------------
+
+/** Request body for POST /pulls/:id/multi-agent-run. */
+export const MultiAgentRunRequest = z.object({
+  agent_ids: z.array(z.string().uuid()).min(1),
+});
+export type MultiAgentRunRequest = z.infer<typeof MultiAgentRunRequest>;
+
+/** Cost/duration estimate for one agent before a multi-agent run is launched. */
+export const AgentEstimate = z.object({
+  agent_id: z.string(),
+  est_duration_ms: z.number().int().nullable(),
+  est_cost_usd: z.number().nullable(),
+  last_run_summary: z.string().nullish(),
+});
+export type AgentEstimate = z.infer<typeof AgentEstimate>;
