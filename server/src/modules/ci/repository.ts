@@ -6,7 +6,7 @@
  * - No HTTP or business logic here — pure DB access
  * - `insertCiRunWithAgentRun` runs both inserts in one transaction (AC atomicity)
  */
-import { and, desc, eq, isNotNull, isNull, or, inArray } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, inArray } from 'drizzle-orm';
 import type { Db } from '../../db/client.js';
 import * as t from '../../db/schema.js';
 import type { CiInstallation, CiRun } from '@devdigest/shared';
@@ -132,6 +132,7 @@ export class CiRepository {
       const [ciRun] = await tx
         .insert(t.ciRuns)
         .values({
+          workspaceId: data.workspaceId,
           ciInstallationId: data.ciInstallationId,
           prNumber: data.prNumber,
           status: data.status,
@@ -162,15 +163,19 @@ export class CiRepository {
   /**
    * List all CI runs for a workspace, newest first.
    *
-   * Fix D: Both joins are LEFT JOIN so orphaned runs (whose installation or
-   * agent was deleted, setting ci_installation_id to null via onDelete:'set null')
-   * are returned rather than silently dropped. The workspace filter includes
-   * orphaned rows (ci_installation_id IS NULL) because they have no workspace
-   * association after their installation is deleted.
+   * Scoped directly on ci_runs.workspace_id — a column added after iteration 1's
+   * fix D revealed that scoping via a transitive join (ci_runs → ci_installations →
+   * agents.workspace_id) leaks orphaned rows across tenants once an installation is
+   * deleted (onDelete:'set null' nulls out ci_installation_id, severing the join
+   * chain entirely).
    *
-   * Fix D: `source` is now DERIVED at read time from ci_installations.target_type
-   * via targetDisplayName(); the ci_runs.source column is no longer written at
-   * insert time and is not read here.
+   * Both joins remain LEFT JOIN so orphaned rows (installation deleted → null FK)
+   * still appear in the list for THEIR OWN workspace (source: "Unknown"). The
+   * critical difference: workspace scoping is now always correct because it reads
+   * directly from ci_runs.workspace_id, never from the transitive join path.
+   *
+   * Fix D: `source` is derived at read time from ci_installations.target_type
+   * via targetDisplayName(); the ci_runs.source column is not written or read.
    */
   async listCiRuns(workspaceId: string): Promise<CiRun[]> {
     const rows = await this.db
@@ -190,12 +195,7 @@ export class CiRepository {
       .from(t.ciRuns)
       .leftJoin(t.ciInstallations, eq(t.ciRuns.ciInstallationId, t.ciInstallations.id))
       .leftJoin(t.agents, eq(t.ciInstallations.agentId, t.agents.id))
-      .where(
-        or(
-          eq(t.agents.workspaceId, workspaceId),
-          isNull(t.ciRuns.ciInstallationId),
-        ),
-      )
+      .where(eq(t.ciRuns.workspaceId, workspaceId))
       .orderBy(desc(t.ciRuns.ranAt));
 
     return rows.map((r) => ({

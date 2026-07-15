@@ -141,6 +141,13 @@
       "when": 1784109388398,
       "tag": "0019_panoramic_firedrake",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1784114358235,
+      "tag": "0020_mighty_black_tarantula",
+      "breakpoints": true
     }
   ]
 }

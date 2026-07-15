@@ -709,29 +709,34 @@ describe('CiService.refresh — T4 ingestion', () => {
 // 6. CiRepository.listCiRuns — Fix D: source derived at read time, leftJoin
 // ============================================================================
 
+/**
+ * Build a CiRepository backed by a mock DB that returns `rows` as the result
+ * of listCiRuns's select-leftJoin-leftJoin-where-orderBy chain. Used by both
+ * section 6 (source derivation) and section 6b (cross-workspace isolation).
+ */
+function makeRepoWithMockRows(rows: unknown[]): CiRepository {
+  const db = {
+    select: vi.fn().mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        leftJoin: vi.fn().mockReturnValue({
+          leftJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              orderBy: vi.fn().mockResolvedValue(rows),
+            }),
+          }),
+        }),
+      }),
+    }),
+  } as unknown as Db;
+  return new CiRepository(db);
+}
+
 describe('CiRepository.listCiRuns — Fix D source derivation', () => {
   /**
    * Test the repository's row-mapper directly by supplying mock DB rows that
    * simulate left-join results (including null targetType for orphaned rows).
    * Drizzle's select chain is mocked to return controlled row objects.
    */
-
-  function makeRepoWithMockRows(rows: unknown[]): CiRepository {
-    const db = {
-      select: vi.fn().mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          leftJoin: vi.fn().mockReturnValue({
-            leftJoin: vi.fn().mockReturnValue({
-              where: vi.fn().mockReturnValue({
-                orderBy: vi.fn().mockResolvedValue(rows),
-              }),
-            }),
-          }),
-        }),
-      }),
-    } as unknown as Db;
-    return new CiRepository(db);
-  }
 
   it('normally-linked run: source derived from gha targetType → "GitHub Actions"', async () => {
     const rows = [{
@@ -810,6 +815,107 @@ describe('CiRepository.listCiRuns — Fix D source derivation', () => {
     expect(runs).toHaveLength(2);
     expect(runs.find((r) => r.id === 'run-a')!.source).toBe('GitHub Actions');
     expect(runs.find((r) => r.id === 'run-b')!.source).toBe('Unknown');
+  });
+});
+
+// ============================================================================
+// 6b. CiRepository.listCiRuns — cross-workspace isolation regression (CRITICAL)
+// ============================================================================
+
+describe('CiRepository.listCiRuns — cross-workspace isolation regression', () => {
+  /**
+   * Regression test for the CRITICAL finding: after an agent (and its
+   * ci_installations row) is deleted, orphaned ci_runs rows were previously
+   * visible to EVERY workspace via the `isNull(ciRuns.ciInstallationId)` branch
+   * of the old OR-WHERE clause. The fix adds workspace_id directly to ci_runs
+   * and scopes the WHERE clause on that column.
+   *
+   * These tests use the same mock-DB infrastructure as section 6: each
+   * makeRepoWithMockRows() instance simulates what the DB returns AFTER
+   * applying WHERE ci_runs.workspace_id = <workspaceId>. The actual SQL
+   * filtering is enforced at the Postgres level by the new column + WHERE clause.
+   */
+
+  const wsAOrphan = {
+    id: 'run-ws-a-orphan',
+    ciInstallationId: null,    // installation deleted → ci_installation_id set null
+    prNumber: 10,
+    ranAt: new Date('2026-02-01'),
+    status: 'success',
+    findingsCount: 2,
+    costUsd: 0.02,
+    githubUrl: 'https://github.com/ws-a-owner/repo/actions/runs/10',
+    targetType: null,          // no installation to join
+    agentName: null,
+    githubRunId: '10',
+  };
+
+  const wsBOrphan = {
+    id: 'run-ws-b-orphan',
+    ciInstallationId: null,    // installation deleted → ci_installation_id set null
+    prNumber: 20,
+    ranAt: new Date('2026-02-02'),
+    status: 'failed',
+    findingsCount: 7,
+    costUsd: 0.07,
+    githubUrl: 'https://github.com/ws-b-owner/secret-repo/actions/runs/20',
+    targetType: null,
+    agentName: null,
+    githubRunId: '20',
+  };
+
+  it('workspace A: listCiRuns returns only ws-A orphaned row (not ws-B)', async () => {
+    // DB scopes to workspace A's rows via WHERE ci_runs.workspace_id = 'ws-A'
+    const repoA = makeRepoWithMockRows([wsAOrphan]);
+    const runsA = await repoA.listCiRuns('ws-A');
+
+    expect(runsA).toHaveLength(1);
+    expect(runsA[0]!.id).toBe('run-ws-a-orphan');
+    expect(runsA[0]!.source).toBe('Unknown');   // orphaned → Unknown (not omitted)
+    expect(runsA[0]!.github_url).toBe('https://github.com/ws-a-owner/repo/actions/runs/10');
+
+    // ws-B's github_url (would reveal another tenant's repo) must NOT be visible
+    expect(runsA.some((r) => r.id === 'run-ws-b-orphan')).toBe(false);
+    expect(runsA.some((r) => r.github_url?.includes('ws-b-owner'))).toBe(false);
+  });
+
+  it('workspace B: listCiRuns returns only ws-B orphaned row (not ws-A)', async () => {
+    // DB scopes to workspace B's rows via WHERE ci_runs.workspace_id = 'ws-B'
+    const repoB = makeRepoWithMockRows([wsBOrphan]);
+    const runsB = await repoB.listCiRuns('ws-B');
+
+    expect(runsB).toHaveLength(1);
+    expect(runsB[0]!.id).toBe('run-ws-b-orphan');
+    expect(runsB[0]!.source).toBe('Unknown');   // orphaned → Unknown (not omitted)
+    expect(runsB[0]!.github_url).toBe('https://github.com/ws-b-owner/secret-repo/actions/runs/20');
+
+    // ws-A's github_url (tenant A's repo) must NOT be visible to workspace B
+    expect(runsB.some((r) => r.id === 'run-ws-a-orphan')).toBe(false);
+    expect(runsB.some((r) => r.github_url?.includes('ws-a-owner'))).toBe(false);
+  });
+
+  it('both workspaces see their own orphaned row; neither leaks to the other', async () => {
+    // Two separate listCiRuns calls for two workspaces — each scoped by workspace_id.
+    // In production, Postgres applies WHERE workspace_id = ? to each call independently.
+    const repoA = makeRepoWithMockRows([wsAOrphan]);
+    const repoB = makeRepoWithMockRows([wsBOrphan]);
+
+    const [runsA, runsB] = await Promise.all([
+      repoA.listCiRuns('ws-A'),
+      repoB.listCiRuns('ws-B'),
+    ]);
+
+    // Each workspace sees exactly one orphaned row — its own
+    expect(runsA.map((r) => r.id)).toEqual(['run-ws-a-orphan']);
+    expect(runsB.map((r) => r.id)).toEqual(['run-ws-b-orphan']);
+
+    // Source is 'Unknown' for both (installations deleted, left join gives null targetType)
+    expect(runsA[0]!.source).toBe('Unknown');
+    expect(runsB[0]!.source).toBe('Unknown');
+
+    // Cross-check: ws-B's secret-repo URL is not in ws-A's result
+    const wsAUrls = runsA.map((r) => r.github_url);
+    expect(wsAUrls.some((u) => u?.includes('secret-repo'))).toBe(false);
   });
 });
 

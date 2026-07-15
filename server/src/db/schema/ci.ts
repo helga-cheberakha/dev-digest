@@ -1,5 +1,6 @@
 import { pgTable, uuid, text, integer, timestamp, doublePrecision, unique } from 'drizzle-orm/pg-core';
 import { agents } from './agents';
+import { workspaces } from './core';
 
 export const ciInstallations = pgTable('ci_installations', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -15,6 +16,9 @@ export const ciRuns = pgTable(
   'ci_runs',
   {
     id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
     ciInstallationId: uuid('ci_installation_id').references(() => ciInstallations.id, {
       onDelete: 'set null',
     }),
