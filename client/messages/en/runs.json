@@ -117,7 +117,7 @@
     },
     "runAll": "Run all agents",
     "running": "Running…",
-    "meta": "{count} agents · fan-out via p-queue · {duration}s total · {cost}",
+    "meta": "{count} agents · parallel · fan-out via worktrees · {duration}s total · {cost}",
     "noAgents": {
       "title": "Enable agents to run reviews",
       "body": "Multi-agent review runs the PR through every enabled agent in parallel. You have no agents enabled yet.",

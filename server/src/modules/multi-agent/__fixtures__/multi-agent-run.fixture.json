@@ -1,0 +1,70 @@
+{
+  "id": "1d35577c-78f3-4b01-83bd-d6114ac2cf05",
+  "pr_id": "e3af75d2-ea5e-4ba9-8490-0ec6f88c0c8f",
+  "pr_number": 1,
+  "ran_at": "2026-07-15T10:31:17.406Z",
+  "agent_count": 2,
+  "total_duration_ms": 2800,
+  "total_cost_usd": 0.012,
+  "columns": [
+    {
+      "run_id": "69d8b163-8057-4983-a241-34252092d445",
+      "agent_id": "85a5df86-7cf6-4dbd-9e8e-b461d6e9cbb3",
+      "agent_name": "Test Agent 1",
+      "provider": "openai",
+      "model": "gpt-4o",
+      "status": "done",
+      "verdict": "REQUEST_CHANGES",
+      "score": 75,
+      "summary": "Found a potential null dereference in the auth handler.",
+      "duration_ms": 2800,
+      "cost_usd": 0.012,
+      "findings": [
+        {
+          "id": "2c45ab30-0243-4ae8-a379-d8279dc3e767",
+          "severity": "WARNING",
+          "category": "bug",
+          "title": "Possible null dereference on user.session",
+          "file": "src/auth/handler.ts",
+          "start_line": 42,
+          "kind": "finding"
+        }
+      ]
+    },
+    {
+      "run_id": "51bb49b7-6326-495a-a0b7-285d24bd618c",
+      "agent_id": "74a67d98-f941-46cd-a1d5-3de20e8e1e40",
+      "agent_name": "Test Agent 2",
+      "provider": "anthropic",
+      "model": "claude-3-5-sonnet-20241022",
+      "status": "failed",
+      "verdict": null,
+      "score": null,
+      "summary": null,
+      "duration_ms": 150,
+      "cost_usd": null,
+      "findings": []
+    }
+  ],
+  "conflicts": [
+    {
+      "file": "src/auth/handler.ts",
+      "line": 42,
+      "title": "Possible null dereference on user.session",
+      "takes": [
+        {
+          "agent_id": "85a5df86-7cf6-4dbd-9e8e-b461d6e9cbb3",
+          "persona": "Test Agent 1",
+          "verdict": "WARNING",
+          "note": "Possible null dereference on user.session"
+        },
+        {
+          "agent_id": "74a67d98-f941-46cd-a1d5-3de20e8e1e40",
+          "persona": "Test Agent 2",
+          "verdict": "ignored",
+          "note": ""
+        }
+      ]
+    }
+  ]
+}

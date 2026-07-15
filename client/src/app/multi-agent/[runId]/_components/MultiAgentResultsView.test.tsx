@@ -16,6 +16,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NextIntlClientProvider } from "next-intl";
 import type { MultiAgentRun, FindingRecord, ReviewRecord } from "@devdigest/shared";
 import messages from "../../../../../messages/en/runs.json";
+import fixtureRun from "../__fixtures__/multi-agent-run.fixture.json";
 
 // ---------------------------------------------------------------------------
 // Module mocks — declared before any imports of the mocked modules
@@ -68,6 +69,9 @@ vi.mock("@devdigest/ui", () => ({
     <button onClick={onClick} disabled={disabled} aria-pressed={active}>
       {children}
     </button>
+  ),
+  CategoryTag: ({ category }: { category: string }) => (
+    <span data-testid={`category-tag-${category}`}>{category}</span>
   ),
   CircularScore: ({ score }: { score: number }) => (
     <span data-testid="circular-score">{score}</span>
@@ -395,24 +399,35 @@ describe("MultiAgentResultsView — Columns mode", () => {
   beforeEach(setDefaultMocks);
 
   it("renders N columns with agent name, score, and status indicator", () => {
+    // Fix 1: Use the real golden fixture so the test shape stays in sync with
+    // the server contract rather than a hand-typed inline object.
+    vi.mocked(useMultiAgentRun).mockReturnValue({
+      data: fixtureRun as unknown as MultiAgentRun,
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useMultiAgentRun>);
+
     renderView();
 
-    // Both agent names appear (may appear in column header + conflict persona)
-    expect(screen.getAllByText("Security Reviewer").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText("Style Checker").length).toBeGreaterThanOrEqual(1);
+    // Fixture: col-1 "Test Agent 1" (done, score 75), col-2 "Test Agent 2" (failed)
+    expect(screen.getAllByText("Test Agent 1").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Test Agent 2").length).toBeGreaterThanOrEqual(1);
 
     // Score shown for the done column
     const scoreEl = screen.getByTestId("circular-score");
-    expect(scoreEl).toHaveTextContent("72");
+    expect(scoreEl).toHaveTextContent("75");
 
     // Status indicators (role="status") for both columns
     const statusEls = screen.getAllByRole("status");
     expect(statusEls.length).toBeGreaterThanOrEqual(2);
 
-    // "Done" for col-1, "Running" for col-2
+    // Fixture: col-1 "done", col-2 "failed"
     const statusTexts = statusEls.map((el) => el.textContent ?? "");
     expect(statusTexts).toContain("Done");
-    expect(statusTexts).toContain("Running");
+    expect(statusTexts).toContain("Failed");
+
+    // Conflict from fixture should render (title appears in both conflict header and take note)
+    expect(screen.getAllByText("Possible null dereference on user.session").length).toBeGreaterThanOrEqual(1);
   });
 
   it("flips a running column to Done when an SSE result event arrives (no manual refresh)", () => {
@@ -453,6 +468,38 @@ describe("MultiAgentResultsView — Columns mode", () => {
     const updatedStatuses = screen.getAllByRole("status").map((el) => el.textContent ?? "");
     expect(updatedStatuses).toContain("Done");
     expect(updatedStatuses).not.toContain("Running");
+  });
+
+  it("invalidates the multi-agent-run query when live SSE run transitions from running to done", async () => {
+    const qc = makeQC();
+    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+    vi.mocked(useRunEvents).mockReturnValue({ events: [], running: true });
+
+    const { rerender } = render(
+      <QueryClientProvider client={qc}>
+        <NextIntlClientProvider locale="en" messages={{ runs: messages }}>
+          <MultiAgentResultsView />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
+    );
+
+    // Run finishes: running flips from true to false
+    vi.mocked(useRunEvents).mockReturnValue({ events: [], running: false });
+
+    rerender(
+      <QueryClientProvider client={qc}>
+        <NextIntlClientProvider locale="en" messages={{ runs: messages }}>
+          <MultiAgentResultsView />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: ["multi-agent-run", "run-parent-1"] }),
+      );
+    });
   });
 
   it("opens RunTraceDrawer with the correct run_id when 'View trace' is clicked", () => {
@@ -522,6 +569,47 @@ describe("MultiAgentResultsView — Tabs mode", () => {
     const drawer = screen.getByTestId("run-trace-drawer");
     expect(drawer).toBeInTheDocument();
     expect(drawer).toHaveAttribute("data-run-id", "run-col-1");
+  });
+
+  it("shows category tag and file:line range in the finding header", () => {
+    renderView();
+
+    // Switch to tabs mode
+    fireEvent.click(screen.getByText("tabs"));
+
+    // FINDING_1 has category "security" and start_line 10, end_line 12
+    expect(screen.getByTestId("category-tag-security")).toBeInTheDocument();
+
+    // File:line should show range "10-12" (end_line differs from start_line)
+    expect(screen.getByText("src/config.ts:10-12")).toBeInTheDocument();
+  });
+
+  it("Learn and Reply to author do not call the network action", () => {
+    const mutate = vi.fn();
+    vi.mocked(useFindingAction).mockReturnValue({
+      mutate,
+      isPending: false,
+      isError: false,
+      isSuccess: false,
+      isIdle: true,
+    } as unknown as ReturnType<typeof useFindingAction>);
+
+    renderView();
+
+    // Switch to tabs mode
+    fireEvent.click(screen.getByText("tabs"));
+
+    // Expand the finding
+    const findingTitle = screen.getByText("Hardcoded secret");
+    const expandBtn = findingTitle.closest("button");
+    expect(expandBtn).not.toBeNull();
+    fireEvent.click(expandBtn!);
+
+    // Click Learn and Reply — must NOT call network mutate
+    fireEvent.click(screen.getByText("Learn"));
+    fireEvent.click(screen.getByText("Reply to author"));
+
+    expect(mutate).not.toHaveBeenCalled();
   });
 });
 

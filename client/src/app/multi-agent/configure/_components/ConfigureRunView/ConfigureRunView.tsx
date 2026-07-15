@@ -11,6 +11,7 @@ import { AppShell } from "@/components/app-shell";
 import { SafeMarkdown } from "@/components/SafeMarkdown";
 import { useAgentEstimates, useLaunchMultiAgentRun } from "@/lib/hooks/multiAgent";
 import { useAgents } from "@/lib/hooks/agents";
+import { usePullDetail } from "@/lib/hooks/core";
 import { formatCost } from "@/lib/cost";
 import type { AgentEstimate } from "@devdigest/shared";
 import type { Agent } from "@devdigest/shared";
@@ -125,6 +126,7 @@ export function ConfigureRunView({ initialPrId }: ConfigureRunViewProps) {
   const estimatesQuery = useAgentEstimates();
   const agentsQuery = useAgents();
   const launch = useLaunchMultiAgentRun();
+  const prDetailQuery = usePullDetail(initialPrId);
 
   const estimates = estimatesQuery.data ?? [];
   const agents = agentsQuery.data ?? [];
@@ -241,7 +243,12 @@ export function ConfigureRunView({ initialPrId }: ConfigureRunViewProps) {
                 size={14}
                 style={{ color: "var(--accent)", marginRight: 6, verticalAlign: "middle" }}
               />
-              {initialPrId}
+              {prDetailQuery.data
+                ? t("configure.prValue", {
+                    number: prDetailQuery.data.number,
+                    title: prDetailQuery.data.title,
+                  })
+                : initialPrId}
             </div>
           ) : (
             <p style={{ fontSize: 14, color: "var(--text-muted)", fontStyle: "italic" }}>

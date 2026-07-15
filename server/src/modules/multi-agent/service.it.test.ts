@@ -8,6 +8,9 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
+import { writeFileSync, mkdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { startPg, dockerAvailable, type PgFixture } from '../../../test/helpers/pg.js';
 import { seed } from '../../db/seed.js';
 import * as t from '../../db/schema.js';
@@ -342,5 +345,207 @@ d('MultiAgentService — integration (real Postgres)', () => {
     // WHICH of the runs created in this suite is newest, but all are non-null.
     expect(agent1Estimate!.est_duration_ms).not.toBeNull();
     expect(agent1Estimate!.est_cost_usd).not.toBeNull();
+  });
+
+  // --------------------------------------------------------------------------
+  // Fixture generation: produces the golden JSON files used by the schema-drift
+  // guard (see __fixtures__/*.fixture.json, validated statically and without
+  // Docker by fixture.test.ts). SKIPPED by default — these write real
+  // (UUID/timestamp-bearing) DB output over the *committed* fixture files, so
+  // running them on every `npm test` would silently regenerate the "golden"
+  // fixtures with different values each time (new random IDs), defeating the
+  // whole point of a stable, byte-identical drift guard the client tests copy.
+  // Un-skip and run this file alone (`npx vitest run service.it.test.ts`) only
+  // when you intend to deliberately regenerate the fixtures (e.g. the
+  // MultiAgentRun/AgentEstimate contract shape changed) — then re-`skip` and
+  // copy the two files byte-identical into both client __fixtures__ dirs.
+  // --------------------------------------------------------------------------
+
+  it.skip('fixture: multi-agent-run with done+failed columns and conflict with ignored take', async () => {
+    const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__');
+    mkdirSync(fixturesDir, { recursive: true });
+
+    // Parent multi_agent_runs row
+    const [parent] = await pg.handle.db
+      .insert(t.multiAgentRuns)
+      .values({ workspaceId, prId, agentIds: [agentId1, agentId2] })
+      .returning();
+    const parentId = parent!.id;
+
+    // Done agent_run for agent1 (has findings → source of the conflict)
+    const [run1] = await pg.handle.db
+      .insert(t.agentRuns)
+      .values({
+        workspaceId,
+        agentId: agentId1,
+        prId,
+        multiAgentRunId: parentId,
+        status: 'done',
+        provider: 'openai',
+        model: 'gpt-4o',
+        durationMs: 2800,
+        costUsd: 0.012,
+        tokensIn: 350,
+        tokensOut: 180,
+        findingsCount: 1,
+        grounding: '1/1 passed',
+        source: 'local',
+      })
+      .returning();
+
+    // Failed agent_run for agent2 (no findings → gets 'ignored' take in the conflict)
+    await pg.handle.db.insert(t.agentRuns).values({
+      workspaceId,
+      agentId: agentId2,
+      prId,
+      multiAgentRunId: parentId,
+      status: 'failed',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      durationMs: 150,
+      costUsd: null,
+      tokensIn: 0,
+      tokensOut: 0,
+      findingsCount: 0,
+      grounding: '0/0 passed',
+      error: 'LLM timeout after 30s',
+      source: 'local',
+    });
+
+    // Review for agent1's done run
+    const [review] = await pg.handle.db
+      .insert(t.reviews)
+      .values({
+        workspaceId,
+        prId,
+        agentId: agentId1,
+        runId: run1!.id,
+        kind: 'review',
+        verdict: 'REQUEST_CHANGES',
+        summary: 'Found a potential null dereference in the auth handler.',
+        score: 75,
+        model: 'gpt-4o',
+      })
+      .returning();
+
+    // One finding: agent1 flagged src/auth/handler.ts:42, agent2 did not → 'ignored' take
+    await pg.handle.db.insert(t.findings).values({
+      reviewId: review!.id,
+      file: 'src/auth/handler.ts',
+      startLine: 42,
+      endLine: 44,
+      severity: 'WARNING',
+      category: 'bug',
+      title: 'Possible null dereference on user.session',
+      rationale: 'user.session could be undefined when the session has expired.',
+      suggestion: 'Add a null check before accessing user.session.token.',
+      confidence: 0.85,
+      kind: 'finding',
+    });
+
+    const multiRun = await service.getRun(workspaceId, parentId);
+
+    // Assert required shape properties before serializing
+    expect(multiRun.columns).toHaveLength(2);
+    expect(multiRun.columns.some((c) => c.status === 'failed')).toBe(true);
+    expect(multiRun.columns.some((c) => c.status === 'done')).toBe(true);
+    expect(multiRun.conflicts).toHaveLength(1);
+    expect(multiRun.conflicts[0]!.takes.some((take) => take.verdict === 'ignored')).toBe(true);
+
+    writeFileSync(
+      join(fixturesDir, 'multi-agent-run.fixture.json'),
+      JSON.stringify(multiRun, null, 2),
+      'utf-8',
+    );
+  });
+
+  it.skip('fixture: agent-estimates with one warmed agent and one cold-start agent', async () => {
+    const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__');
+    mkdirSync(fixturesDir, { recursive: true });
+
+    // Isolated workspace so prior run history is clean
+    const [freshWs] = await pg.handle.db
+      .insert(t.workspaces)
+      .values({ name: `est-fixture-${randomUUID()}` })
+      .returning();
+    const freshWsId = freshWs!.id;
+
+    try {
+      // Warmed agent — will have a done run
+      const [warmedAgent] = await pg.handle.db
+        .insert(t.agents)
+        .values({
+          workspaceId: freshWsId,
+          name: 'GPT-4o Reviewer',
+          provider: 'openai',
+          model: 'gpt-4o',
+          systemPrompt: 'You are a precise code reviewer.',
+          enabled: true,
+        })
+        .returning();
+
+      // Cold-start agent — zero done runs → both estimates null
+      await pg.handle.db.insert(t.agents).values({
+        workspaceId: freshWsId,
+        name: 'Claude Sonnet Reviewer',
+        provider: 'anthropic',
+        model: 'claude-3-5-sonnet-20241022',
+        systemPrompt: 'You are a thorough code reviewer.',
+        enabled: true,
+      });
+
+      // A repo + PR for the warmed agent's done run
+      const [freshRepo] = await pg.handle.db
+        .insert(t.repos)
+        .values({ workspaceId: freshWsId, owner: 'acme', name: 'api', fullName: 'acme/api' })
+        .returning();
+      const [freshPr] = await pg.handle.db
+        .insert(t.pullRequests)
+        .values({
+          workspaceId: freshWsId,
+          repoId: freshRepo!.id,
+          number: 1,
+          title: 'Add auth middleware',
+          author: 'alice',
+          branch: 'feat/auth',
+          base: 'main',
+          headSha: 'aabbcc11',
+          status: 'open',
+        })
+        .returning();
+
+      // Done agent_run for the warmed agent only
+      await pg.handle.db.insert(t.agentRuns).values({
+        workspaceId: freshWsId,
+        agentId: warmedAgent!.id,
+        prId: freshPr!.id,
+        status: 'done',
+        durationMs: 3100,
+        costUsd: 0.018,
+        tokensIn: 420,
+        tokensOut: 210,
+        findingsCount: 2,
+        grounding: '2/2 passed',
+        source: 'local',
+      });
+
+      const estimates = await service.estimates(freshWsId);
+
+      expect(estimates).toHaveLength(2);
+      const warmed = estimates.find((e) => e.agent_id === warmedAgent!.id);
+      const cold = estimates.find((e) => e.agent_id !== warmedAgent!.id);
+      expect(warmed!.est_duration_ms).not.toBeNull();
+      expect(warmed!.est_cost_usd).not.toBeNull();
+      expect(cold!.est_duration_ms).toBeNull();
+      expect(cold!.est_cost_usd).toBeNull();
+
+      writeFileSync(
+        join(fixturesDir, 'agent-estimates.fixture.json'),
+        JSON.stringify(estimates, null, 2),
+        'utf-8',
+      );
+    } finally {
+      await pg.handle.db.delete(t.workspaces).where(eq(t.workspaces.id, freshWsId));
+    }
   });
 });

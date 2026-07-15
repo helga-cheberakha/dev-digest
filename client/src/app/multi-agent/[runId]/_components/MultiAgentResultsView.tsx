@@ -9,6 +9,7 @@ import { useParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import {
   Button,
+  CategoryTag,
   CircularScore,
   Skeleton,
   ErrorState,
@@ -16,6 +17,7 @@ import {
   EmptyState,
   Icon,
   SeverityBadge,
+  type Category,
 } from "@devdigest/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
@@ -69,6 +71,11 @@ function statusMeta(status: "running" | "done" | "failed") {
   if (status === "running") return { color: "var(--accent)", label: "Running" };
   if (status === "done") return { color: "var(--ok)", label: "Done" };
   return { color: "var(--crit)", label: "Failed" };
+}
+
+/** Format a finding's line range ("11" when single-line, else "11-15"). */
+function lineLabel(f: { start_line: number; end_line: number }): string {
+  return f.start_line === f.end_line ? `${f.start_line}` : `${f.start_line}-${f.end_line}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -164,9 +171,9 @@ function ColumnCard({
                 style={{ display: "flex", alignItems: "flex-start", gap: 6, fontSize: 12 }}
               >
                 <SeverityBadge severity={f.severity as "CRITICAL" | "WARNING" | "SUGGESTION"} compact />
-                <span style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <SafeMarkdown content={f.title} />
-                </span>
+                </div>
                 <span
                   className="mono"
                   style={{ fontSize: 10, color: "var(--text-muted)", flexShrink: 0 }}
@@ -198,11 +205,15 @@ function TabsFindingCard({
   f: FindingRecord;
   prId: string;
   agentId: string | null;
-  onAction: (findingId: string, action: "accept" | "dismiss" | "learn" | "reply") => void;
+  /** Only "accept" and "dismiss" go to the network; "learn"/"reply" are local. */
+  onAction: (findingId: string, action: "accept" | "dismiss") => void;
   onCreateEvalCase: (findingId: string) => void;
   actionPending: boolean;
 }) {
   const [expanded, setExpanded] = React.useState(false);
+  // Fix 2: Learn/Reply are "wired-but-inert" — local visual ack only, no network.
+  const [learnAck, setLearnAck] = React.useState(false);
+  const [replyAck, setReplyAck] = React.useState(false);
   const accepted = !!f.accepted_at;
   const dismissed = !!f.dismissed_at;
 
@@ -232,11 +243,12 @@ function TabsFindingCard({
         }}
       >
         <SeverityBadge severity={f.severity as "CRITICAL" | "WARNING" | "SUGGESTION"} compact />
+        <CategoryTag category={f.category as Category} />
         <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {f.title}
         </span>
         <span className="mono" style={{ fontSize: 11, color: "var(--text-muted)", flexShrink: 0 }}>
-          {f.file}:{f.start_line}
+          {f.file}:{lineLabel(f)}
         </span>
         <span style={{ fontSize: 11, color: "var(--text-muted)", flexShrink: 0 }}>
           {Math.round(f.confidence * 100)}%
@@ -288,8 +300,8 @@ function TabsFindingCard({
               kind="ghost"
               size="sm"
               icon="Brain"
-              disabled={actionPending}
-              onClick={() => onAction(f.id, "learn")}
+              active={learnAck}
+              onClick={() => setLearnAck(true)}
             >
               Learn
             </Button>
@@ -306,8 +318,8 @@ function TabsFindingCard({
               kind="ghost"
               size="sm"
               icon="MessageSquare"
-              disabled={actionPending}
-              onClick={() => onAction(f.id, "reply")}
+              active={replyAck}
+              onClick={() => setReplyAck(true)}
             >
               Reply to author
             </Button>
@@ -366,9 +378,9 @@ function ConflictsSection({ conflicts }: { conflicts: Conflict[] }) {
                 <span className="mono" style={{ fontSize: 11, color: "var(--text-muted)" }}>
                   {c.file}:{c.line}
                 </span>
-                <span style={{ fontSize: 13, fontWeight: 600 }}>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>
                   <SafeMarkdown content={c.title} />
-                </span>
+                </div>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {c.takes.map((take, ti) => (
@@ -455,23 +467,35 @@ export function MultiAgentResultsView() {
     return m;
   }, [evalCases]);
 
+  // ── Actions ───────────────────────────────────────────────────────────────
+  const action = useFindingAction();
+  const qc = useQueryClient();
+
   // ── Live SSE status ────────────────────────────────────────────────────────
   const runningRunIds = React.useMemo(
     () => (run?.columns ?? []).filter((c) => c.status === "running").map((c) => c.run_id),
     [run],
   );
-  const { events } = useRunEvents(runningRunIds);
+  const { events, running } = useRunEvents(runningRunIds);
 
-  // ── Actions ───────────────────────────────────────────────────────────────
-  const action = useFindingAction();
-  const qc = useQueryClient();
+  // Fix 3: When the live run finishes, refetch so score/duration/cost/findings
+  // update from the DB (they stay null until the query is invalidated).
+  // Pattern mirrors RunStatus.tsx's wasRunning ref approach.
+  const wasRunningRef = React.useRef(false);
+  React.useEffect(() => {
+    if (running) wasRunningRef.current = true;
+    if (!running && wasRunningRef.current) {
+      wasRunningRef.current = false;
+      void qc.invalidateQueries({ queryKey: ["multi-agent-run", runId] });
+    }
+  }, [running, qc, runId]);
   const draftMutation = useMutation({
     mutationFn: draftEvalCaseFromFinding,
     onSuccess: (data) => setModal({ initial: data }),
   });
 
   const handleAction = React.useCallback(
-    (findingId: string, act: "accept" | "dismiss" | "learn" | "reply") => {
+    (findingId: string, act: "accept" | "dismiss") => {
       action.mutate({ findingId, action: act, prId });
     },
     [action, prId],
@@ -657,9 +681,9 @@ export function MultiAgentResultsView() {
                         {statusMeta(live).label}
                       </span>
                       {col.verdict && (
-                        <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                        <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
                           <SafeMarkdown content={col.verdict} />
-                        </span>
+                        </div>
                       )}
                     </div>
                     {col.summary ? (
