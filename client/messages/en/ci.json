@@ -78,7 +78,26 @@
     "installCardTitle": "Open a PR with these files",
     "installCardBody": "DevDigest opens a PR in {repo} titled 'Add DevDigest CI review' with the {count} generated files.",
     "ownerRepo": "owner/repo",
-    "secretNote": "Add {key} to the repo's Actions secrets before the workflow runs."
+    "secretNote": "Add {key} to the repo's Actions secrets before the workflow runs.",
+    "triggers": {
+      "opened": "On PR open",
+      "synchronize": "On push to PR",
+      "reopened": "On PR reopen"
+    },
+    "secretsLabel": "Secrets expected",
+    "secretReady": "auto-provided / ready",
+    "secretNotSet": "not set",
+    "successTitle": "Deployment ready",
+    "viewPr": "View pull request",
+    "downloadFiles": "Download files",
+    "done": "Done",
+    "noRepo": "No active repository — select a repo to deploy to.",
+    "previewNote": "Server-generated files. Inline edits apply to the Download path only; Open PR regenerates from the agent config.",
+    "blockMergeHint": "Only GitHub review can block merges",
+    "openPrAction": "Open a PR with these files",
+    "prOpened": "Pull request opened",
+    "generatePreview": "Generate preview",
+    "previewLoading": "Generating preview…"
   },
   "ciTab": {
     "heading": "Continuous Integration",
@@ -88,7 +107,22 @@
     "update": "Update CI",
     "noRepo": "Connect a repository first",
     "empty": "Not deployed to CI yet. Use 'Publish to CI' to open a PR that adds the workflow + agent config.",
-    "installed": "installed {date}"
+    "installed": "installed {date}",
+    "emptyTitle": "Not in CI yet",
+    "emptyBody": "Deploy this agent to run automatically on every pull request in a repo's CI pipeline.",
+    "emptyCta": "Add to CI",
+    "activeBadge": "Active in {count} repos",
+    "addRepo": "Add repository",
+    "updateConfig": "Update CI config",
+    "failOnLabel": "Fail CI on",
+    "failOnHelper": "Exit non-zero when a finding at or above this severity lands. Pair with a required status check to block merges.",
+    "failOn": {
+      "never": "Never",
+      "critical": "Critical",
+      "warning": "Warning or above",
+      "any": "Any finding"
+    },
+    "ciDeployment": "CI deployment"
   },
   "publishDialog": {
     "title": "Publish to CI",
