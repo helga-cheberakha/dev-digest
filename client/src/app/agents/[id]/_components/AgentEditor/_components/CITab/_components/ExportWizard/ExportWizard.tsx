@@ -14,11 +14,12 @@
  */
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useTranslations } from "next-intl";
 import { Modal, ExportWizardSteps, Button } from "@devdigest/ui";
 import type { CiTarget, CiFile, CiExport } from "@devdigest/shared";
 import { useExportCi } from "@/lib/hooks/ci";
+import { useRepos } from "@/lib/hooks/core";
 import { useActiveRepo } from "@/lib/repo-context";
 import { TargetStep } from "./_components/TargetStep/TargetStep";
 import { PreviewStep } from "./_components/PreviewStep/PreviewStep";
@@ -48,12 +49,24 @@ export interface ExportWizardProps {
 export function ExportWizard({ agentId, agentName, onClose }: ExportWizardProps) {
   const t = useTranslations("ci");
   const { activeRepo } = useActiveRepo();
+  const { data: repos } = useRepos();
   const previewMutation = useExportCi();
   const installMutation = useExportCi();
 
   // ── Wizard state ─────────────────────────────────────────────────────────
   const [step, setStep] = useState(STEP_TARGET);
   const [selectedTarget, setSelectedTarget] = useState<CiTarget>("gha");
+
+  // Repo picker — initialized once when repos data arrives
+  const [selectedRepoFullName, setSelectedRepoFullName] = useState<string>("");
+  const repoInitializedRef = useRef(false);
+
+  useEffect(() => {
+    if (!repoInitializedRef.current && repos !== undefined) {
+      repoInitializedRef.current = true;
+      setSelectedRepoFullName(activeRepo?.full_name ?? repos[0]?.full_name ?? "");
+    }
+  }, [repos, activeRepo]);
 
   // Configure step
   const [triggerOpened, setTriggerOpened] = useState(true);
@@ -70,7 +83,7 @@ export function ExportWizard({ agentId, agentName, onClose }: ExportWizardProps)
   const [installResult, setInstallResult] = useState<CiExport | null>(null);
 
   // ── Derived ──────────────────────────────────────────────────────────────
-  const repo = activeRepo?.full_name ?? "";
+  const repo = selectedRepoFullName;
 
   const activeTriggers = [
     ...(triggerOpened ? ["opened" as const] : []),
@@ -206,7 +219,9 @@ export function ExportWizard({ agentId, agentName, onClose }: ExportWizardProps)
           <TargetStep
             selectedTarget={selectedTarget}
             repo={repo}
+            repos={repos}
             onSelect={setSelectedTarget}
+            onSelectRepo={setSelectedRepoFullName}
           />
         )}
         {step === STEP_PREVIEW && (

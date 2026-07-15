@@ -2,8 +2,8 @@
 
 import React from "react";
 import { useTranslations } from "next-intl";
-import { Badge, Icon } from "@devdigest/ui";
-import type { CiTarget } from "@devdigest/shared";
+import { Badge, Icon, FormField, SelectInput } from "@devdigest/ui";
+import type { CiTarget, Repo } from "@devdigest/shared";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -94,11 +94,15 @@ function TargetCard({
 export interface TargetStepProps {
   selectedTarget: CiTarget;
   repo: string;
+  repos: Repo[] | undefined;
   onSelect: (target: CiTarget) => void;
+  onSelectRepo: (fullName: string) => void;
 }
 
-export function TargetStep({ selectedTarget, repo, onSelect }: TargetStepProps) {
+export function TargetStep({ selectedTarget, repo, repos, onSelect, onSelectRepo }: TargetStepProps) {
   const t = useTranslations("ci");
+
+  const hasRepos = repos !== undefined && repos.length > 0;
 
   return (
     <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 12 }}>
@@ -119,7 +123,21 @@ export function TargetStep({ selectedTarget, repo, onSelect }: TargetStepProps) 
           />
         ))}
       </div>
-      {!repo && (
+
+      {hasRepos ? (
+        <FormField
+          label={t("exportWizard.repoLabel")}
+          hint={t("exportWizard.repoHint")}
+          required
+        >
+          <SelectInput
+            value={repo}
+            onChange={onSelectRepo}
+            options={repos.map((r) => r.full_name)}
+            mono={false}
+          />
+        </FormField>
+      ) : (
         <p style={{ fontSize: 13, color: "var(--crit)", marginTop: 8 }}>
           {t("exportWizard.noRepo")}
         </p>

@@ -43,9 +43,14 @@ vi.mock("@/lib/repo-context", () => ({
   useActiveRepo: vi.fn(),
 }));
 
+vi.mock("@/lib/hooks/core", () => ({
+  useRepos: vi.fn(),
+}));
+
 import { useCiInstallations, useExportCi } from "@/lib/hooks/ci";
 import { useUpdateAgent } from "@/lib/hooks/agents";
 import { useActiveRepo } from "@/lib/repo-context";
+import { useRepos } from "@/lib/hooks/core";
 
 import { CITab } from "./CITab";
 
@@ -101,10 +106,35 @@ function renderCITab(agent: Agent = AGENT) {
 // Setup / teardown
 // ---------------------------------------------------------------------------
 
+const ACTIVE_REPO = {
+  id: "repo1",
+  workspace_id: "ws1",
+  owner: "acme",
+  name: "payments-api",
+  full_name: "acme/payments-api",
+  default_branch: "main",
+  clone_path: null,
+  last_polled_at: null,
+  created_by: null,
+};
+
+const SECOND_REPO = {
+  id: "repo2",
+  workspace_id: "ws1",
+  owner: "burnjohn",
+  name: "dev-digest",
+  full_name: "burnjohn/dev-digest",
+  default_branch: "main",
+  clone_path: null,
+  last_polled_at: null,
+  created_by: null,
+};
+
 function setupDefaultMocks({
   installations = [] as CiInstallation[],
   exportPending = false,
   exportResult = undefined as CiExport | undefined,
+  reposList = [ACTIVE_REPO] as typeof ACTIVE_REPO[],
 } = {}) {
   vi.mocked(useCiInstallations).mockReturnValue({
     data: installations,
@@ -136,10 +166,16 @@ function setupDefaultMocks({
   vi.mocked(useActiveRepo).mockReturnValue({
     repoId: "repo1",
     setRepoId: vi.fn(),
-    repos: [{ id: "repo1", workspace_id: "ws1", owner: "acme", name: "payments-api", full_name: "acme/payments-api", default_branch: "main", clone_path: null, last_polled_at: null, created_by: null }],
-    activeRepo: { id: "repo1", workspace_id: "ws1", owner: "acme", name: "payments-api", full_name: "acme/payments-api", default_branch: "main", clone_path: null, last_polled_at: null, created_by: null },
+    repos: [ACTIVE_REPO],
+    activeRepo: ACTIVE_REPO,
     reposLoaded: true,
   });
+
+  vi.mocked(useRepos).mockReturnValue({
+    data: reposList,
+    isLoading: false,
+    isError: false,
+  } as unknown as ReturnType<typeof useRepos>);
 }
 
 beforeEach(() => {
@@ -526,6 +562,72 @@ describe("ExportWizard — file_overrides in Open PR payload", () => {
 
     // No edits → field is undefined, not an array
     expect(openPrCallArg.input.file_overrides).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: Repo picker (AC: repo select renders, default selection, payload, noRepo)
+// ---------------------------------------------------------------------------
+
+describe("ExportWizard — repo picker", () => {
+  it("renders the repo select pre-selected with the active repo when wizard opens", async () => {
+    renderCITab();
+    fireEvent.click(screen.getByRole("button", { name: /add to ci/i }));
+
+    // The select (combobox role) should show the active repo as its value
+    await waitFor(() => {
+      const select = screen.getByRole("combobox");
+      expect(select).toHaveValue("acme/payments-api");
+    });
+
+    // The label "Target repository" must be visible
+    expect(screen.getByText("Target repository")).toBeInTheDocument();
+    // Helper text is visible
+    expect(screen.getByText(/owner\/name/i)).toBeInTheDocument();
+  });
+
+  it("sends the selected repo in the export payload after changing the picker", async () => {
+    setupDefaultMocks({ reposList: [ACTIVE_REPO, SECOND_REPO] });
+
+    renderCITab();
+    fireEvent.click(screen.getByRole("button", { name: /add to ci/i }));
+
+    // Wait for initial selection to render
+    await waitFor(() => {
+      expect(screen.getByRole("combobox")).toHaveValue("acme/payments-api");
+    });
+
+    // Change to the second repo
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "burnjohn/dev-digest" } });
+
+    // Navigate through to Install step
+    fireEvent.click(screen.getByRole("button", { name: /continue/i })); // → Preview
+    fireEvent.click(screen.getByRole("button", { name: /continue/i })); // → Configure
+    fireEvent.click(screen.getByRole("button", { name: /continue/i })); // → Install
+    fireEvent.click(screen.getByRole("button", { name: /open a pr with these files/i }));
+
+    expect(mockExportMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({
+          repo: "burnjohn/dev-digest",
+          action: "open_pr",
+        }),
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("renders the noRepo message when the repos list is empty", () => {
+    setupDefaultMocks({ reposList: [] });
+
+    renderCITab();
+    fireEvent.click(screen.getByRole("button", { name: /add to ci/i }));
+
+    expect(
+      screen.getByText("No active repository — select a repo to deploy to."),
+    ).toBeInTheDocument();
+    // No combobox when list is empty
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   });
 });
 
