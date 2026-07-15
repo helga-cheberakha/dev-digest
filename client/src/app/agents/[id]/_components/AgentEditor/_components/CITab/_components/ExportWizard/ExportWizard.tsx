@@ -121,9 +121,9 @@ export function ExportWizard({ agentId, agentName, onClose }: ExportWizardProps)
   const repo = activeRepo?.full_name ?? "";
 
   const activeTriggers = [
-    ...(triggerOpened ? ["opened"] : []),
-    ...(triggerSynchronize ? ["synchronize"] : []),
-    ...(triggerReopened ? ["reopened"] : []),
+    ...(triggerOpened ? ["opened" as const] : []),
+    ...(triggerSynchronize ? ["synchronize" as const] : []),
+    ...(triggerReopened ? ["reopened" as const] : []),
   ];
 
   const stepLabels = [

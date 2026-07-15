@@ -27,6 +27,7 @@ import {
   MockAuthProvider,
 } from '../../adapters/mocks.js';
 import type { CiInstallation } from '@devdigest/shared';
+import { CiExportInput } from '@devdigest/shared';
 import { reviewPullRequest } from '@devdigest/reviewer-core';
 import { MockLLMProvider, MockGitClient } from '../../adapters/mocks.js';
 
@@ -916,6 +917,53 @@ describe('CiRepository.listCiRuns — cross-workspace isolation regression', () 
     // Cross-check: ws-B's secret-repo URL is not in ws-A's result
     const wsAUrls = runsA.map((r) => r.github_url);
     expect(wsAUrls.some((u) => u?.includes('secret-repo'))).toBe(false);
+  });
+});
+
+// ============================================================================
+// 7a. CiExportInput.triggers — YAML-injection validation (security fix)
+// ============================================================================
+
+describe('CiExportInput.triggers — Zod enum validation blocks YAML injection', () => {
+  it('rejects a trigger string containing a newline (YAML break-out attempt)', () => {
+    const result = CiExportInput.safeParse({
+      repo: 'owner/repo',
+      triggers: ['opened\n  - pull_request_target'],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects any trigger value outside the allowed enum', () => {
+    const result = CiExportInput.safeParse({
+      repo: 'owner/repo',
+      triggers: ['push'],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts all three legitimate trigger values and they appear in the generated YAML types block', () => {
+    const result = CiExportInput.safeParse({
+      repo: 'owner/repo',
+      triggers: ['opened', 'synchronize', 'reopened'],
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const yaml = buildWorkflowYaml({
+      postAs: 'github_review',
+      triggers: result.data.triggers,
+    });
+    expect(yaml).toContain('- opened');
+    expect(yaml).toContain('- synchronize');
+    expect(yaml).toContain('- reopened');
+    expect(yaml).not.toContain('pull_request_target');
+  });
+
+  it('applies the default (opened, synchronize, reopened) when triggers is omitted', () => {
+    const result = CiExportInput.safeParse({ repo: 'owner/repo' });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.triggers).toEqual(['opened', 'synchronize', 'reopened']);
   });
 });
 

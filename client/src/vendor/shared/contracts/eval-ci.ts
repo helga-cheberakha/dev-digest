@@ -151,7 +151,7 @@ export const CiExportInput = z.object({
   /** "open_pr" opens a PR with the files; "files" just returns/persists them. */
   action: z.enum(['open_pr', 'files']).default('open_pr'),
   post_as: z.enum(['github_review', 'pr_comment', 'none']).default('github_review'),
-  triggers: z.array(z.string()).default(['opened', 'synchronize', 'reopened']),
+  triggers: z.array(z.enum(['opened', 'synchronize', 'reopened'])).default(['opened', 'synchronize', 'reopened']),
   base: z.string().default('main'),
   /**
    * User-edited file contents from the Preview step. The server applies these
