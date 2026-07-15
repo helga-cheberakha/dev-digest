@@ -51,13 +51,7 @@
     },
     "targets": {
       "gha": "GitHub Actions",
-      "circle": "CircleCI",
-      "jenkins": "Jenkins",
-      "cli": "Generic CLI",
-      "ghaDesc": "Runs on pull_request events",
-      "circleDesc": "config.yml job",
-      "jenkinsDesc": "Pipeline stage",
-      "cliDesc": "node .devdigest/runner/index.js"
+      "ghaDesc": "Runs on pull_request events"
     },
     "recommended": "recommended",
     "repoLabel": "Target repository",

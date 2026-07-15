@@ -2,28 +2,22 @@
 
 import React from "react";
 import { useTranslations } from "next-intl";
-import { Badge } from "@devdigest/ui";
+import { Badge, Icon } from "@devdigest/ui";
 import type { CiTarget } from "@devdigest/shared";
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const CI_TARGETS: readonly CiTarget[] = ["gha", "circle", "jenkins", "cli"];
+const CI_TARGETS = ["gha"] as const satisfies readonly CiTarget[];
 
-const TARGET_DESC_KEY: Record<CiTarget, string> = {
+const TARGET_DESC_KEY = {
   gha: "exportWizard.targets.ghaDesc",
-  circle: "exportWizard.targets.circleDesc",
-  jenkins: "exportWizard.targets.jenkinsDesc",
-  cli: "exportWizard.targets.cliDesc",
-};
+} as const;
 
-const TARGET_LABEL_KEY: Record<CiTarget, string> = {
+const TARGET_LABEL_KEY = {
   gha: "exportWizard.targets.gha",
-  circle: "exportWizard.targets.circle",
-  jenkins: "exportWizard.targets.jenkins",
-  cli: "exportWizard.targets.cli",
-};
+} as const;
 
 // ---------------------------------------------------------------------------
 // TargetCard sub-component
@@ -53,8 +47,9 @@ function TargetCard({
       onClick={onSelect}
       style={{
         display: "flex",
-        flexDirection: "column",
-        gap: 4,
+        flexDirection: "row",
+        alignItems: "flex-start",
+        gap: 12,
         padding: "14px 16px",
         borderRadius: 10,
         border: selected ? "2px solid var(--accent)" : "1px solid var(--border)",
@@ -65,13 +60,29 @@ function TargetCard({
         boxShadow: selected ? "0 0 0 3px rgba(99,102,241,0.15)" : "none",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ fontWeight: 600, fontSize: 14 }}>{label}</span>
-        {recommendedLabel && (
-          <Badge color="var(--ok)">{recommendedLabel}</Badge>
-        )}
+      <div
+        style={{
+          width: 36,
+          height: 36,
+          borderRadius: 8,
+          background: "var(--accent-bg)",
+          color: "var(--accent)",
+          display: "grid",
+          placeItems: "center",
+          flexShrink: 0,
+        }}
+      >
+        <Icon.Workflow size={18} />
       </div>
-      <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{desc}</span>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontWeight: 600, fontSize: 14 }}>{label}</span>
+          {recommendedLabel && (
+            <Badge color="var(--ok)">{recommendedLabel}</Badge>
+          )}
+        </div>
+        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{desc}</span>
+      </div>
     </button>
   );
 }

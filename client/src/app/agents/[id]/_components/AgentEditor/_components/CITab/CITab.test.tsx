@@ -294,27 +294,14 @@ describe("ExportWizard — step navigation", () => {
     expect(screen.getByText("recommended")).toBeInTheDocument();
   });
 
-  it("shows all 4 CI target options", () => {
+  it("shows only the GitHub Actions target option", () => {
     renderCITab();
     fireEvent.click(screen.getByRole("button", { name: /add to ci/i }));
 
     expect(screen.getByRole("radio", { name: /github actions/i })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /circleci/i })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /jenkins/i })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /generic cli/i })).toBeInTheDocument();
-  });
-
-  it("selecting a different target deselects gha", () => {
-    renderCITab();
-    fireEvent.click(screen.getByRole("button", { name: /add to ci/i }));
-
-    fireEvent.click(screen.getByRole("radio", { name: /circleci/i }));
-
-    expect(screen.getByRole("radio", { name: /circleci/i })).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByRole("radio", { name: /github actions/i })).toHaveAttribute(
-      "aria-checked",
-      "false",
-    );
+    expect(screen.queryByRole("radio", { name: /circleci/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /jenkins/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /generic cli/i })).not.toBeInTheDocument();
   });
 
   it("navigates to Preview step on Continue click", () => {
