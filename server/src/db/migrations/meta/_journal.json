@@ -155,6 +155,13 @@
       "when": 1784117688959,
       "tag": "0021_friendly_scrambler",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1784151085810,
+      "tag": "0022_fair_princess_powerful",
+      "breakpoints": true
     }
   ]
 }

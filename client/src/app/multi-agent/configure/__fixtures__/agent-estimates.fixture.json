@@ -1,0 +1,14 @@
+[
+  {
+    "agent_id": "34b792f1-9118-41c7-8b50-e3729fd64ff3",
+    "est_duration_ms": 3100,
+    "est_cost_usd": 0.018,
+    "last_run_summary": null
+  },
+  {
+    "agent_id": "e1eaba7c-7fad-44a9-b507-5bb8d5997288",
+    "est_duration_ms": null,
+    "est_cost_usd": null,
+    "last_run_summary": null
+  }
+]
