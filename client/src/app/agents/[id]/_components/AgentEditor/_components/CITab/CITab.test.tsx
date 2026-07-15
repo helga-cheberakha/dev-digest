@@ -17,7 +17,7 @@
  */
 
 import { describe, it, expect, afterEach, vi, beforeEach } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { NextIntlClientProvider } from "next-intl";
 import type { Agent, CiInstallation, CiExport } from "@devdigest/shared";
 import ciMessages from "../../../../../../../../messages/en/ci.json";
@@ -45,12 +45,13 @@ vi.mock("@/lib/repo-context", () => ({
 
 vi.mock("@/lib/hooks/core", () => ({
   useRepos: vi.fn(),
+  useSecretsStatus: vi.fn(),
 }));
 
 import { useCiInstallations, useExportCi } from "@/lib/hooks/ci";
 import { useUpdateAgent } from "@/lib/hooks/agents";
 import { useActiveRepo } from "@/lib/repo-context";
-import { useRepos } from "@/lib/hooks/core";
+import { useRepos, useSecretsStatus } from "@/lib/hooks/core";
 
 import { CITab } from "./CITab";
 
@@ -176,6 +177,12 @@ function setupDefaultMocks({
     isLoading: false,
     isError: false,
   } as unknown as ReturnType<typeof useRepos>);
+
+  vi.mocked(useSecretsStatus).mockReturnValue({
+    data: { openai: false, anthropic: false, openrouter: false, github: false },
+    isLoading: false,
+    isError: false,
+  } as unknown as ReturnType<typeof useSecretsStatus>);
 }
 
 beforeEach(() => {
@@ -665,5 +672,32 @@ describe("ExportWizard — Configure step", () => {
     expect(screen.getByText("not set")).toBeInTheDocument();
     expect(screen.getByText("GITHUB_TOKEN")).toBeInTheDocument();
     expect(screen.getByText("auto-provided / ready")).toBeInTheDocument();
+  });
+
+  it("shows OPENROUTER_API_KEY badge as 'not set' when secrets-status reports openrouter: false", () => {
+    vi.mocked(useSecretsStatus).mockReturnValue({
+      data: { openai: false, anthropic: false, openrouter: false, github: false },
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useSecretsStatus>);
+
+    navigateToConfig();
+
+    const row = screen.getByText("OPENROUTER_API_KEY").closest("div");
+    expect(within(row!).getByText("not set")).toBeInTheDocument();
+  });
+
+  it("shows OPENROUTER_API_KEY badge as 'auto-provided / ready' when secrets-status reports openrouter: true", () => {
+    vi.mocked(useSecretsStatus).mockReturnValue({
+      data: { openai: false, anthropic: false, openrouter: true, github: false },
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useSecretsStatus>);
+
+    navigateToConfig();
+
+    const row = screen.getByText("OPENROUTER_API_KEY").closest("div");
+    expect(within(row!).getByText("auto-provided / ready")).toBeInTheDocument();
+    expect(screen.queryByText("not set")).not.toBeInTheDocument();
   });
 });

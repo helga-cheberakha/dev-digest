@@ -3,6 +3,7 @@
 import React from "react";
 import { useTranslations } from "next-intl";
 import { Badge, Icon, SectionLabel } from "@devdigest/ui";
+import { useSecretsStatus } from "@/lib/hooks/core";
 
 type PostAs = "github_review" | "pr_comment" | "none";
 
@@ -28,6 +29,7 @@ export function ConfigureStep({
   onPostAsChange,
 }: ConfigureStepProps) {
   const t = useTranslations("ci");
+  const { data: secretsStatus } = useSecretsStatus();
 
   return (
     <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 20 }}>
@@ -70,9 +72,9 @@ export function ConfigureStep({
         >
           {(
             [
-              { key: "OPENROUTER_API_KEY", ready: false },
+              { key: "OPENROUTER_API_KEY", ready: !!secretsStatus?.openrouter },
               { key: "GITHUB_TOKEN", ready: true },
-            ] as const
+            ]
           ).map(({ key, ready }) => (
             <div
               key={key}
