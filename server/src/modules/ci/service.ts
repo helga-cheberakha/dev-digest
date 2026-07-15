@@ -106,6 +106,13 @@ export class CiService {
     const skillSlugs = skillBodies.map((s) => s.slug);
 
     // 5. Build the CI bundle (pure, no I/O)
+    // Guard: only GitHub Actions is currently implemented. Non-gha requests are
+    // rejected here so the client-side UI restriction has a server-side backstop.
+    if (input.target !== 'gha') {
+      throw new ValidationError(
+        "Only target='gha' (GitHub Actions) is currently supported",
+      );
+    }
     const rawFiles = buildCiBundle({
       agent: {
         name: agent.name,

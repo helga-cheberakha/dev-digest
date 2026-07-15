@@ -246,28 +246,6 @@ describe('bundle.ts — CiFile[] assembly', () => {
     expect(runner?.contents).toBe('// ncc bundle');
   });
 
-  it('non-gha targets return exactly one placeholder stub', () => {
-    for (const target of ['circle', 'jenkins', 'cli'] as const) {
-      const files = buildCiBundle({
-        agent: {
-          name: 'T',
-          provider: 'openrouter',
-          model: 'x',
-          systemPrompt: 's',
-          skillSlugs: [],
-          strategy: 'auto',
-          ciFailOn: 'critical',
-        },
-        skillBodies: [],
-        postAs: 'github_review',
-        triggers: ['opened'],
-        target,
-        runnerBytes: RUNNER,
-      });
-      expect(files).toHaveLength(1);
-      expect(files[0]!.contents).toContain('not yet implemented');
-    }
-  });
 });
 
 // ============================================================================
@@ -549,6 +527,28 @@ describe('CiService.export — T3', () => {
         base: 'main',
       }),
     ).rejects.toMatchObject({ code: 'validation_error' });
+  });
+
+  it('non-gha target: service rejects with ValidationError before building any bundle (Fix 2)', async () => {
+    // buildPlaceholderBundle has been removed from bundle.ts; non-gha targets are now
+    // rejected at the service boundary so buildCiBundle is never reached.
+    const { container } = makeContainer({ agent: AGENT, repo: REPO });
+    const service = new CiService(container, runnerPath);
+
+    await expect(
+      service.export('ws-1', 'agent-1', {
+        repo: 'owner/repo',
+        target: 'circle',
+        action: 'files',
+        post_as: 'github_review',
+        triggers: ['opened'],
+        base: 'main',
+      }),
+    ).rejects.toMatchObject({
+      code: 'validation_error',
+      statusCode: 422,
+      message: expect.stringContaining("Only target='gha'"),
+    });
   });
 });
 
