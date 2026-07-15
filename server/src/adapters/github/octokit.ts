@@ -387,6 +387,7 @@ export class OctokitGitHubClient implements GitHubClient {
             owner: repo.owner,
             repo: repo.name,
             workflow_id: workflowFile,
+            status: 'completed',
             per_page: 50,
           });
           return res.data.workflow_runs.map((run) => ({

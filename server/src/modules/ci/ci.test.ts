@@ -423,7 +423,7 @@ describe('CiService.export — T3', () => {
     expect(github.openedPrs).toHaveLength(0);
   });
 
-  it('open_pr GitHub write failure: installation is NOT persisted (AC-22, Fix C)', async () => {
+  it('open_pr GitHub write failure: throws ExternalServiceError (502) and installation is NOT persisted (AC-22, Fix C)', async () => {
     const failingGithub = new MockGitHubClient();
     vi.spyOn(failingGithub, 'commitFiles').mockRejectedValue(new Error('GitHub API error'));
 
@@ -443,9 +443,13 @@ describe('CiService.export — T3', () => {
         triggers: ['opened'],
         base: 'main',
       }),
-    ).rejects.toThrow('GitHub API error');
+    ).rejects.toMatchObject({
+      code: 'external_service_error',
+      statusCode: 502,
+      message: expect.stringContaining('Failed to push CI files to GitHub'),
+    });
 
-    // No installation row persisted because GitHub write failed
+    // No installation row persisted because GitHub write failed (AC-22)
     expect(insertInstallationMock).not.toHaveBeenCalled();
   });
 

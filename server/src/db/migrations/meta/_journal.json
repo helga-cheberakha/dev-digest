@@ -148,6 +148,13 @@
       "when": 1784114358235,
       "tag": "0020_mighty_black_tarantula",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1784117688959,
+      "tag": "0021_friendly_scrambler",
+      "breakpoints": true
     }
   ]
 }

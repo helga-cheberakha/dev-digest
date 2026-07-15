@@ -1,0 +1,2 @@
+ALTER TABLE "ci_runs" DROP CONSTRAINT "ci_runs_install_run_uq";--> statement-breakpoint
+CREATE UNIQUE INDEX "ci_runs_install_run_uq" ON "ci_runs" USING btree ("ci_installation_id","github_run_id") WHERE ci_installation_id IS NOT NULL;

@@ -125,7 +125,7 @@ function serializeManifest(m: AgentManifest): string {
   } else {
     lines.push('skills:');
     for (const slug of m.skills) {
-      lines.push(`  - ${slug}`);
+      lines.push(`  - ${yamlScalar(slug)}`);
     }
   }
 
