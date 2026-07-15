@@ -20109,8 +20109,14 @@ const CiExportInput = objectType({
     /** "open_pr" opens a PR with the files; "files" just returns/persists them. */
     action: enumType(['open_pr', 'files']).default('open_pr'),
     post_as: enumType(['github_review', 'pr_comment', 'none']).default('github_review'),
-    triggers: arrayType(stringType()).default(['opened', 'synchronize', 'reopened']),
+    triggers: arrayType(enumType(['opened', 'synchronize', 'reopened'])).default(['opened', 'synchronize', 'reopened']),
     base: stringType().default('main'),
+    /**
+     * Per-file content overrides applied to the generated bundle before
+     * commit/return (AC-5). Each entry replaces the contents of the matching
+     * generated file; overrides for unknown paths are silently ignored.
+     */
+    file_overrides: arrayType(objectType({ path: stringType(), contents: stringType() })).nullish(),
 });
 /** A persisted CI installation (mirrors `ci_installations`). */
 const CiInstallation = objectType({
@@ -20122,7 +20128,11 @@ const CiInstallation = objectType({
 });
 /** Response of `POST /agents/:id/export-ci`. */
 const CiExport = objectType({
-    installation: CiInstallation,
+    /**
+     * Persisted installation row — null when action==='files' (Preview/Download
+     * path never persists an installation; only open_pr success does).
+     */
+    installation: CiInstallation.nullable(),
     files: arrayType(CiFile),
     pr_url: stringType().nullable(),
 });
@@ -20156,6 +20166,18 @@ const CiResultArtifact = objectType({
     agent: stringType(),
     version: stringType().nullish(),
     pr_number: numberType().int().nullish(),
+});
+/**
+ * Multi-agent wrapper — the runner writes ONE of these per CI run (one
+ * `CiResultArtifact` entry per agent manifest found under `.devdigest/agents/`,
+ * AC-20). A bare single-object `devdigest-result.json` (pre-multi-agent
+ * runners already installed in a target repo) is still accepted by the
+ * ingest path as an equivalent one-element bundle — see
+ * `server/src/modules/ci/service.ts`.
+ */
+const CiResultBundle = objectType({
+    version: stringType().nullish(),
+    agents: arrayType(CiResultArtifact).min(1),
 });
 // ===========================================================================
 // Conformance (PRD ↔ PR) — API record (the analysis shape is `Conformance`)
@@ -34807,8 +34829,15 @@ class RunnerError extends Error {
 
 
 
-/** Find the single agent manifest file under `<devdigestDir>/agents/`. */
-function findManifestPath(devdigestDir, deps = {}) {
+/**
+ * Find every agent manifest file under `<devdigestDir>/agents/` (AC-20).
+ *
+ * A repo may have more than one exported agent (multi-agent CI review, at
+ * parity with the studio's local multi-agent review) — `run.ts` loads and
+ * reviews with EACH manifest returned here independently. Sorted for a
+ * deterministic run/post order across CI invocations.
+ */
+function findManifestPaths(devdigestDir, deps = {}) {
     const readDir = deps.readDir ?? external_node_fs_namespaceObject.readdirSync;
     const agentsDir = external_node_path_default().join(devdigestDir, 'agents');
     let entries;
@@ -34818,14 +34847,11 @@ function findManifestPath(devdigestDir, deps = {}) {
     catch (err) {
         throw new RunnerError(`Agent manifest directory not found: ${agentsDir} (${err.message})`);
     }
-    const yamlFiles = entries.filter((f) => f.endsWith('.yaml') || f.endsWith('.yml'));
+    const yamlFiles = entries.filter((f) => f.endsWith('.yaml') || f.endsWith('.yml')).sort();
     if (yamlFiles.length === 0) {
         throw new RunnerError(`No agent manifest (*.yaml) found in ${agentsDir}`);
     }
-    if (yamlFiles.length > 1) {
-        throw new RunnerError(`Expected exactly one agent manifest in ${agentsDir}, found ${yamlFiles.length}: ${yamlFiles.join(', ')}`);
-    }
-    return external_node_path_default().join(agentsDir, yamlFiles[0]);
+    return yamlFiles.map((f) => external_node_path_default().join(agentsDir, f));
 }
 /** Read, parse, and Zod-validate the manifest at `manifestPath` (AC-20). */
 function loadAgentManifest(manifestPath, deps = {}) {
@@ -34852,11 +34878,6 @@ function loadAgentManifest(manifestPath, deps = {}) {
         throw new RunnerError(`Agent manifest at ${manifestPath} failed validation: ${issues}`);
     }
     return result.data;
-}
-/** Convenience: locate + load + validate in one call. */
-function loadManifest(devdigestDir, deps = {}) {
-    const manifestPath = findManifestPath(devdigestDir, deps);
-    return loadAgentManifest(manifestPath, deps);
 }
 
 ;// CONCATENATED MODULE: ./src/skills.ts
@@ -35183,8 +35204,21 @@ function buildResultArtifact(input) {
     }
     return result.data;
 }
+/**
+ * Wrap one or more per-agent artifacts into the combined multi-agent bundle
+ * written as `devdigest-result.json` — one CI run may review the PR with more
+ * than one agent (a repo can have several exported agents' manifests).
+ */
+function buildResultBundle(artifacts) {
+    const result = CiResultBundle.safeParse({ version: RUNNER_VERSION, agents: artifacts });
+    if (!result.success) {
+        throw new RunnerError(`Internal error: built result bundle failed CiResultBundle validation: ${result.error.message}`);
+    }
+    return result.data;
+}
 
 ;// CONCATENATED MODULE: ./src/run.ts
+
 
 
 
@@ -35201,82 +35235,106 @@ async function runCi(deps) {
     const now = deps.now ?? Date.now;
     const fetchImpl = deps.fetchImpl ?? fetch;
     const fetchDiffImpl = deps.fetchDiff ?? fetchPrDiff;
+    let manifestPaths;
+    let ctx;
+    let githubToken;
+    let diff;
+    // Shared preconditions (Q5): a failure here aborts the ENTIRE run — no
+    // agent-specific work has happened yet, so there is nothing to isolate.
     try {
-        // 1. Load + validate the manifest BEFORE it is used for anything (AC-20).
-        const manifest = loadManifest(deps.devdigestDir, { readFile, readDir });
-        const skills = loadSkillBodies(deps.devdigestDir, manifest.skills, readFile);
-        // 2. Resolve CI context (PR number/title/body/repo) from env + event payload.
-        const ctx = resolvePrContext(deps.env, readFile);
-        const githubToken = deps.env.GITHUB_TOKEN;
+        manifestPaths = findManifestPaths(deps.devdigestDir, { readFile, readDir });
+        ctx = resolvePrContext(deps.env, readFile);
+        githubToken = deps.env.GITHUB_TOKEN;
         if (deps.postAs !== 'none' && !githubToken) {
             throw new RunnerError(`GITHUB_TOKEN is required to post as '${deps.postAs}'`);
         }
-        // 3. Assemble the diff from the CI context. Strip DevDigest's own exported
-        //    artifacts (`.devdigest/**`, the generated workflow) BEFORE parse: the
-        //    minified runner bundle would otherwise fail the whole review with a
-        //    GitHub 422 "diff too large", and reviewing our own config is noise.
         const rawDiff = await fetchDiffImpl(ctx, githubToken ?? '', fetchImpl);
-        const diff = parseUnifiedDiff(stripIgnoredFiles(rawDiff));
-        // 4. Run the SAME engine the studio uses. `reviewPullRequest` internally
-        //    calls `assemblePrompt`/`wrapUntrusted` (diff → `<untrusted
-        //    source="diff">`, prDescription → `<untrusted source="pr-description">`,
-        //    AC-21) and the mandatory `groundFindings()` gate (AC-22: an all-dropped
-        //    result is a valid zero-finding review, not an error — it flows through
-        //    normally below).
-        const start = now();
-        const outcome = await reviewPullRequest({
-            systemPrompt: manifest.system_prompt,
-            model: manifest.model,
-            diff,
-            llm: deps.llm,
-            strategy: manifest.strategy,
-            skills,
-            prDescription: ctx.body,
-            task: `Review PR #${ctx.prNumber}: ${ctx.title}`,
-        });
-        const durationMs = now() - start;
-        // 5. Deterministic verdict/gate from GROUNDED findings + `ci_fail_on`
-        //    (AC-23) — never `outcome.review.verdict`.
-        const payload = toReviewPayload(outcome.review, {
-            failOn: manifest.ci_fail_on,
-            diff,
-            title: manifest.name,
-        });
-        const blockers = countBlockers(outcome.review.findings, manifest.ci_fail_on);
-        const triggered = gateTriggered(outcome.review.findings, manifest.ci_fail_on);
-        // 6. Build + write the artifact before posting, so a GitHub-side posting
-        //    failure never loses the already-computed, already-grounded result.
-        const artifact = buildResultArtifact({
-            findings: outcome.review.findings,
-            costUsd: outcome.costUsd,
-            durationMs,
-            agent: manifest.name,
-            prNumber: ctx.prNumber,
-        });
-        writeFile(deps.resultPath, `${JSON.stringify(artifact, null, 2)}\n`);
-        // 7. Post per `post_as` (AC-24).
-        if (deps.postAs === 'github_review') {
-            await postGithubReview(ctx, githubToken, payload, fetchImpl);
-        }
-        else if (deps.postAs === 'pr_comment') {
-            await postPrComment(ctx, githubToken, payload.body, fetchImpl);
-        }
-        // 'none' → post nothing (exit-code only).
-        // 8. Exit non-zero IFF the gate triggered REQUEST_CHANGES (AC-25).
-        return {
-            exitCode: triggered ? 1 : 0,
-            artifact,
-            posted: { kind: deps.postAs, payload },
-            blockers,
-            gateTriggered: triggered,
-        };
+        diff = parseUnifiedDiff(stripIgnoredFiles(rawDiff));
     }
     catch (err) {
-        // Hard-fail (Q5): non-zero exit, nothing posted, no artifact, no synthetic
-        // review skeleton — regardless of which stage above threw.
         const message = err instanceof Error ? err.message : String(err);
-        return { exitCode: 1, artifact: null, posted: null, error: message };
+        return { exitCode: 1, agents: null, error: message };
     }
+    const agents = [];
+    for (const manifestPath of manifestPaths) {
+        const agentStem = external_node_path_default().basename(manifestPath).replace(/\.ya?ml$/, '');
+        try {
+            // 1. Load + validate the manifest BEFORE it is used for anything (AC-20).
+            const manifest = loadAgentManifest(manifestPath, { readFile });
+            const skills = loadSkillBodies(deps.devdigestDir, manifest.skills, readFile);
+            // 2. Run the SAME engine the studio uses. `reviewPullRequest` internally
+            //    calls `assemblePrompt`/`wrapUntrusted` (diff → `<untrusted
+            //    source="diff">`, prDescription → `<untrusted source="pr-description">`,
+            //    AC-21) and the mandatory `groundFindings()` gate (AC-22).
+            const start = now();
+            const outcome = await reviewPullRequest({
+                systemPrompt: manifest.system_prompt,
+                model: manifest.model,
+                diff,
+                llm: deps.llm,
+                strategy: manifest.strategy,
+                skills,
+                prDescription: ctx.body,
+                task: `Review PR #${ctx.prNumber}: ${ctx.title}`,
+            });
+            const durationMs = now() - start;
+            // 3. Deterministic verdict/gate from GROUNDED findings + `ci_fail_on`
+            //    (AC-23) — never `outcome.review.verdict`.
+            const payload = toReviewPayload(outcome.review, {
+                failOn: manifest.ci_fail_on,
+                diff,
+                title: manifest.name,
+            });
+            const blockers = countBlockers(outcome.review.findings, manifest.ci_fail_on);
+            const triggered = gateTriggered(outcome.review.findings, manifest.ci_fail_on);
+            // 4. Build the artifact before posting, so a GitHub-side posting failure
+            //    never loses the already-computed, already-grounded result.
+            const artifact = buildResultArtifact({
+                findings: outcome.review.findings,
+                costUsd: outcome.costUsd,
+                durationMs,
+                agent: manifest.name,
+                prNumber: ctx.prNumber,
+            });
+            // 5. Post per `post_as` (AC-24) — each agent posts its OWN review/comment;
+            //    `toReviewPayload`'s title already carries `manifest.name`, so
+            //    multiple agents' posts on the same PR are distinguishable.
+            if (deps.postAs === 'github_review') {
+                await postGithubReview(ctx, githubToken, payload, fetchImpl);
+            }
+            else if (deps.postAs === 'pr_comment') {
+                await postPrComment(ctx, githubToken, payload.body, fetchImpl);
+            }
+            // 'none' → post nothing (exit-code only).
+            agents.push({
+                agentName: manifest.name,
+                ok: true,
+                artifact,
+                posted: { kind: deps.postAs, payload },
+                blockers,
+                gateTriggered: triggered,
+            });
+        }
+        catch (err) {
+            // Hard-fail for THIS agent only (Q5, now per-agent): nothing posted and
+            // no artifact contributed for it — but sibling agents still run.
+            const message = err instanceof Error ? err.message : String(err);
+            agents.push({ agentName: agentStem, ok: false, error: message });
+        }
+    }
+    // 6. Write ONE combined bundle from every agent that produced a grounded
+    //    result. Nothing written if all agents failed (AC-26/Q5, generalized).
+    const succeeded = agents.filter((a) => a.ok);
+    if (succeeded.length > 0) {
+        const bundle = buildResultBundle(succeeded.map((a) => a.artifact));
+        writeFile(deps.resultPath, `${JSON.stringify(bundle, null, 2)}\n`);
+    }
+    // 7. Exit non-zero iff ANY agent hard-failed OR any agent's gate triggered
+    //    REQUEST_CHANGES (AC-25, generalized to N agents).
+    const anyFailure = agents.some((a) => !a.ok);
+    const anyGateTriggered = succeeded.some((a) => a.gateTriggered);
+    const exitCode = anyFailure || anyGateTriggered ? 1 : 0;
+    return { exitCode, agents };
 }
 
 ;// CONCATENATED MODULE: ./src/index.ts
@@ -35327,12 +35385,19 @@ async function main(env = process.env) {
         readDir: external_node_fs_namespaceObject.readdirSync,
         writeFile: external_node_fs_namespaceObject.writeFileSync,
     });
-    if (result.artifact === null) {
+    if (result.agents === null) {
         console.error(`[agent-runner] FAILED: ${result.error}`);
     }
     else {
-        console.log(`[agent-runner] findings=${result.artifact.findings_count} blockers=${result.blockers} ` +
-            `gateTriggered=${result.gateTriggered} posted=${result.posted.kind}`);
+        for (const agent of result.agents) {
+            if (agent.ok) {
+                console.log(`[agent-runner] agent="${agent.agentName}" findings=${agent.artifact.findings_count} ` +
+                    `blockers=${agent.blockers} gateTriggered=${agent.gateTriggered} posted=${agent.posted.kind}`);
+            }
+            else {
+                console.error(`[agent-runner] agent="${agent.agentName}" FAILED: ${agent.error}`);
+            }
+        }
     }
     return result.exitCode;
 }
