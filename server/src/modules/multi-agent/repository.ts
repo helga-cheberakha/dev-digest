@@ -133,6 +133,64 @@ export class MultiAgentRepository {
     }));
   }
 
+  // ---- read: most recent parent run for a PR (Configure page "last run") ----
+
+  async getLatestRunForPr(
+    workspaceId: string,
+    prId: string,
+  ): Promise<{ id: string; ranAt: Date; agentIds: string[] } | undefined> {
+    const [row] = await this.db
+      .select({
+        id: t.multiAgentRuns.id,
+        ranAt: t.multiAgentRuns.ranAt,
+        agentIds: t.multiAgentRuns.agentIds,
+      })
+      .from(t.multiAgentRuns)
+      .where(
+        and(eq(t.multiAgentRuns.prId, prId), eq(t.multiAgentRuns.workspaceId, workspaceId)),
+      )
+      .orderBy(desc(t.multiAgentRuns.ranAt))
+      .limit(1);
+    return row;
+  }
+
+  // ---- read: recent parent runs for a repo (Configure page "Recent reviews") ----
+
+  async getRecentRunsForRepo(
+    workspaceId: string,
+    repoId: string,
+    limit: number,
+  ): Promise<
+    {
+      id: string;
+      ranAt: Date;
+      agentIds: string[];
+      prId: string;
+      prNumber: number | null;
+      prTitle: string | null;
+    }[]
+  > {
+    return this.db
+      .select({
+        id: t.multiAgentRuns.id,
+        ranAt: t.multiAgentRuns.ranAt,
+        agentIds: t.multiAgentRuns.agentIds,
+        prId: t.multiAgentRuns.prId,
+        prNumber: t.pullRequests.number,
+        prTitle: t.pullRequests.title,
+      })
+      .from(t.multiAgentRuns)
+      .innerJoin(t.pullRequests, eq(t.pullRequests.id, t.multiAgentRuns.prId))
+      .where(
+        and(
+          eq(t.multiAgentRuns.workspaceId, workspaceId),
+          eq(t.pullRequests.repoId, repoId),
+        ),
+      )
+      .orderBy(desc(t.multiAgentRuns.ranAt))
+      .limit(limit);
+  }
+
   // ---- read: estimates — most-recent done run per agent (global) -------------
 
   /**

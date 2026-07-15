@@ -29,6 +29,8 @@ interface FindingsTabProps {
   onOpenTrace: (id: string) => void;
   onDelete: (id: string) => void;
   onRunDone: () => void;
+  /** Navigate to a multi-agent run's results page (RunHistory's grouped batch row). */
+  onViewMultiAgentRun?: (multiAgentRunId: string) => void;
 }
 
 export function FindingsTab({
@@ -48,6 +50,7 @@ export function FindingsTab({
   onOpenTrace,
   onDelete,
   onRunDone,
+  onViewMultiAgentRun,
 }: FindingsTabProps) {
   const handleCancelAll = useCallback(() => {
     liveRunIds.forEach((id) => cancelMutation.mutate(id));
@@ -165,6 +168,7 @@ export function FindingsTab({
             onOpenTrace={handleOpenTrace}
             onGoToReview={handleGoToReview}
             onDelete={handleDelete}
+            onViewMultiAgentRun={onViewMultiAgentRun}
           />
         </div>
       )}

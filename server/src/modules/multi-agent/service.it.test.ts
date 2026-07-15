@@ -347,6 +347,40 @@ d('MultiAgentService — integration (real Postgres)', () => {
     expect(agent1Estimate!.est_cost_usd).not.toBeNull();
   });
 
+  it('getLatestRun: returns the most recent parent run for a PR, or null when none exist', async () => {
+    // A different PR (no multi-agent runs yet) — must return null, not throw.
+    const [otherPr] = await pg.handle.db
+      .insert(t.pullRequests)
+      .values({
+        workspaceId,
+        repoId,
+        number: 999,
+        title: 'no runs yet',
+        author: 'x',
+        branch: 'x',
+        base: 'main',
+        headSha: 'x',
+      })
+      .returning();
+    expect(await service.getLatestRun(workspaceId, otherPr!.id)).toBeNull();
+
+    // Two parent runs for `prId`, seconds apart — getLatestRun must surface the newer one.
+    const older = new Date(Date.now() - 60_000);
+    const newer = new Date();
+    await pg.handle.db
+      .insert(t.multiAgentRuns)
+      .values({ workspaceId, prId, agentIds: [agentId1], ranAt: older });
+    const [parent2] = await pg.handle.db
+      .insert(t.multiAgentRuns)
+      .values({ workspaceId, prId, agentIds: [agentId1, agentId2], ranAt: newer })
+      .returning();
+
+    const latest = await service.getLatestRun(workspaceId, prId);
+    expect(latest).not.toBeNull();
+    expect(latest!.id).toBe(parent2!.id);
+    expect(latest!.agent_count).toBe(2);
+  });
+
   // --------------------------------------------------------------------------
   // Fixture generation: produces the golden JSON files used by the schema-drift
   // guard (see __fixtures__/*.fixture.json, validated statically and without

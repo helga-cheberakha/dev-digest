@@ -31,3 +31,4 @@ server/reports/
 
 # skill-creator iteration scratch (benchmarks, grading, blind-eval snapshots)
 .claude/skills/*-workspace/
+.claude/settings.local.json

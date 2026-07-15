@@ -5,11 +5,10 @@
 "use client";
 
 import React from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import {
   Button,
-  CategoryTag,
   CircularScore,
   Skeleton,
   ErrorState,
@@ -17,6 +16,9 @@ import {
   EmptyState,
   Icon,
   SeverityBadge,
+  SectionLabel,
+  SEV,
+  MonoLink,
 } from "@devdigest/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
@@ -28,6 +30,8 @@ import type {
   RunEvent,
 } from "@devdigest/shared";
 import { EvalInputMeta } from "@devdigest/shared";
+import { AppShell } from "@/components/app-shell";
+import { FindingCard } from "@/app/repos/[repoId]/pulls/[number]/_components/FindingCard";
 import { useMultiAgentRun } from "@/lib/hooks/multiAgent";
 import { usePrReviews, useRunEvents, useFindingAction } from "@/lib/hooks/reviews";
 import { SafeMarkdown } from "@/components/SafeMarkdown";
@@ -35,6 +39,7 @@ import RunTraceDrawer from "@/app/repos/[repoId]/pulls/[number]/_components/RunT
 import { EvalCaseModal } from "@/components/EvalCaseModal";
 import { formatCost } from "@/lib/cost";
 import { draftEvalCaseFromFinding, evalQueryKeys, fetchEvalCases } from "@/lib/api";
+import { agentIcon, agentColor } from "@/lib/agent-visual";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -72,11 +77,6 @@ function statusMeta(status: "running" | "done" | "failed") {
   return { color: "var(--crit)", label: "Failed" };
 }
 
-/** Format a finding's line range ("11" when single-line, else "11-15"). */
-function lineLabel(f: { start_line: number; end_line: number }): string {
-  return f.start_line === f.end_line ? `${f.start_line}` : `${f.start_line}-${f.end_line}`;
-}
-
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
@@ -93,238 +93,133 @@ function ColumnCard({
 }) {
   const t = useTranslations("runs");
   const { color, label } = statusMeta(liveStatus);
+  const iconName = agentIcon(col.agent_name);
+  const AgentIconCmp = Icon[iconName];
+  const agentClr = agentColor(col.agent_id);
 
   return (
     <div
       style={{
         border: "1px solid var(--border)",
-        borderRadius: 10,
-        padding: 16,
+        borderRadius: 9,
         background: "var(--bg-elevated)",
         display: "flex",
         flexDirection: "column",
-        gap: 10,
-        minWidth: 220,
-        flex: 1,
+        overflow: "hidden",
       }}
     >
-      {/* Header row */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <Icon.Brain size={15} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
-        <span style={{ fontWeight: 600, fontSize: 13, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {col.agent_name}
-        </span>
-        {/* Status: text + role so it's not conveyed by color alone (accessibility) */}
-        <span
-          role="status"
-          aria-label={`${col.agent_name} status: ${label}`}
-          style={{
-            fontSize: 11,
-            fontWeight: 600,
-            color,
-            border: `1px solid ${color}`,
-            borderRadius: 4,
-            padding: "1px 6px",
-            flexShrink: 0,
-          }}
-        >
-          {label}
-        </span>
-      </div>
-
-      {/* Model badge */}
-      {(col.provider || col.model) && (
-        <span className="mono" style={{ fontSize: 11, color: "var(--text-muted)" }}>
-          {[col.provider, col.model].filter(Boolean).join("/")}
-        </span>
-      )}
-
-      {/* Score circle */}
-      {liveStatus === "done" && col.score != null && (
-        <div style={{ display: "flex", justifyContent: "center" }}>
-          <CircularScore score={col.score} size={52} />
+      {/* Header — icon box + name/time·cost + score circle (or status while
+          not done), colored top strip identifies the agent. */}
+      <div style={{ padding: 12, borderBottom: "1px solid var(--border)", borderTop: `2px solid ${agentClr.ring}` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 30,
+              height: 30,
+              borderRadius: 8,
+              background: agentClr.bg,
+              flexShrink: 0,
+            }}
+          >
+            <AgentIconCmp size={16} style={{ color: agentClr.ring }} />
+          </div>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {col.agent_name}
+            </div>
+            <div className="mono tnum" style={{ fontSize: 10.5, color: "var(--text-muted)" }}>
+              {col.duration_ms != null && `${(col.duration_ms / 1000).toFixed(1)}s`}
+              {col.duration_ms != null && col.cost_usd != null && " · "}
+              {col.cost_usd != null && formatCost(col.cost_usd)}
+            </div>
+          </div>
+          {liveStatus === "done" && col.score != null ? (
+            <CircularScore score={col.score} size={32} stroke={3.5} />
+          ) : (
+            // Status: text + role so it's not conveyed by color alone (a11y)
+            <span
+              role="status"
+              aria-label={`${col.agent_name} status: ${label}`}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                fontSize: 11,
+                fontWeight: 600,
+                color,
+                border: `1px solid ${color}`,
+                borderRadius: 4,
+                padding: "1px 6px",
+                flexShrink: 0,
+              }}
+            >
+              {liveStatus === "running" && (
+                <Icon.RefreshCw size={10} style={{ animation: "ddspin 1s linear infinite" }} />
+              )}
+              {label}
+            </span>
+          )}
         </div>
-      )}
-
-      {/* Time + cost */}
-      <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
-        {col.duration_ms != null && `${(col.duration_ms / 1000).toFixed(1)}s`}
-        {col.duration_ms != null && col.cost_usd != null && " · "}
-        {col.cost_usd != null && formatCost(col.cost_usd)}
       </div>
 
       {/* Findings list */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
+      <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 7, flex: 1 }}>
         {col.findings.length === 0 ? (
           <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
             {t("column.noFindings")}
           </span>
         ) : (
-          <>
-            <span style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 2 }}>
-              {t("column.findingsCount", { count: col.findings.length })}
-            </span>
-            {col.findings.map((f) => (
+          col.findings.map((f) => {
+            const sev = SEV[f.severity];
+            const SevIconCmp = Icon[sev.icon];
+            return (
               <div
                 key={f.id}
-                style={{ display: "flex", alignItems: "flex-start", gap: 6, fontSize: 12 }}
+                style={{
+                  padding: "8px 10px",
+                  borderRadius: 6,
+                  background: "var(--bg-surface)",
+                  borderLeft: `2px solid ${sev.c}`,
+                  minWidth: 0,
+                }}
               >
-                <SeverityBadge severity={f.severity} compact />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <SafeMarkdown content={f.title} />
+                <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                  <SevIconCmp size={12} style={{ color: sev.c, flexShrink: 0 }} />
+                  <span style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.3, minWidth: 0, overflowWrap: "break-word" }}>
+                    <SafeMarkdown content={f.title} />
+                  </span>
                 </div>
-                <span
+                <div
                   className="mono"
-                  style={{ fontSize: 10, color: "var(--text-muted)", flexShrink: 0 }}
+                  style={{ fontSize: 10.5, color: "var(--text-muted)", marginTop: 4, wordBreak: "break-all" }}
                 >
                   {f.file}:{f.start_line}
-                </span>
+                </div>
               </div>
-            ))}
-          </>
+            );
+          })
         )}
       </div>
 
-      <Button kind="secondary" size="sm" icon="FileText" onClick={onViewTrace}>
-        {t("viewTrace")}
-      </Button>
-    </div>
-  );
-}
-
-/** Expanded finding card for Tabs mode — shows all 5 actions when open. */
-function TabsFindingCard({
-  f,
-  prId,
-  agentId,
-  onAction,
-  onCreateEvalCase,
-  actionPending,
-}: {
-  f: FindingRecord;
-  prId: string;
-  agentId: string | null;
-  /** Only "accept" and "dismiss" go to the network; "learn"/"reply" are local. */
-  onAction: (findingId: string, action: "accept" | "dismiss") => void;
-  onCreateEvalCase: (findingId: string) => void;
-  actionPending: boolean;
-}) {
-  const [expanded, setExpanded] = React.useState(false);
-  // Fix 2: Learn/Reply are "wired-but-inert" — local visual ack only, no network.
-  const [learnAck, setLearnAck] = React.useState(false);
-  const [replyAck, setReplyAck] = React.useState(false);
-  const accepted = !!f.accepted_at;
-  const dismissed = !!f.dismissed_at;
-
-  return (
-    <div
-      style={{
-        border: "1px solid var(--border)",
-        borderRadius: 8,
-        background: "var(--bg-elevated)",
-        overflow: "hidden",
-      }}
-    >
-      {/* Collapsed header: always visible */}
-      <button
-        type="button"
-        onClick={() => setExpanded((e) => !e)}
+      {/* Footer — View trace + findings count, on a slightly darker strip */}
+      <div
         style={{
+          padding: "9px 12px",
+          borderTop: "1px solid var(--border)",
+          background: "var(--bg-surface)",
           display: "flex",
           alignItems: "center",
-          gap: 8,
-          width: "100%",
-          padding: "8px 12px",
-          background: "none",
-          border: "none",
-          cursor: "pointer",
-          textAlign: "left",
+          justifyContent: "space-between",
         }}
       >
-        <SeverityBadge severity={f.severity} compact />
-        <CategoryTag category={f.category} />
-        <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {f.title}
+        <MonoLink onClick={onViewTrace}>{t("viewTrace")}</MonoLink>
+        <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+          {t("column.findingsCount", { count: col.findings.length })}
         </span>
-        <span className="mono" style={{ fontSize: 11, color: "var(--text-muted)", flexShrink: 0 }}>
-          {f.file}:{lineLabel(f)}
-        </span>
-        <span style={{ fontSize: 11, color: "var(--text-muted)", flexShrink: 0 }}>
-          {Math.round(f.confidence * 100)}%
-        </span>
-        <Icon.ChevronDown
-          size={14}
-          style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.2s", flexShrink: 0 }}
-        />
-      </button>
-
-      {/* Expanded body */}
-      {expanded && (
-        <div style={{ padding: "0 12px 12px", borderTop: "1px solid var(--border)" }}>
-          <div style={{ paddingTop: 10, fontSize: 13 }}>
-            <SafeMarkdown content={f.rationale} />
-          </div>
-          {f.suggestion && (
-            <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--border)", fontSize: 13 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 4 }}>
-                Suggested fix
-              </div>
-              <SafeMarkdown content={f.suggestion} />
-            </div>
-          )}
-
-          {/* 5-action row */}
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
-            <Button
-              kind="secondary"
-              size="sm"
-              icon="Check"
-              disabled={actionPending || accepted}
-              active={accepted}
-              onClick={() => onAction(f.id, "accept")}
-            >
-              Accept
-            </Button>
-            <Button
-              kind="ghost"
-              size="sm"
-              icon="X"
-              disabled={actionPending || dismissed}
-              active={dismissed}
-              onClick={() => onAction(f.id, "dismiss")}
-            >
-              Dismiss
-            </Button>
-            <Button
-              kind="ghost"
-              size="sm"
-              icon="Brain"
-              active={learnAck}
-              onClick={() => setLearnAck(true)}
-            >
-              Learn
-            </Button>
-            <Button
-              kind="ghost"
-              size="sm"
-              icon="FlaskConical"
-              disabled={!accepted && !dismissed}
-              onClick={() => onCreateEvalCase(f.id)}
-            >
-              Turn into eval case
-            </Button>
-            <Button
-              kind="ghost"
-              size="sm"
-              icon="MessageSquare"
-              active={replyAck}
-              onClick={() => setReplyAck(true)}
-            >
-              Reply to author
-            </Button>
-          </div>
-        </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -341,49 +236,57 @@ function ConflictsSection({ conflicts }: { conflicts: Conflict[] }) {
   if (conflicts.length === 0) return null;
 
   return (
-    <div style={{ marginTop: 24 }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          marginBottom: 12,
-        }}
+    <div style={{ marginTop: 22 }}>
+      <SectionLabel
+        icon="Activity"
+        right={
+          <label
+            style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, color: "var(--text-secondary)" }}
+            title={t("conflicts.onlyConflictsHint")}
+          >
+            {t("conflicts.onlyConflicts")}
+            <Toggle on={showOnlyConflicts} onChange={setShowOnlyConflicts} size={15} />
+          </label>
+        }
       >
-        <span style={{ fontWeight: 700, fontSize: 14 }}>{t("conflicts.title")}</span>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-secondary)" }}>
-          {t("conflicts.onlyConflicts")}
-          <Toggle on={showOnlyConflicts} onChange={setShowOnlyConflicts} size={14} />
-        </div>
-      </div>
+        {t("conflicts.title")}
+      </SectionLabel>
 
       {displayed.length === 0 ? (
         <div style={{ fontSize: 13, color: "var(--text-muted)", padding: "12px 0" }}>
           {t("conflicts.empty")}
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {displayed.map((c, i) => (
             <div
               key={`${c.file}:${c.line}:${i}`}
               style={{
                 border: "1px solid var(--border)",
                 borderRadius: 8,
-                padding: 12,
+                overflow: "hidden",
                 background: "var(--bg-elevated)",
               }}
             >
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                <span className="mono" style={{ fontSize: 11, color: "var(--text-muted)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", borderBottom: "1px solid var(--border)" }}>
+                <Icon.Code size={13} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
+                <span className="mono" style={{ fontSize: 12, flexShrink: 0 }}>
                   {c.file}:{c.line}
                 </span>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, marginLeft: 6, flex: 1, minWidth: 0, overflowWrap: "break-word" }}>
                   <SafeMarkdown content={c.title} />
-                </div>
+                </span>
               </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: `repeat(${c.takes.length}, 1fr)`,
+                  gap: 1,
+                  background: "var(--border)",
+                }}
+              >
                 {c.takes.map((take, ti) => (
-                  <ConflictTakeRow key={`${take.agent_id}:${ti}`} take={take} />
+                  <ConflictTakeCell key={`${take.agent_id}:${ti}`} take={take} />
                 ))}
               </div>
             </div>
@@ -394,27 +297,39 @@ function ConflictsSection({ conflicts }: { conflicts: Conflict[] }) {
   );
 }
 
-function ConflictTakeRow({ take }: { take: ConflictTake }) {
+/** One column in a conflict's grid — one per selected agent, "did not flag" included. */
+function ConflictTakeCell({ take }: { take: ConflictTake }) {
   const t = useTranslations("runs");
+  const iconName = agentIcon(take.persona);
+  const AgentIconCmp = Icon[iconName];
+  const agentClr = agentColor(take.agent_id);
+  const flagged = take.verdict !== "ignored";
+  const dotColor = take.verdict !== "ignored" ? (SEV[take.verdict]?.c ?? "var(--warn)") : "var(--text-muted)";
 
   return (
-    <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12 }}>
-      <span style={{ fontWeight: 600, minWidth: 100, flexShrink: 0, color: "var(--text-secondary)" }}>
-        {take.persona}
-      </span>
-      {take.verdict === "ignored" ? (
-        <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>
-          {t("conflicts.didNotFlag")}
+    <div style={{ padding: "10px 14px", background: "var(--bg-elevated)", minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 4 }}>
+        <AgentIconCmp size={12} style={{ color: agentClr.ring, flexShrink: 0 }} />
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{take.persona}</span>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 4 }}>
+        <span style={{ width: 7, height: 7, borderRadius: 99, background: dotColor, flexShrink: 0 }} />
+        <span
+          style={{
+            fontSize: 11,
+            fontWeight: 600,
+            color: flagged ? "var(--text-primary)" : "var(--text-muted)",
+            textTransform: flagged ? "uppercase" : "none",
+            letterSpacing: flagged ? "0.03em" : 0,
+          }}
+        >
+          {flagged ? take.verdict : t("conflicts.didNotFlag")}
         </span>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          <SeverityBadge severity={take.verdict} compact />
-          {/* Don't render empty notes (always '' for ignored, but guard here too) */}
-          {take.note && (
-            <div style={{ marginTop: 2 }}>
-              <SafeMarkdown content={take.note} />
-            </div>
-          )}
+      </div>
+      {/* Don't render empty notes (always '' for ignored, but guard here too) */}
+      {take.note && (
+        <div style={{ fontSize: 11.5, color: "var(--text-muted)", lineHeight: 1.4 }}>
+          <SafeMarkdown content={take.note} />
         </div>
       )}
     </div>
@@ -434,6 +349,7 @@ interface TraceDrawerState {
 export function MultiAgentResultsView() {
   const params = useParams<{ runId: string }>();
   const runId = params.runId ?? "";
+  const router = useRouter();
   const t = useTranslations("runs");
 
   // ── UI state ──────────────────────────────────────────────────────────────
@@ -474,19 +390,32 @@ export function MultiAgentResultsView() {
     () => (run?.columns ?? []).filter((c) => c.status === "running").map((c) => c.run_id),
     [run],
   );
-  const { events, running } = useRunEvents(runningRunIds);
+  const { events } = useRunEvents(runningRunIds);
 
-  // Fix 3: When the live run finishes, refetch so score/duration/cost/findings
-  // update from the DB (they stay null until the query is invalidated).
-  // Pattern mirrors RunStatus.tsx's wasRunning ref approach.
-  const wasRunningRef = React.useRef(false);
+  // Fix 3: Refetch as soon as EACH agent finishes, not only once every agent
+  // in the fan-out has finished — score/duration/cost/findings stay null until
+  // the query is invalidated, and gating that on the OVERALL `running` flag
+  // (only false once every SSE connection has closed) meant an agent that
+  // finished early never showed its result until the slowest sibling was done
+  // too. Track which run ids have already produced a terminal SSE event and
+  // invalidate the instant a NEW one appears. Also invalidate `["reviews",
+  // prId]` — Tabs mode's finding cards read `findingsForRun` from that query
+  // (usePrReviews), not from the multi-agent-run query, so without this a
+  // finished agent's findings only ever appeared after a full page reload.
+  const seenTerminalRunIdsRef = React.useRef<Set<string>>(new Set());
   React.useEffect(() => {
-    if (running) wasRunningRef.current = true;
-    if (!running && wasRunningRef.current) {
-      wasRunningRef.current = false;
-      void qc.invalidateQueries({ queryKey: ["multi-agent-run", runId] });
+    let sawNewTerminal = false;
+    for (const e of events) {
+      if ((e.kind === "result" || e.kind === "error") && !seenTerminalRunIdsRef.current.has(e.runId)) {
+        seenTerminalRunIdsRef.current.add(e.runId);
+        sawNewTerminal = true;
+      }
     }
-  }, [running, qc, runId]);
+    if (sawNewTerminal) {
+      void qc.invalidateQueries({ queryKey: ["multi-agent-run", runId] });
+      if (prId) void qc.invalidateQueries({ queryKey: ["reviews", prId] });
+    }
+  }, [events, qc, runId, prId]);
   const draftMutation = useMutation({
     mutationFn: draftEvalCaseFromFinding,
     onSuccess: (data) => setModal({ initial: data }),
@@ -523,22 +452,36 @@ export function MultiAgentResultsView() {
     [reviews],
   );
 
+  // ── Breadcrumb (shown in every state so the sidebar is always present) ────
+  const crumb = [
+    { label: t("page.crumb"), href: "/multi-agent/configure" },
+    ...(run?.pr_number != null ? [{ label: `#${run.pr_number}` }] : []),
+  ];
+
   // ── Loading / error states ────────────────────────────────────────────────
   if (isLoading) {
     return (
-      <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 12 }}>
-        <Skeleton height={32} />
-        <div style={{ display: "flex", gap: 12 }}>
-          <Skeleton height={240} />
-          <Skeleton height={240} />
-          <Skeleton height={240} />
+      <AppShell crumb={crumb}>
+        <div style={{ maxWidth: 1280, margin: "0 auto", padding: 24, display: "flex", flexDirection: "column", gap: 12 }}>
+          <Skeleton height={32} />
+          <div style={{ display: "flex", gap: 12 }}>
+            <Skeleton height={240} />
+            <Skeleton height={240} />
+            <Skeleton height={240} />
+          </div>
         </div>
-      </div>
+      </AppShell>
     );
   }
 
   if (isError || !run) {
-    return <ErrorState title="Could not load multi-agent run." />;
+    return (
+      <AppShell crumb={crumb}>
+        <div style={{ maxWidth: 1280, margin: "0 auto", padding: 24 }}>
+          <ErrorState title="Could not load multi-agent run." />
+        </div>
+      </AppShell>
+    );
   }
 
   const totalDurationLabel =
@@ -546,12 +489,63 @@ export function MultiAgentResultsView() {
       ? t("page.running")
       : `${(run.total_duration_ms / 1000).toFixed(1)}s`;
 
+  // Live per-agent progress (independent of totalDurationLabel — that only
+  // reflects total_duration_ms once ALL agents are done).
+  const liveStatuses = run.columns.map((c) => getLiveStatus(c, events));
+  const doneOrFailedCount = liveStatuses.filter((s) => s !== "running").length;
+  const anyRunning = liveStatuses.some((s) => s === "running");
+
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div style={{ padding: 24 }}>
+    <AppShell crumb={crumb}>
+      <div style={{ maxWidth: 1280, margin: "0 auto", padding: 24 }}>
       {/* Header */}
       <div style={{ marginBottom: 20 }}>
-        <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>{t("page.title")}</h1>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>{t("page.title")}</h1>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+            <Button
+              kind="secondary"
+              size="sm"
+              icon="RefreshCw"
+              disabled={anyRunning}
+              onClick={() => router.push(`/multi-agent/configure?prId=${run.pr_id}`)}
+            >
+              {t("page.runAgain")}
+            </Button>
+            <div
+              style={{
+                display: "flex",
+                gap: 2,
+                background: "var(--bg-surface)",
+                border: "1px solid var(--border)",
+                borderRadius: 7,
+                padding: 2,
+              }}
+            >
+              {(["columns", "tabs"] as const).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setMode(k)}
+                  style={{
+                    padding: "4px 12px",
+                    fontSize: 11.5,
+                    fontWeight: 600,
+                    borderRadius: 5,
+                    border: "none",
+                    textTransform: "capitalize",
+                    cursor: "pointer",
+                    background: mode === k ? "var(--bg-elevated)" : "transparent",
+                    color: mode === k ? "var(--text-primary)" : "var(--text-muted)",
+                  }}
+                >
+                  {t(`page.view.${k}`)}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
         {run.pr_number != null && (
           <div style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4 }}>
             PR #{run.pr_number}
@@ -564,29 +558,42 @@ export function MultiAgentResultsView() {
             cost: formatCost(run.total_cost_usd),
           })}
         </div>
+        {/* Live progress banner — makes "agents are running right now" unmissable,
+            not just inferable from per-column badges. */}
+        {anyRunning && (
+          <div
+            role="status"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              marginTop: 10,
+              padding: "6px 12px",
+              borderRadius: 6,
+              background: "var(--accent-bg)",
+              color: "var(--accent-text)",
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            <Icon.RefreshCw size={14} style={{ animation: "ddspin 1s linear infinite" }} />
+            {t("page.progress", { done: doneOrFailedCount, total: run.columns.length })}
+          </div>
+        )}
       </div>
 
-      {/* Mode toggle */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-        <Button
-          kind={mode === "columns" ? "primary" : "secondary"}
-          size="sm"
-          onClick={() => setMode("columns")}
-        >
-          {t("page.view.columns")}
-        </Button>
-        <Button
-          kind={mode === "tabs" ? "primary" : "secondary"}
-          size="sm"
-          onClick={() => setMode("tabs")}
-        >
-          {t("page.view.tabs")}
-        </Button>
-      </div>
-
-      {/* Columns mode */}
+      {/* Columns mode — up to 5 columns share the row evenly (design:
+          `repeat(cols, minmax(220px, 1fr))`); beyond 5, scroll horizontally
+          rather than wrapping to a second row. */}
       {mode === "columns" && (
-        <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: `repeat(${Math.min(run.columns.length, 5)}, minmax(220px, 1fr))`,
+            gap: 12,
+            overflowX: run.columns.length > 5 ? "auto" : "visible",
+          }}
+        >
           {run.columns.map((col) => {
             const live = getLiveStatus(col, events);
             return (
@@ -610,33 +617,54 @@ export function MultiAgentResultsView() {
       {/* Tabs mode */}
       {mode === "tabs" && (
         <div>
-          {/* Tab bar */}
-          <div style={{ display: "flex", gap: 4, marginBottom: 16, flexWrap: "wrap" }}>
+          {/* Tab bar — underline tabs (design: flat row, colored underline on the
+              active tab), NOT boxed buttons. */}
+          <div
+            style={{
+              display: "flex",
+              gap: 4,
+              marginBottom: 20,
+              borderBottom: "1px solid var(--border)",
+              overflowX: "auto",
+            }}
+          >
             {run.columns.map((col, idx) => {
               const live = getLiveStatus(col, events);
               const isActive = idx === activeAgentIdx;
+              const iconName = agentIcon(col.agent_name);
+              const AgentIconCmp = Icon[iconName];
+              const color = agentColor(col.agent_id);
               return (
                 <button
                   key={col.run_id}
                   type="button"
                   onClick={() => setActiveAgentIdx(idx)}
                   style={{
-                    padding: "6px 14px",
-                    borderRadius: 6,
-                    border: isActive ? "1px solid var(--accent)" : "1px solid var(--border)",
-                    background: isActive ? "var(--accent-bg)" : "var(--bg-elevated)",
-                    color: isActive ? "var(--accent-text)" : "var(--text-primary)",
+                    padding: "10px 14px",
+                    border: "none",
+                    borderBottom: `2px solid ${isActive ? color.ring : "transparent"}`,
+                    marginBottom: -1,
+                    background: "transparent",
+                    color: isActive ? "var(--text-primary)" : "var(--text-secondary)",
                     cursor: "pointer",
                     fontSize: 13,
-                    fontWeight: isActive ? 600 : 400,
+                    fontWeight: isActive ? 600 : 500,
                     display: "flex",
                     alignItems: "center",
-                    gap: 6,
+                    gap: 8,
+                    whiteSpace: "nowrap",
                   }}
                 >
+                  <AgentIconCmp size={15} style={{ color: isActive ? color.ring : "var(--text-muted)", flexShrink: 0 }} />
                   {col.agent_name}
+                  {live === "running" && (
+                    <Icon.RefreshCw size={12} style={{ animation: "ddspin 1s linear infinite" }} />
+                  )}
                   {live === "done" && col.score != null && (
-                    <span style={{ fontSize: 11, color: col.score >= 75 ? "var(--ok)" : col.score >= 50 ? "var(--warn)" : "var(--crit)" }}>
+                    <span
+                      className="tnum"
+                      style={{ fontSize: 11, fontWeight: 700, color: col.score >= 70 ? "var(--ok)" : col.score >= 50 ? "var(--warn)" : "var(--crit)" }}
+                    >
                       {col.score}
                     </span>
                   )}
@@ -653,67 +681,79 @@ export function MultiAgentResultsView() {
 
             return (
               <div>
-                {/* Summary card */}
-                <div
-                  style={{
-                    border: "1px solid var(--border)",
-                    borderRadius: 10,
-                    padding: 16,
-                    background: "var(--bg-elevated)",
-                    marginBottom: 12,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 16,
-                  }}
-                >
-                  {live === "done" && col.score != null && (
-                    <CircularScore score={col.score} size={52} />
-                  )}
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                      <span
-                        role="status"
-                        aria-label={`${col.agent_name} status: ${statusMeta(live).label}`}
-                        style={{ fontSize: 11, fontWeight: 600, color: statusMeta(live).color, border: `1px solid ${statusMeta(live).color}`, borderRadius: 4, padding: "1px 6px" }}
-                      >
-                        {statusMeta(live).label}
-                      </span>
-                      {col.verdict && (
-                        <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                          <SafeMarkdown content={col.verdict} />
-                        </div>
+                {/* Summary card — design: no icon, big agent-colored name,
+                    description below; "View trace" + time/cost stacked on the
+                    right. Status badge only surfaces while running/failed
+                    (a11y, non-color-only) — a finished run is conveyed by the
+                    score circle alone, matching the design's clean done state. */}
+                {(() => {
+                  const agentClr = agentColor(col.agent_id);
+                  return (
+                    <div
+                      style={{
+                        border: "1px solid var(--border)",
+                        borderLeft: `3px solid ${agentClr.ring}`,
+                        borderRadius: 10,
+                        padding: 16,
+                        background: "var(--bg-elevated)",
+                        marginBottom: 12,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 16,
+                      }}
+                    >
+                      {live === "done" && col.score != null && (
+                        <CircularScore score={col.score} size={52} />
                       )}
-                    </div>
-                    {col.summary ? (
-                      <div style={{ fontSize: 13 }}>
-                        <SafeMarkdown content={col.summary} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                          <span style={{ fontSize: 14, fontWeight: 600, color: agentClr.ring }}>
+                            {col.agent_name}
+                          </span>
+                          {live !== "done" && (
+                            <span
+                              role="status"
+                              aria-label={`${col.agent_name} status: ${statusMeta(live).label}`}
+                              style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600, color: statusMeta(live).color, border: `1px solid ${statusMeta(live).color}`, borderRadius: 4, padding: "1px 6px" }}
+                            >
+                              {live === "running" && (
+                                <Icon.RefreshCw size={10} style={{ animation: "ddspin 1s linear infinite" }} />
+                              )}
+                              {statusMeta(live).label}
+                            </span>
+                          )}
+                        </div>
+                        {col.summary ? (
+                          <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+                            <SafeMarkdown content={col.summary} />
+                          </div>
+                        ) : (
+                          <span style={{ fontSize: 13, color: "var(--text-muted)", fontStyle: "italic" }}>
+                            {t("tabs.noSummary")}
+                          </span>
+                        )}
                       </div>
-                    ) : (
-                      <span style={{ fontSize: 13, color: "var(--text-muted)", fontStyle: "italic" }}>
-                        {t("tabs.noSummary")}
-                      </span>
-                    )}
-                    <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
-                      {col.duration_ms != null && `${(col.duration_ms / 1000).toFixed(1)}s`}
-                      {col.duration_ms != null && col.cost_usd != null && " · "}
-                      {col.cost_usd != null && formatCost(col.cost_usd)}
+                      <div style={{ marginLeft: "auto", textAlign: "right", display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
+                        <MonoLink
+                          onClick={() =>
+                            setTraceDrawer({
+                              runId: col.run_id,
+                              agentName: col.agent_name,
+                              running: live === "running",
+                            })
+                          }
+                        >
+                          {t("viewTrace")}
+                        </MonoLink>
+                        <span className="mono tnum" style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                          {col.duration_ms != null && `${(col.duration_ms / 1000).toFixed(1)}s`}
+                          {col.duration_ms != null && col.cost_usd != null && " · "}
+                          {col.cost_usd != null && formatCost(col.cost_usd)}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                  <Button
-                    kind="secondary"
-                    size="sm"
-                    icon="FileText"
-                    onClick={() =>
-                      setTraceDrawer({
-                        runId: col.run_id,
-                        agentName: col.agent_name,
-                        running: live === "running",
-                      })
-                    }
-                  >
-                    {t("viewTrace")}
-                  </Button>
-                </div>
+                  );
+                })()}
 
                 {/* Finding cards */}
                 {colFindings.length === 0 ? (
@@ -721,14 +761,16 @@ export function MultiAgentResultsView() {
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {colFindings.map((f) => (
-                      <TabsFindingCard
+                      <FindingCard
                         key={f.id}
                         f={f}
-                        prId={prId ?? ""}
-                        agentId={col.agent_id}
-                        onAction={handleAction}
+                        onAction={(act) => {
+                          if (act === "accept" || act === "dismiss") handleAction(f.id, act);
+                        }}
                         onCreateEvalCase={handleCreateEvalCase}
-                        actionPending={action.isPending}
+                        pending={action.isPending}
+                        hasEvalCase={caseByFindingId.has(f.id)}
+                        showLearnReply
                       />
                     ))}
                   </div>
@@ -770,6 +812,7 @@ export function MultiAgentResultsView() {
           onClose={() => setModal(null)}
         />
       )}
-    </div>
+      </div>
+    </AppShell>
   );
 }

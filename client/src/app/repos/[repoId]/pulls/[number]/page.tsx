@@ -211,6 +211,7 @@ export default function PRDetailPage() {
               if (window.confirm("Delete this run from history? (its trace/logs are removed too)"))
                 deleteRun.mutate(id);
             }}
+            onViewMultiAgentRun={(id) => router.push(`/multi-agent/${id}`)}
             onRunDone={() => {
               invalidateActiveRuns();
               invalidateRunHistory();
