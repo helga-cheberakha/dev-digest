@@ -158,6 +158,57 @@ export class MultiAgentService {
   }
 
   /**
+   * Most recent multi-agent run launched for a PR, if any — powers the
+   * Configure page's "Last run" banner (AC-adjacent; not in the original spec,
+   * added per user request 2026-07-15). Best-effort: returns null rather than
+   * throwing when the PR has no multi-agent runs yet.
+   */
+  async getLatestRun(
+    workspaceId: string,
+    prId: string,
+  ): Promise<{ id: string; ran_at: string; agent_count: number } | null> {
+    const run = await this.repo.getLatestRunForPr(workspaceId, prId);
+    if (!run) return null;
+    return {
+      id: run.id,
+      ran_at: run.ranAt.toISOString(),
+      agent_count: run.agentIds.length,
+    };
+  }
+
+  /**
+   * Last N multi-agent runs launched for a repo, newest first — powers the
+   * Configure page's "Recent reviews" list. Generalizes getLatestRun's query
+   * shape (drop the per-PR filter + the limit(1), add the repo scope and a
+   * PR number/title join for display). Empty array when the repo has no
+   * multi-agent runs yet.
+   */
+  async getRecentRuns(
+    workspaceId: string,
+    repoId: string,
+    limit = 5,
+  ): Promise<
+    {
+      id: string;
+      ran_at: string;
+      agent_count: number;
+      pr_id: string;
+      pr_number: number | null;
+      pr_title: string | null;
+    }[]
+  > {
+    const runs = await this.repo.getRecentRunsForRepo(workspaceId, repoId, limit);
+    return runs.map((run) => ({
+      id: run.id,
+      ran_at: run.ranAt.toISOString(),
+      agent_count: run.agentIds.length,
+      pr_id: run.prId,
+      pr_number: run.prNumber,
+      pr_title: run.prTitle,
+    }));
+  }
+
+  /**
    * Per-agent cost/duration estimates from the single most-recent done run
    * (global across all PRs and workspaces).
    * est_duration_ms and est_cost_usd are null when the agent has zero prior

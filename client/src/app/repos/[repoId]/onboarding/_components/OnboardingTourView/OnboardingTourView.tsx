@@ -14,6 +14,7 @@ import {
   useOnboarding,
   useGenerateOnboarding,
 } from "../../../../../../lib/hooks/onboarding";
+import { formatTimeAgo } from "../../../../../../lib/time-ago";
 import type {
   OnboardingArtifact,
   OnboardingDiagram,
@@ -42,17 +43,6 @@ const ALL_SECTIONS = [
 type SectionId = (typeof ALL_SECTIONS)[number];
 
 // ---- Pure helpers ----
-
-function formatTimeAgo(dateString: string): string {
-  const diffMs = Date.now() - new Date(dateString).getTime();
-  const diffMin = Math.floor(diffMs / 60_000);
-  if (diffMin < 1) return "just now";
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffH = Math.floor(diffMin / 60);
-  if (diffH < 24) return `${diffH}h ago`;
-  const diffD = Math.floor(diffH / 24);
-  return `${diffD}d ago`;
-}
 
 function writeToClipboard(text: string): Promise<void> {
   return navigator.clipboard.writeText(text);

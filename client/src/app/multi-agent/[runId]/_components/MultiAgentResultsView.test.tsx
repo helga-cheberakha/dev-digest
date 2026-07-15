@@ -16,14 +16,23 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NextIntlClientProvider } from "next-intl";
 import type { MultiAgentRun, FindingRecord, ReviewRecord } from "@devdigest/shared";
 import messages from "../../../../../messages/en/runs.json";
+import prReviewMessages from "../../../../../messages/en/prReview.json";
 import fixtureRun from "../__fixtures__/multi-agent-run.fixture.json";
 
 // ---------------------------------------------------------------------------
 // Module mocks — declared before any imports of the mocked modules
 // ---------------------------------------------------------------------------
 
+const mockPush = vi.fn();
 vi.mock("next/navigation", () => ({
   useParams: vi.fn(() => ({ runId: "run-parent-1" })),
+  useRouter: () => ({ push: mockPush }),
+}));
+
+// AppShell renders children directly (same convention as
+// ConfigureRunView.test.tsx — the real AppShell needs a full ShellContext).
+vi.mock("@/components/app-shell", () => ({
+  AppShell: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
 vi.mock("@/lib/hooks/multiAgent", () => ({
@@ -102,6 +111,29 @@ vi.mock("@devdigest/ui", () => ({
   ErrorState: ({ title }: { title: string }) => (
     <div role="alert">{title}</div>
   ),
+  SectionLabel: ({
+    children,
+    right,
+  }: {
+    children?: React.ReactNode;
+    icon?: string;
+    right?: React.ReactNode;
+  }) => (
+    <div>
+      <span>{children}</span>
+      {right}
+    </div>
+  ),
+  SEV: {
+    CRITICAL: { c: "red", bg: "red-bg", icon: "AlertOctagon", label: "Critical" },
+    WARNING: { c: "orange", bg: "orange-bg", icon: "AlertTriangle", label: "Warning" },
+    SUGGESTION: { c: "blue", bg: "blue-bg", icon: "Lightbulb", label: "Suggestion" },
+    INFO: { c: "gray", bg: "gray-bg", icon: "Info", label: "Info" },
+  },
+  MonoLink: ({ children, onClick }: { children?: React.ReactNode; onClick?: () => void; href?: string }) => (
+    <button onClick={onClick}>{children}</button>
+  ),
+  ConfidenceNum: ({ value }: { value: number }) => <span>{Math.round(value * 100)}%</span>,
   Icon: new Proxy(
     {},
     { get: () => () => <svg data-testid="icon" /> },
@@ -351,7 +383,7 @@ function makeQC() {
 function renderView() {
   return render(
     <QueryClientProvider client={makeQC()}>
-      <NextIntlClientProvider locale="en" messages={{ runs: messages }}>
+      <NextIntlClientProvider locale="en" messages={{ runs: messages, prReview: prReviewMessages }}>
         <MultiAgentResultsView />
       </NextIntlClientProvider>
     </QueryClientProvider>,
@@ -417,13 +449,14 @@ describe("MultiAgentResultsView — Columns mode", () => {
     const scoreEl = screen.getByTestId("circular-score");
     expect(scoreEl).toHaveTextContent("75");
 
-    // Status indicators (role="status") for both columns
+    // Status indicators (role="status") — a DONE column shows its score circle
+    // instead (design: no status pill once finished), so only the failed
+    // column's status role renders here.
     const statusEls = screen.getAllByRole("status");
-    expect(statusEls.length).toBeGreaterThanOrEqual(2);
+    expect(statusEls.length).toBeGreaterThanOrEqual(1);
 
-    // Fixture: col-1 "done", col-2 "failed"
+    // Fixture: col-2 "failed"
     const statusTexts = statusEls.map((el) => el.textContent ?? "");
-    expect(statusTexts).toContain("Done");
     expect(statusTexts).toContain("Failed");
 
     // Conflict from fixture should render (title appears in both conflict header and take note)
@@ -458,7 +491,7 @@ describe("MultiAgentResultsView — Columns mode", () => {
     // Rerender triggers hook re-call — no manual refresh needed
     rerender(
       <QueryClientProvider client={makeQC()}>
-        <NextIntlClientProvider locale="en" messages={{ runs: messages }}>
+        <NextIntlClientProvider locale="en" messages={{ runs: messages, prReview: prReviewMessages }}>
           <MultiAgentResultsView />
         </NextIntlClientProvider>
       </QueryClientProvider>,
@@ -470,7 +503,11 @@ describe("MultiAgentResultsView — Columns mode", () => {
     expect(updatedStatuses).not.toContain("Running");
   });
 
-  it("invalidates the multi-agent-run query when live SSE run transitions from running to done", async () => {
+  it("invalidates as soon as ONE agent's SSE result event arrives, not only once every agent has finished", async () => {
+    // Regression test: previously the invalidate effect watched the AGGREGATE
+    // `running` flag from useRunEvents, which only flips false once every SSE
+    // connection in the batch has closed — an agent that finished early never
+    // showed its score/findings until the slowest sibling finished too.
     const qc = makeQC();
     const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
 
@@ -478,18 +515,22 @@ describe("MultiAgentResultsView — Columns mode", () => {
 
     const { rerender } = render(
       <QueryClientProvider client={qc}>
-        <NextIntlClientProvider locale="en" messages={{ runs: messages }}>
+        <NextIntlClientProvider locale="en" messages={{ runs: messages, prReview: prReviewMessages }}>
           <MultiAgentResultsView />
         </NextIntlClientProvider>
       </QueryClientProvider>,
     );
 
-    // Run finishes: running flips from true to false
-    vi.mocked(useRunEvents).mockReturnValue({ events: [], running: false });
+    // col-2 finishes via its own SSE "result" event — `running` stays TRUE
+    // (other agents in the fan-out may still be in flight).
+    vi.mocked(useRunEvents).mockReturnValue({
+      events: [{ runId: "run-col-2", seq: 1, kind: "result", msg: "Review complete.", t: "5.0" }],
+      running: true,
+    });
 
     rerender(
       <QueryClientProvider client={qc}>
-        <NextIntlClientProvider locale="en" messages={{ runs: messages }}>
+        <NextIntlClientProvider locale="en" messages={{ runs: messages, prReview: prReviewMessages }}>
           <MultiAgentResultsView />
         </NextIntlClientProvider>
       </QueryClientProvider>,
@@ -498,6 +539,11 @@ describe("MultiAgentResultsView — Columns mode", () => {
     await waitFor(() => {
       expect(invalidateSpy).toHaveBeenCalledWith(
         expect.objectContaining({ queryKey: ["multi-agent-run", "run-parent-1"] }),
+      );
+      // Tabs mode's finding cards read the "reviews" query (usePrReviews), not
+      // the multi-agent-run query — both must refresh live.
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: ["reviews", "pr-1"] }),
       );
     });
   });
@@ -543,10 +589,9 @@ describe("MultiAgentResultsView — Tabs mode", () => {
     // The finding for ag-1 (FINDING_1: "Hardcoded secret") should be in the list
     // Click to expand it
     const findingTitle = screen.getByText("Hardcoded secret");
-    // The finding is the collapsed header button — click the parent button
-    const expandBtn = findingTitle.closest("button");
-    expect(expandBtn).not.toBeNull();
-    fireEvent.click(expandBtn!);
+    // FindingCard's collapsed header is a clickable div (not a button) —
+    // click bubbles up to its onClick regardless of the exact ancestor tag.
+    fireEvent.click(findingTitle);
 
     // 5 action buttons must appear in the expanded body
     expect(screen.getByText("Accept")).toBeInTheDocument();
@@ -599,11 +644,9 @@ describe("MultiAgentResultsView — Tabs mode", () => {
     // Switch to tabs mode
     fireEvent.click(screen.getByText("tabs"));
 
-    // Expand the finding
+    // Expand the finding (clickable div header — click bubbles to its onClick)
     const findingTitle = screen.getByText("Hardcoded secret");
-    const expandBtn = findingTitle.closest("button");
-    expect(expandBtn).not.toBeNull();
-    fireEvent.click(expandBtn!);
+    fireEvent.click(findingTitle);
 
     // Click Learn and Reply — must NOT call network mutate
     fireEvent.click(screen.getByText("Learn"));
@@ -734,5 +777,45 @@ describe("MultiAgentResultsView — Loading / error states", () => {
 
     renderView();
     expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+});
+
+describe("MultiAgentResultsView — Run again button", () => {
+  beforeEach(() => {
+    setDefaultMocks();
+    mockPush.mockClear();
+  });
+
+  it("is disabled while any column is still running", () => {
+    // Default RUN fixture: col-1 done, col-2 running.
+    renderView();
+
+    const runAgainBtn = screen.getByRole("button", { name: "Run again" });
+    expect(runAgainBtn).toBeDisabled();
+
+    fireEvent.click(runAgainBtn);
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it("navigates to Configure pre-filled with this PR once every column is done or failed", () => {
+    vi.mocked(useMultiAgentRun).mockReturnValue({
+      data: {
+        ...RUN,
+        columns: [
+          { ...RUN.columns[0], status: "done" },
+          { ...RUN.columns[1], status: "failed" },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useMultiAgentRun>);
+
+    renderView();
+
+    const runAgainBtn = screen.getByRole("button", { name: "Run again" });
+    expect(runAgainBtn).not.toBeDisabled();
+
+    fireEvent.click(runAgainBtn);
+    expect(mockPush).toHaveBeenCalledWith("/multi-agent/configure?prId=pr-1");
   });
 });

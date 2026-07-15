@@ -6,15 +6,24 @@
 import React from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { Button, Skeleton, ErrorState, Icon } from "@devdigest/ui";
+import { Button, Skeleton, ErrorState, Icon, Dropdown } from "@devdigest/ui";
 import { AppShell } from "@/components/app-shell";
 import { SafeMarkdown } from "@/components/SafeMarkdown";
-import { useAgentEstimates, useLaunchMultiAgentRun } from "@/lib/hooks/multiAgent";
+import {
+  useAgentEstimates,
+  useLaunchMultiAgentRun,
+  useLatestMultiAgentRun,
+  useRecentMultiAgentRuns,
+} from "@/lib/hooks/multiAgent";
 import { useAgents } from "@/lib/hooks/agents";
-import { usePullDetail } from "@/lib/hooks/core";
+import { usePullDetail, usePulls } from "@/lib/hooks/core";
+import { useActiveRepo } from "@/lib/repo-context";
 import { formatCost } from "@/lib/cost";
+import { formatTimeAgo } from "@/lib/time-ago";
+import { agentIcon, agentColor } from "@/lib/agent-visual";
 import type { AgentEstimate } from "@devdigest/shared";
 import type { Agent } from "@devdigest/shared";
+import type { RecentMultiAgentRun } from "@devdigest/shared";
 
 // ---- Helpers ----------------------------------------------------------------
 
@@ -58,6 +67,10 @@ function AgentCard({ estimate, agentName, checked, onToggle, noEstimateLabel }: 
   const costLabel =
     estimate.est_cost_usd !== null ? formatCost(estimate.est_cost_usd) : noEstimateLabel;
 
+  const iconName = agentIcon(agentName);
+  const AgentIconCmp = Icon[iconName];
+  const color = agentColor(estimate.agent_id);
+
   return (
     <div
       style={{
@@ -85,7 +98,20 @@ function AgentCard({ estimate, agentName, checked, onToggle, noEstimateLabel }: 
       />
 
       {/* Agent icon */}
-      <Icon.Cpu size={18} style={{ color: "var(--accent)", flexShrink: 0, marginTop: 2 }} />
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 28,
+          height: 28,
+          borderRadius: 7,
+          background: color.bg,
+          flexShrink: 0,
+        }}
+      >
+        <AgentIconCmp size={16} style={{ color: color.ring }} />
+      </div>
 
       {/* Content */}
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -129,6 +155,42 @@ function AgentCard({ estimate, agentName, checked, onToggle, noEstimateLabel }: 
   );
 }
 
+interface RecentRunRowProps {
+  run: RecentMultiAgentRun;
+  onClick: () => void;
+  itemLabel: string;
+  metaLabel: string;
+}
+
+function RecentRunRow({ run, onClick, itemLabel, metaLabel }: RecentRunRowProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "8px 12px",
+        border: "1px solid var(--border)",
+        borderRadius: 6,
+        background: "var(--bg-surface)",
+        color: "var(--text-secondary)",
+        fontSize: 13,
+        cursor: "pointer",
+        width: "100%",
+        textAlign: "left",
+      }}
+    >
+      <Icon.History size={14} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
+      <span style={{ color: "var(--text-primary)", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {itemLabel}
+      </span>
+      <span style={{ marginLeft: "auto", flexShrink: 0, color: "var(--text-muted)" }}>{metaLabel}</span>
+    </button>
+  );
+}
+
 // ---- ConfigureRunView -------------------------------------------------------
 
 export interface ConfigureRunViewProps {
@@ -142,7 +204,16 @@ export function ConfigureRunView({ initialPrId }: ConfigureRunViewProps) {
   const estimatesQuery = useAgentEstimates();
   const agentsQuery = useAgents();
   const launch = useLaunchMultiAgentRun();
-  const prDetailQuery = usePullDetail(initialPrId);
+
+  // The PR is changeable after mount (not just a one-time query-param seed) —
+  // the Configure page is also reachable cold (sidebar nav, no ?prId), where
+  // the design's own "Select a pull request…" dropdown is how one gets chosen.
+  const [prId, setPrId] = React.useState<string | undefined>(initialPrId);
+  const prDetailQuery = usePullDetail(prId);
+  const { repoId } = useActiveRepo();
+  const pullsQuery = usePulls(repoId);
+  const latestRunQuery = useLatestMultiAgentRun(prId);
+  const recentRunsQuery = useRecentMultiAgentRuns(repoId);
 
   const estimates = estimatesQuery.data ?? [];
   const agents = agentsQuery.data ?? [];
@@ -183,17 +254,22 @@ export function ConfigureRunView({ initialPrId }: ConfigureRunViewProps) {
 
   // ---- Derived state -------------------------------------------------------
   const checkedCount = checkedIds.size;
-  const hasPr = !!initialPrId;
+  const hasPr = !!prId;
   const canRun = hasPr && checkedCount >= 1 && !launch.isPending;
 
   const isLoading = estimatesQuery.isLoading || agentsQuery.isLoading;
   const isError = estimatesQuery.isError;
 
+  // Selectable PRs for the picker — matches the design's `PR_LIST.filter(status !== "stale")`.
+  const selectablePulls = (pullsQuery.data ?? []).filter(
+    (p) => p.status !== "stale" && p.id != null,
+  );
+
   // ---- Handlers ------------------------------------------------------------
   function handleRun() {
-    if (!initialPrId || checkedCount === 0) return;
+    if (!prId || checkedCount === 0) return;
     launch.mutate(
-      { prId: initialPrId, agent_ids: Array.from(checkedIds) },
+      { prId, agent_ids: Array.from(checkedIds) },
       { onSuccess: (data) => router.push(`/multi-agent/${data.id}`) },
     );
   }
@@ -228,37 +304,102 @@ export function ConfigureRunView({ initialPrId }: ConfigureRunViewProps) {
           </p>
         </div>
 
+        {/* Recent reviews section — last 5 multi-agent runs for the active repo */}
+        <section>
+          <h2 style={{ fontSize: 13, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>
+            {t("configure.recentRuns.title")}
+          </h2>
+          {recentRunsQuery.isLoading ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <Skeleton height={38} />
+              <Skeleton height={38} />
+            </div>
+          ) : (recentRunsQuery.data?.runs.length ?? 0) === 0 ? (
+            <div style={{ padding: "12px", color: "var(--text-muted)", fontSize: 13 }}>
+              {t("configure.recentRuns.empty")}
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {recentRunsQuery.data!.runs.map((run) => (
+                <RecentRunRow
+                  key={run.id}
+                  run={run}
+                  onClick={() => router.push(`/multi-agent/${run.id}`)}
+                  itemLabel={t("configure.recentRuns.item", {
+                    number: run.pr_number ?? 0,
+                    title: run.pr_title ?? "",
+                  })}
+                  metaLabel={t("configure.recentRuns.meta", {
+                    count: run.agent_count,
+                    time: formatTimeAgo(run.ran_at),
+                  })}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+
         {/* PR section */}
         <section>
           <h2 style={{ fontSize: 13, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>
             {t("configure.prLabel")}
           </h2>
-          {hasPr ? (
-            <div
+          <Dropdown
+            align="left"
+            width={380}
+            trigger={
+              <Button kind="secondary" icon="GitPullRequest" iconRight="ChevronDown">
+                {hasPr
+                  ? prDetailQuery.data
+                    ? t("configure.prValue", {
+                        number: prDetailQuery.data.number,
+                        title: prDetailQuery.data.title,
+                      })
+                    : prId
+                  : t("configure.selectPrPlaceholder")}
+              </Button>
+            }
+            items={
+              selectablePulls.length > 0
+                ? selectablePulls.map((p) => ({
+                    label: t("configure.prValue", { number: p.number, title: p.title }),
+                    icon: "GitPullRequest" as const,
+                    onClick: () => setPrId(p.id!),
+                  }))
+                : [{ label: t("configure.noPullRequests"), muted: true }]
+            }
+          />
+          {hasPr && latestRunQuery.data?.run && (
+            <button
+              type="button"
+              onClick={() => router.push(`/multi-agent/${latestRunQuery.data!.run!.id}`)}
               style={{
-                padding: "10px 14px",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                marginTop: 8,
+                padding: "8px 12px",
                 border: "1px solid var(--border)",
                 borderRadius: 6,
-                fontSize: 14,
-                color: "var(--text-primary)",
                 background: "var(--bg-surface)",
+                color: "var(--text-secondary)",
+                fontSize: 13,
+                cursor: "pointer",
+                width: "100%",
+                textAlign: "left",
               }}
             >
-              <Icon.GitPullRequest
-                size={14}
-                style={{ color: "var(--accent)", marginRight: 6, verticalAlign: "middle" }}
-              />
-              {prDetailQuery.data
-                ? t("configure.prValue", {
-                    number: prDetailQuery.data.number,
-                    title: prDetailQuery.data.title,
-                  })
-                : initialPrId}
-            </div>
-          ) : (
-            <p style={{ fontSize: 14, color: "var(--text-muted)", fontStyle: "italic" }}>
-              {t("configure.noPrSelected")}
-            </p>
+              <Icon.History size={14} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
+              <span>
+                {t("configure.lastRun", {
+                  count: latestRunQuery.data.run.agent_count,
+                  time: formatTimeAgo(latestRunQuery.data.run.ran_at),
+                })}
+              </span>
+              <span style={{ marginLeft: "auto", color: "var(--accent-text)", fontWeight: 600 }}>
+                {t("configure.viewResults")}
+              </span>
+            </button>
           )}
         </section>
 

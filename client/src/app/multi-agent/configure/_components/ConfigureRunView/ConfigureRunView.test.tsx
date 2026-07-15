@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NextIntlClientProvider } from "next-intl";
 import type { AgentEstimate } from "@devdigest/shared";
@@ -54,12 +54,32 @@ vi.mock("@devdigest/ui", () => ({
     <div>{title ?? body}</div>
   ),
   Icon: new Proxy({}, { get: () => () => <svg data-testid="icon" /> }),
+  Dropdown: ({
+    trigger,
+    items,
+  }: {
+    trigger: React.ReactNode;
+    items: { label: string; onClick?: () => void; muted?: boolean }[];
+  }) => (
+    <div>
+      {trigger}
+      <div data-testid="dropdown-items">
+        {items.map((it, i) => (
+          <button key={i} onClick={it.onClick} disabled={!it.onClick}>
+            {it.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  ),
 }));
 
 // Hooks — multi-agent
 vi.mock("@/lib/hooks/multiAgent", () => ({
   useAgentEstimates: vi.fn(),
   useLaunchMultiAgentRun: vi.fn(),
+  useLatestMultiAgentRun: vi.fn(),
+  useRecentMultiAgentRuns: vi.fn(),
 }));
 
 // Hooks — agents
@@ -67,14 +87,26 @@ vi.mock("@/lib/hooks/agents", () => ({
   useAgents: vi.fn(),
 }));
 
-// Hooks — core (provides usePullDetail for the PR number+title display)
+// Hooks — core (provides usePullDetail for the PR number+title display, and
+// usePulls to populate the PR-picker dropdown for the active repo)
 vi.mock("@/lib/hooks/core", () => ({
   usePullDetail: vi.fn(),
+  usePulls: vi.fn(),
 }));
 
-import { useAgentEstimates, useLaunchMultiAgentRun } from "@/lib/hooks/multiAgent";
+// repo-context — a fixed active repo id (the picker lists PRs for it)
+vi.mock("@/lib/repo-context", () => ({
+  useActiveRepo: () => ({ repoId: "repo-1" }),
+}));
+
+import {
+  useAgentEstimates,
+  useLaunchMultiAgentRun,
+  useLatestMultiAgentRun,
+  useRecentMultiAgentRuns,
+} from "@/lib/hooks/multiAgent";
 import { useAgents } from "@/lib/hooks/agents";
-import { usePullDetail } from "@/lib/hooks/core";
+import { usePullDetail, usePulls } from "@/lib/hooks/core";
 import { ConfigureRunView } from "./ConfigureRunView";
 
 // ---- Fixtures ---------------------------------------------------------------
@@ -176,6 +208,27 @@ function setDefaultMocks() {
     isLoading: false,
     isError: false,
   } as unknown as ReturnType<typeof usePullDetail>);
+
+  vi.mocked(usePulls).mockReturnValue({
+    data: [
+      { id: "pr-42", number: 42, title: "Fix security issue", status: "needs_review" },
+      { id: "pr-40", number: 40, title: "Stale one", status: "stale" },
+    ],
+    isLoading: false,
+    isError: false,
+  } as unknown as ReturnType<typeof usePulls>);
+
+  vi.mocked(useLatestMultiAgentRun).mockReturnValue({
+    data: { run: null },
+    isLoading: false,
+    isError: false,
+  } as unknown as ReturnType<typeof useLatestMultiAgentRun>);
+
+  vi.mocked(useRecentMultiAgentRuns).mockReturnValue({
+    data: { runs: [] },
+    isLoading: false,
+    isError: false,
+  } as unknown as ReturnType<typeof useRecentMultiAgentRuns>);
 }
 
 afterEach(() => {
@@ -192,15 +245,54 @@ describe("ConfigureRunView", () => {
   it("shows empty state and disabled run button when no PR is selected", () => {
     renderView(/* no prId */);
 
-    // Should show "No PR selected" indicator
-    expect(screen.getByText(/no pr selected/i)).toBeInTheDocument();
+    // The PR-picker trigger shows the placeholder, not a PR
+    expect(screen.getByText(/select a pull request/i)).toBeInTheDocument();
 
     // Empty-state body for the agents section
-    expect(screen.getByText(/navigate here from a pull request/i)).toBeInTheDocument();
+    expect(screen.getByText(/choose which pr to review above/i)).toBeInTheDocument();
 
     // Run button must be disabled with count 0
     const btn = screen.getByRole("button", { name: /run multi-agent review/i });
     expect(btn).toBeDisabled();
+  });
+
+  it("lists only non-stale PRs in the picker and selecting one populates the agents section", async () => {
+    renderView(/* no prId */);
+
+    const items = screen.getByTestId("dropdown-items");
+    // The stale PR is filtered out (matches the design's status !== "stale")
+    expect(within(items).queryByText(/stale one/i)).not.toBeInTheDocument();
+
+    const prItem = within(items).getByText(/fix security issue/i);
+    fireEvent.click(prItem);
+
+    // Selecting a PR from the picker populates the agents section (same as
+    // arriving with ?prId= pre-selected)
+    expect(await screen.findByText("Alpha Reviewer")).toBeInTheDocument();
+  });
+
+  it("shows a 'last run' banner for the selected PR and navigates to it on click", async () => {
+    vi.mocked(useLatestMultiAgentRun).mockReturnValue({
+      data: { run: { id: "run-prev", ran_at: new Date(Date.now() - 3_600_000).toISOString(), agent_count: 3 } },
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useLatestMultiAgentRun>);
+
+    renderView("pr-42");
+    await screen.findByText("Alpha Reviewer");
+
+    const banner = screen.getByText(/last run/i);
+    expect(banner).toBeInTheDocument();
+    fireEvent.click(banner);
+
+    expect(mockPush).toHaveBeenCalledWith("/multi-agent/run-prev");
+  });
+
+  it("does not show a 'last run' banner when the PR has no prior multi-agent runs", async () => {
+    renderView("pr-42");
+    await screen.findByText("Alpha Reviewer");
+
+    expect(screen.queryByText(/last run/i)).not.toBeInTheDocument();
   });
 
   it("populates agent cards with names and estimates when a PR is selected", async () => {
@@ -317,5 +409,44 @@ describe("ConfigureRunView", () => {
     options.onSuccess({ id: "run-xyz", run_ids: ["r1", "r2"] });
 
     expect(mockPush).toHaveBeenCalledWith("/multi-agent/run-xyz");
+  });
+
+  it("shows an empty message when there are no recent reviews", () => {
+    renderView(/* no prId */);
+
+    expect(screen.getByText(/no multi-agent reviews yet/i)).toBeInTheDocument();
+  });
+
+  it("lists up to 5 recent reviews and navigates to a run on click", () => {
+    vi.mocked(useRecentMultiAgentRuns).mockReturnValue({
+      data: {
+        runs: [
+          { id: "run-1", ran_at: new Date(Date.now() - 60_000).toISOString(), agent_count: 2, pr_id: "pr-1", pr_number: 10, pr_title: "First PR" },
+          { id: "run-2", ran_at: new Date(Date.now() - 3_600_000).toISOString(), agent_count: 3, pr_id: "pr-2", pr_number: 11, pr_title: "Second PR" },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useRecentMultiAgentRuns>);
+
+    renderView(/* no prId */);
+
+    expect(screen.getByText(/#10 · first pr/i)).toBeInTheDocument();
+    expect(screen.getByText(/#11 · second pr/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText(/#10 · first pr/i));
+    expect(mockPush).toHaveBeenCalledWith("/multi-agent/run-1");
+  });
+
+  it("shows loading skeletons for the recent reviews list while fetching", () => {
+    vi.mocked(useRecentMultiAgentRuns).mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+    } as unknown as ReturnType<typeof useRecentMultiAgentRuns>);
+
+    renderView(/* no prId */);
+
+    expect(screen.queryAllByTestId("skeleton").length).toBeGreaterThan(0);
   });
 });

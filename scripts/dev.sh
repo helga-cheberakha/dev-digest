@@ -92,30 +92,51 @@ if [ "$DB_ONLY" -eq 1 ]; then
 fi
 
 # --- dev servers -------------------------------------------------------------
-SERVER_PID=""
-cleanup() {
-  log "shutting down dev servers (Postgres stays up; stop it with: docker compose down)"
-  [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true
+# `tsx watch` / `next dev` spawn the real listener as a GRANDCHILD of the
+# `pnpm dev` wrapper, so a plain `kill $PID` leaves it orphaned and still
+# holding the port — the next run's kill_port then can't find it under the
+# wrapper's PID, and the API silently fails to bind. Walk the tree leaves-first
+# instead (mirrors scripts/e2e.sh's kill_tree).
+kill_tree() {
+  local pid="$1" kid
+  [ -n "$pid" ] || return 0
+  for kid in $(pgrep -P "$pid" 2>/dev/null || true); do kill_tree "$kid"; done
+  kill "$pid" 2>/dev/null || true
 }
-trap cleanup EXIT INT TERM
 
 # Free any port held by a stale previous session (tsx/next that survived Ctrl-C).
 kill_port() {
-  local port="$1" pids
+  local port="$1" pids pid
   pids="$(lsof -ti :"$port" -sTCP:LISTEN 2>/dev/null || true)"
   if [ -n "$pids" ]; then
     warn "port $port in use (PID $pids) — stopping stale process"
-    echo "$pids" | xargs kill 2>/dev/null || true
+    for pid in $pids; do kill_tree "$pid"; done
     sleep 1
   fi
 }
 
-log "starting API on :3001 (server)"
-kill_port 3001
+SERVER_PID=""
+cleanup() {
+  log "shutting down dev servers (Postgres stays up; stop it with: docker compose down)"
+  [ -n "$SERVER_PID" ] && kill_tree "$SERVER_PID"
+}
+trap cleanup EXIT INT TERM
+
+# API_PORT comes from server/.env (defaults to 3001 via .env.example, but a
+# dev machine may have it repointed — e.g. to 3101 to match scripts/e2e.sh).
+# Hardcoding 3001 here would kill_port the wrong port and never clear a stale
+# listener on the real one.
+API_PORT="$(grep -m1 '^API_PORT=' server/.env 2>/dev/null | cut -d= -f2)"
+API_PORT="${API_PORT:-3001}"
+
+log "starting API on :$API_PORT (server)"
+kill_port "$API_PORT"
 (cd server && pnpm dev) &
 SERVER_PID=$!
 
 if [ "$RUN_CLIENT" -eq 1 ]; then
+  # client's dev script hardcodes `next dev -p 3000` — WEB_PORT in client/.env
+  # is not read by it, so 3000 is the real port regardless of that setting.
   kill_port 3000
   log "starting web on :3000 (client) — Ctrl-C to stop both"
   (cd client && pnpm dev)

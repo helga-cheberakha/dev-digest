@@ -7,7 +7,7 @@
 import React from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { Button, Checkbox } from "@devdigest/ui";
+import { Button, Checkbox, Icon } from "@devdigest/ui";
 import type { AgentEstimate } from "@devdigest/shared";
 import { useAgents } from "../../../../../../../lib/hooks/agents";
 import { useRunReview } from "../../../../../../../lib/hooks/reviews";
@@ -16,6 +16,7 @@ import {
   useLaunchMultiAgentRun,
 } from "../../../../../../../lib/hooks/multiAgent";
 import { formatCost } from "../../../../../../../lib/cost";
+import { agentIcon, agentColor } from "../../../../../../../lib/agent-visual";
 import { DROPDOWN_WIDTH } from "./constants";
 
 /** Human-readable duration estimate from milliseconds. Mirrors formatCost's
@@ -205,6 +206,9 @@ export function RunReviewDropdown({
               const est = estimateMap.get(agent.id);
               const durationLabel = formatDurationMs(est?.est_duration_ms);
               const costLabel = formatCost(est?.est_cost_usd);
+              const iconName = agentIcon(agent.name);
+              const AgentIconCmp = Icon[iconName];
+              const color = agentColor(agent.id);
               return (
                 <div key={agent.id} style={{ padding: "4px 10px" }}>
                   <Checkbox
@@ -221,8 +225,11 @@ export function RunReviewDropdown({
                           minWidth: 0,
                         }}
                       >
-                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {agent.name}
+                        <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                          <AgentIconCmp size={13} style={{ color: color.ring, flexShrink: 0 }} />
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {agent.name}
+                          </span>
                         </span>
                         <span
                           style={{

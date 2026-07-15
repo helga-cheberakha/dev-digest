@@ -5,7 +5,13 @@
 
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { api } from "../api";
-import type { AgentEstimate, MultiAgentRun, MultiAgentRunRequest } from "@devdigest/shared";
+import type {
+  AgentEstimate,
+  LatestMultiAgentRun,
+  MultiAgentRun,
+  MultiAgentRunRequest,
+  RecentMultiAgentRun,
+} from "@devdigest/shared";
 
 // ---- Pre-run estimates ----
 
@@ -52,5 +58,27 @@ export function useMultiAgentRun(runId: string | null | undefined) {
     queryKey: ["multi-agent-run", runId],
     queryFn: () => api.get<MultiAgentRun>(`/multi-agent-runs/${runId}`),
     enabled: !!runId,
+  });
+}
+
+// ---- Latest multi-agent run for a PR (Configure page "last run" banner) ----
+
+/** Most recent multi-agent run launched for this PR, if any (null otherwise). */
+export function useLatestMultiAgentRun(prId: string | null | undefined) {
+  return useQuery({
+    queryKey: ["multi-agent-run-latest", prId],
+    queryFn: () => api.get<{ run: LatestMultiAgentRun | null }>(`/pulls/${prId}/multi-agent-runs/latest`),
+    enabled: !!prId,
+  });
+}
+
+// ---- Recent multi-agent runs for a repo (Configure page "Recent reviews") ----
+
+/** Last 5 multi-agent runs launched for this repo, newest first. */
+export function useRecentMultiAgentRuns(repoId: string | null | undefined) {
+  return useQuery({
+    queryKey: ["multi-agent-runs-recent", repoId],
+    queryFn: () => api.get<{ runs: RecentMultiAgentRun[] }>(`/repos/${repoId}/multi-agent-runs/recent`),
+    enabled: !!repoId,
   });
 }

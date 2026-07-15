@@ -21,6 +21,19 @@ with a new dated note, never edit or delete.
   types consumed by 5 sibling tasks in the same run — zero gate deadlocks, zero waived checks.
   (Came out of a GPT-5 cross-model review blocker, B1.) Evidence:
   `docs/retros/RETRO-2026-07-07-why-risk-brief.md`, `docs/plans/PLAN-why-risk-brief.md` (Testing strategy).
+- **2026-07-15 (multi-agent-review)** — For a small, well-localized fix batch where the
+  orchestrator already holds full context from a review report (pr-self-review's 5 HIGH findings,
+  <10 files), applying the fixes directly via `Edit` in the main session beat spawning a fresh
+  `implementer`: no cold-start, no INSIGHTS.md re-read, no context hand-off loss. Reserve fresh
+  implementer spawns for structural/multi-file work where that context doesn't already exist in
+  the main session. Evidence: `docs/retros/RETRO-2026-07-15-multi-agent-review.md` (What was
+  easy, commit `a53ccbb`).
+- **2026-07-15 (multi-agent-review)** — Running architecture-reviewer + plan-verifier as a code
+  gate (not just a plan-review) is what caught R7/R8 (contract-drift + no-integration-smoke risk)
+  in this run — gaps that no single task's Acceptance Criteria would have caught on their own,
+  even for a deliberately "keep it simple" MVP feature. Validates keeping the code-level gate even
+  when the plan itself was already reviewed. Evidence:
+  `docs/retros/RETRO-2026-07-15-multi-agent-review.md` (What was hard), `docs/plans/PLAN-multi-agent-review.md` (R7/R8).
 
 ## What Doesn't Work
 
@@ -51,6 +64,13 @@ with a new dated note, never edit or delete.
   raw JSONL transcript into orchestrator context (thousands of junk tokens). Task-notifications
   arrive automatically on completion; if a status check is truly needed, use `block:false`.
   Evidence: `docs/retros/RETRO-2026-07-07-onboarding-generator.md`.
+- **2026-07-15 (multi-agent-review)** — `analyze_journals.py`'s parallelism factor (Σ agent spans
+  ÷ wall-clock) can read well below 1.0x even when every batch genuinely ran concurrently: the
+  denominator is wall-clock, which also counts human review/manual-verification gaps between
+  batches (here, ~90 min of spec revision + a manual `/verify` integration checkpoint accounted
+  for most of the gap between a 0.69x reading and true batch overlap). Check the gap between batch
+  launch timestamps before concluding a low parallelism score means batches serialized. Evidence:
+  `docs/retros/RETRO-2026-07-15-multi-agent-review.md` (Order & parallelism).
 
 ## Recurring Errors & Fixes
 
