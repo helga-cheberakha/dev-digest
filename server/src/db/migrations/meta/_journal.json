@@ -183,6 +183,13 @@
       "when": 1784206541050,
       "tag": "0025_lumpy_young_avengers",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1784207904000,
+      "tag": "0026_curly_sunfire",
+      "breakpoints": true
     }
   ]
 }
