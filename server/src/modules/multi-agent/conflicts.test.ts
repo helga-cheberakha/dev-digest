@@ -157,6 +157,26 @@ describe('computeConflicts', () => {
     expect(conflicts[0]!.takes[0]!.note).toBe('My title');
   });
 
+  it('excludes a failed agent from takes entirely (never reviewed, not "ignored")', () => {
+    const columns: AgentColumn[] = [
+      makeColumn('agent-1', 'Agent One', [
+        { file: 'src/foo.ts', start_line: 5, severity: 'WARNING', title: 'Found it' },
+      ]),
+      { ...makeColumn('agent-2', 'Agent Two', []), status: 'failed' },
+    ];
+    const conflicts = computeConflicts(columns);
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]!.takes).toHaveLength(1);
+    expect(conflicts[0]!.takes.some((t) => t.agent_id === 'agent-2')).toBe(false);
+  });
+
+  it('returns empty array when the only column failed', () => {
+    const columns: AgentColumn[] = [
+      { ...makeColumn('agent-1', 'Agent One', []), status: 'failed' },
+    ];
+    expect(computeConflicts(columns)).toEqual([]);
+  });
+
   it('note on an ignored take is empty string', () => {
     const columns = [
       makeColumn('agent-1', 'Agent One', [
