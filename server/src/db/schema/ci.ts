@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, integer, timestamp, doublePrecision, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, integer, timestamp, doublePrecision, uniqueIndex, index } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { agents } from './agents';
 import { workspaces } from './core';
@@ -41,5 +41,9 @@ export const ciRuns = pgTable(
     uniqueIndex('ci_runs_install_run_uq')
       .on(t.ciInstallationId, t.githubRunId)
       .where(sql`ci_installation_id IS NOT NULL`),
+    // Supports CiRepository.listCiRuns(workspaceId), which filters by
+    // workspace_id and orders by ran_at desc — without this, every call is a
+    // sequential scan of ci_runs (flagged by Performance Reviewer as CRITICAL).
+    index('ci_runs_workspace_ran_at_idx').on(t.workspaceId, t.ranAt.desc()),
   ],
 );

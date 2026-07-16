@@ -1,0 +1,1 @@
+CREATE INDEX "ci_runs_workspace_ran_at_idx" ON "ci_runs" USING btree ("workspace_id","ran_at" DESC NULLS LAST);

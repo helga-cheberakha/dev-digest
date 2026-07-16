@@ -43,6 +43,6 @@ export function agentColor(agentId: string): { ring: string; bg: string } {
   for (let i = 0; i < agentId.length; i++) {
     hash = (hash * 31 + agentId.charCodeAt(i)) | 0;
   }
-  const idx = Math.abs(hash) % COLOR_TOKENS.length;
+  const idx = (hash >>> 0) % COLOR_TOKENS.length;
   return COLOR_TOKENS[idx]!;
 }
