@@ -176,6 +176,13 @@
       "when": 1784203496905,
       "tag": "0024_groovy_trauma",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1784206541050,
+      "tag": "0025_lumpy_young_avengers",
+      "breakpoints": true
     }
   ]
 }

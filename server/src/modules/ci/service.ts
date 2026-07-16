@@ -33,6 +33,11 @@ import { WORKFLOW_FILE_NAME } from './workflow.js';
 const _thisFile = fileURLToPath(import.meta.url);
 export const DEFAULT_RUNNER_PATH = join(dirname(_thisFile), 'assets', 'runner', 'index.js');
 
+/** Max size for a single file_overrides.contents value (AC-5 edit-before-push).
+ *  Guards against a workspace member pasting/generating multi-MB content into
+ *  a workflow file override — no legitimate generated CI file approaches this. */
+const MAX_FILE_OVERRIDE_BYTES = 100_000;
+
 /** Parse "owner/name" → RepoRef. Throws ValidationError on bad format. */
 function parseRepoRef(fullName: string): { owner: string; name: string } {
   const [owner, name] = fullName.split('/');
@@ -137,6 +142,13 @@ export class CiService {
     //    For each override, replace the matching generated file's contents; overrides for
     //    unknown paths are silently ignored (we never inject arbitrary new files).
     const fileOverrides = input.file_overrides ?? [];
+    for (const ov of fileOverrides) {
+      if (Buffer.byteLength(ov.contents, 'utf8') > MAX_FILE_OVERRIDE_BYTES) {
+        throw new ValidationError(
+          `file_overrides entry for "${ov.path}" exceeds the ${MAX_FILE_OVERRIDE_BYTES}-byte limit`,
+        );
+      }
+    }
     const files = fileOverrides.length > 0
       ? rawFiles.map((f) => {
           const ov = fileOverrides.find((o) => o.path === f.path);

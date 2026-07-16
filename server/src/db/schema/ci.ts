@@ -31,6 +31,7 @@ export const ciRuns = pgTable(
     githubUrl: text('github_url'),
     source: text('source'),
     githubRunId: text('github_run_id'),
+    durationMs: integer('duration_ms'),
   },
   (t) => [
     // Partial unique index: enforces (ci_installation_id, github_run_id) uniqueness

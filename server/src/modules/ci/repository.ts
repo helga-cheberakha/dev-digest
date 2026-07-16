@@ -142,6 +142,7 @@ export class CiRepository {
           // Fix D: do NOT store a computed display name in ci_runs.source.
           // Source is derived from ci_installations.target_type at READ time.
           githubRunId: data.githubRunId,
+          durationMs: data.durationMs,
           ranAt: new Date(),
         })
         .returning();
@@ -191,6 +192,7 @@ export class CiRepository {
         targetType: t.ciInstallations.targetType, // derived source at read time
         agentName: t.agents.name,
         githubRunId: t.ciRuns.githubRunId,
+        durationMs: t.ciRuns.durationMs,
       })
       .from(t.ciRuns)
       .leftJoin(t.ciInstallations, eq(t.ciRuns.ciInstallationId, t.ciInstallations.id))
@@ -212,6 +214,7 @@ export class CiRepository {
       source: r.targetType ? targetDisplayName(r.targetType) : 'Unknown',
       agent: r.agentName ?? null,
       github_run_id: r.githubRunId ?? null,
+      duration_s: r.durationMs != null ? r.durationMs / 1000 : null,
     }));
   }
 
