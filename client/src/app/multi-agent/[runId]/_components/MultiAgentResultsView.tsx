@@ -484,16 +484,14 @@ export function MultiAgentResultsView() {
     );
   }
 
-  const totalDurationLabel =
-    run.total_duration_ms === 0
-      ? t("page.running")
-      : `${(run.total_duration_ms / 1000).toFixed(1)}s`;
-
-  // Live per-agent progress (independent of totalDurationLabel — that only
-  // reflects total_duration_ms once ALL agents are done).
+  // Live per-agent progress.
   const liveStatuses = run.columns.map((c) => getLiveStatus(c, events));
   const doneOrFailedCount = liveStatuses.filter((s) => s !== "running").length;
   const anyRunning = liveStatuses.some((s) => s === "running");
+
+  const totalDurationLabel = anyRunning
+    ? t("page.running")
+    : `${(run.total_duration_ms / 1000).toFixed(1)}s`;
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
