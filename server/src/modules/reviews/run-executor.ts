@@ -304,20 +304,12 @@ export class ReviewRunExecutor {
       // the timeline colors on, NOT the model's self-reported verdict.
       const blockers = countBlockers(keptFindings, agent.ciFailOn);
 
-      // ---- Observability: agent_runs + ONE run_traces document --------------
-      await this.repo.completeAgentRun(runId, {
-        status: 'done',
-        durationMs,
-        tokensIn,
-        tokensOut,
-        costUsd,
-        findingsCount: findingRows.length,
-        grounding,
-        score: outcome.review.score,
-        blockers,
-        error: null,
-      });
-
+      // ---- Observability: ONE run_traces document, THEN agent_runs status ---
+      // The trace must be persisted BEFORE the status flip to 'done' — a
+      // caller polling agent_runs.status on its own connection (e.g. the
+      // test helper waitForPrRuns) treats 'done' as the signal the trace is
+      // already readable via GET /runs/:id/trace; the reverse order left a
+      // race window where that read returned undefined.
       const trace: RunTrace = {
         config: {
           agent: agent.name,
@@ -349,8 +341,20 @@ export class ReviewRunExecutor {
         // diff load + intent), not just events recorded inside this method.
         log: runLog.logFor(runId),
       };
-      runLog.info('Run complete; trace persisted');
       await this.repo.saveRunTrace(runId, trace);
+      runLog.info('Run complete; trace persisted');
+      await this.repo.completeAgentRun(runId, {
+        status: 'done',
+        durationMs,
+        tokensIn,
+        tokensOut,
+        costUsd,
+        findingsCount: findingRows.length,
+        grounding,
+        score: outcome.review.score,
+        blockers,
+        error: null,
+      });
       this.container.runBus.complete(runId);
 
       return { review, findings: findingRows, grounding, raw: outcome.review };
@@ -362,6 +366,9 @@ export class ReviewRunExecutor {
       const msg = cancelled ? 'Cancelled by user' : (err as Error).message;
       runLog.error(cancelled ? 'Run cancelled by user' : `Run failed: ${msg}`);
       await this.repo
+        .saveRunTrace(runId, this.traceFromBuffer(runId, pull, agent, '0/0 passed', Date.now() - start, specsRead))
+        .catch(() => undefined);
+      await this.repo
         .completeAgentRun(runId, {
           status,
           durationMs: Date.now() - start,
@@ -372,9 +379,6 @@ export class ReviewRunExecutor {
           grounding: '0/0 passed',
           error: msg,
         })
-        .catch(() => undefined);
-      await this.repo
-        .saveRunTrace(runId, this.traceFromBuffer(runId, pull, agent, '0/0 passed', Date.now() - start, specsRead))
         .catch(() => undefined);
       this.container.runBus.complete(runId);
       throw err;
