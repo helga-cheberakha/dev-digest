@@ -131,6 +131,33 @@
     "deleteCaseLabel": "Delete case",
     "deleteConfirm": "Delete eval case \"{name}\"? This cannot be undone."
   },
+  "stats": {
+    "window": {
+      "1d": "Last 24 h",
+      "30d": "Last 30 days",
+      "custom": "Custom"
+    },
+    "customFrom": "From",
+    "customTo": "To",
+    "tiles": {
+      "runs": "RUNS",
+      "acceptRate": "ACCEPT RATE",
+      "avgCost": "AVG COST / RUN",
+      "avgLatency": "AVG LATENCY"
+    },
+    "noData": "·",
+    "noAcceptRateLabel": "no data yet",
+    "latencyUnit": "ms",
+    "findingsBySeverity": "Findings by severity",
+    "severity": {
+      "critical": "Critical",
+      "warning": "Warning",
+      "suggestion": "Suggestion"
+    },
+    "trendTitle": "Run trend",
+    "emptyState": "No runs in this period.",
+    "errorState": "Could not load agent stats."
+  },
   "mount": {
     "body": "Mount point for {owner}. The Agent Editor shell + tab routing are wired by A2 — {owner} renders this tab."
   }

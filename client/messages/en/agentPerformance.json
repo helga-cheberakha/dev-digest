@@ -28,5 +28,14 @@
     "title": "No agent runs yet",
     "body": "Run a review (manually) to populate per-agent performance."
   },
-  "perAgent": "Per-agent"
+  "perAgent": "Per-agent",
+  "periodPicker": {
+    "30d": "30 days",
+    "1d": "1 day",
+    "custom": "Custom range",
+    "from": "From",
+    "to": "To",
+    "apply": "Apply",
+    "ariaLabel": "Select time period"
+  }
 }
