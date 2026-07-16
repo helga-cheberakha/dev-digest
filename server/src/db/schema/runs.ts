@@ -40,6 +40,13 @@ export const agentRuns = pgTable(
   },
   (t) => ({
     multiAgentRunIdx: index('agent_runs_multi_agent_run_id_idx').on(t.multiAgentRunId),
+    /** Serves getMostRecentDoneRunsForAgents' DISTINCT ON (agent_id) ORDER BY
+     *  agent_id, ran_at DESC entirely from the index, no heap sort needed. */
+    agentStatusRanAtIdx: index('agent_runs_agent_id_status_ran_at_idx').on(
+      t.agentId,
+      t.status,
+      t.ranAt,
+    ),
   }),
 );
 

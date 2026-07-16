@@ -24,6 +24,41 @@ import { toJsonSchema, parseWithRepair } from './structured.js';
 
 const NOT_SUPPORTED = 'OpenRouterProvider only implements completeStructured';
 
+/**
+ * The OpenAI SDK's built-in `maxRetries` only covers network failures and
+ * non-2xx statuses (`core.mjs`: `makeRequest` retries there, before the
+ * response is parsed). A 200 OK with a truncated/empty body — OpenRouter or
+ * its upstream model provider cutting the stream short — fails LATER, when
+ * the caller awaits the response and the SDK calls `response.json()`; the
+ * SDK has already "succeeded" by then and won't retry it. Surfaces as
+ * `TypeError: invalid json response body at <url> reason: ...` (undici's
+ * fetch). Detect that specific shape so a single flaky response doesn't
+ * fail an otherwise-healthy review.
+ */
+function isTransientBodyParseError(err: unknown): boolean {
+  return err instanceof Error && /invalid json response body/i.test(err.message);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Retries `fn` only for `isTransientBodyParseError` failures; everything
+ *  else (auth errors, no-choices, schema issues) rethrows immediately. */
+async function withBodyParseRetry<T>(fn: () => Promise<T>, maxRetries = 2): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt === maxRetries || !isTransientBodyParseError(err)) throw err;
+      await sleep(250 * (attempt + 1));
+    }
+  }
+  throw lastErr;
+}
+
 export interface OpenRouterProviderOptions {
   /** OpenAI-compatible base URL (default: OpenRouter). */
   baseURL?: string;
@@ -66,22 +101,24 @@ export class OpenRouterProvider implements LLMProvider {
     let lastRaw = '';
 
     for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
-      const res = await this.client.chat.completions.create({
-        model: req.model,
-        messages,
-        temperature: req.temperature ?? 0,
-        ...(req.maxTokens ? { max_tokens: req.maxTokens } : {}),
-        response_format: {
-          type: 'json_schema',
-          json_schema: { name: req.schemaName, schema: jsonSchema.schema, strict: true },
-        },
-        // OpenRouter session grouping — extra body field (spread is exempt from
-        // excess-property checks). Only sent when talking to OpenRouter.
-        ...(this.id === 'openrouter' && req.sessionId ? { session_id: req.sessionId } : {}),
-        // OpenRouter usage accounting — ask it to return the REAL generation
-        // cost (USD) in `usage.cost`, instead of estimating from a price book.
-        ...(this.id === 'openrouter' ? { usage: { include: true } } : {}),
-      });
+      const res = await withBodyParseRetry(() =>
+        this.client.chat.completions.create({
+          model: req.model,
+          messages,
+          temperature: req.temperature ?? 0,
+          ...(req.maxTokens ? { max_tokens: req.maxTokens } : {}),
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: req.schemaName, schema: jsonSchema.schema, strict: true },
+          },
+          // OpenRouter session grouping — extra body field (spread is exempt from
+          // excess-property checks). Only sent when talking to OpenRouter.
+          ...(this.id === 'openrouter' && req.sessionId ? { session_id: req.sessionId } : {}),
+          // OpenRouter usage accounting — ask it to return the REAL generation
+          // cost (USD) in `usage.cost`, instead of estimating from a price book.
+          ...(this.id === 'openrouter' ? { usage: { include: true } } : {}),
+        }),
+      );
 
       // OpenRouter can return HTTP 200 with no `choices` (an upstream provider
       // error / moderation / free-tier limit in the body) — surface it.

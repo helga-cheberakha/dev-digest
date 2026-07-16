@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client.js';
 import * as t from '../../db/schema.js';
 
@@ -209,36 +209,25 @@ export class MultiAgentRepository {
   > {
     if (agentIds.length === 0) return [];
 
-    // Fetch all done runs for the given agents, ordered newest-first.
-    // We take the first per agent in JS (avoids a DISTINCT ON raw SQL).
-    const runs = await this.db
-      .select({
-        id: t.agentRuns.id,
-        agentId: t.agentRuns.agentId,
-        durationMs: t.agentRuns.durationMs,
-        costUsd: t.agentRuns.costUsd,
-        ranAt: t.agentRuns.ranAt,
-      })
-      .from(t.agentRuns)
-      .where(
-        and(
-          inArray(t.agentRuns.agentId, agentIds),
-          eq(t.agentRuns.status, 'done'),
-        ),
-      )
-      .orderBy(desc(t.agentRuns.ranAt));
+    // DISTINCT ON (agent_id) lets Postgres pick the newest 'done' row per agent
+    // directly off the agent_runs_agent_id_status_ran_at_idx composite index —
+    // no fetch-all-then-dedup-in-JS, no server-side sort of the full result set.
+    type Row = { id: string; agent_id: string; duration_ms: number | null; cost_usd: number | null };
+    // postgres-js has no native array-parameter binding for `= ANY($1)`, so the
+    // id list is inlined as a parameterized ARRAY[...] literal (each element
+    // still goes through a placeholder — not string-concatenated SQL).
+    const agentIdList = sql.join(
+      agentIds.map((id) => sql`${id}`),
+      sql`, `,
+    );
+    const mostRecent = (await this.db.execute<Row>(sql`
+      SELECT DISTINCT ON (agent_id) id, agent_id, duration_ms, cost_usd
+      FROM agent_runs
+      WHERE agent_id = ANY(ARRAY[${agentIdList}]::uuid[]) AND status = 'done'
+      ORDER BY agent_id, ran_at DESC
+    `)) as unknown as Row[];
 
-    if (runs.length === 0) return [];
-
-    // Take the most-recent run per agent
-    const seenAgents = new Set<string>();
-    const mostRecent: (typeof runs)[number][] = [];
-    for (const run of runs) {
-      if (run.agentId && !seenAgents.has(run.agentId)) {
-        seenAgents.add(run.agentId);
-        mostRecent.push(run);
-      }
-    }
+    if (mostRecent.length === 0) return [];
 
     // Fetch review summaries for those runs (one review per run)
     const runIds = mostRecent.map((r) => r.id);
@@ -249,9 +238,9 @@ export class MultiAgentRepository {
     const reviewByRunId = new Map(reviews.map((r) => [r.runId, r.summary]));
 
     return mostRecent.map((run) => ({
-      agentId: run.agentId!,
-      durationMs: run.durationMs,
-      costUsd: run.costUsd,
+      agentId: run.agent_id,
+      durationMs: run.duration_ms,
+      costUsd: run.cost_usd,
       reviewSummary: reviewByRunId.get(run.id) ?? null,
     }));
   }
