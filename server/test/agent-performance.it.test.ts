@@ -1,0 +1,616 @@
+/**
+ * Integration tests for agent-performance routes (T3).
+ *
+ * Requires Docker (Testcontainers). Self-skips when Docker is unavailable.
+ *
+ * Covers:
+ *   AC-1  GET /agents/performance and GET /agents/:id/stats agree field-for-field
+ *         (runs, avg_cost_usd, avg_latency_ms, accept_rate) for the same agent
+ *   AC-12 Workspace isolation / no IDOR: requesting workspace B's agent from
+ *         workspace A's context returns 404 with no B data leaked
+ *   AC-13a Trend agreement: dashboard row trend[] values match stats trend[].values
+ *   AC-15 Neither endpoint touches LLMProvider or run-executor (static code grep)
+ *
+ * Array-binding path: recentRunSeries uses ARRAY[...]::uuid[] (INSIGHTS 2026-07-16).
+ * This is exercised implicitly by every test that calls the performance endpoint
+ * with active agents — the real Postgres validates the binding.
+ *
+ * Window scoping: seed agent_runs are placed in 2024-06-01..2024-06-30.
+ * Runs outside that window (2024-01-01) and non-done runs are seeded to verify exclusion.
+ */
+
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { execSync } from 'node:child_process';
+import { eq } from 'drizzle-orm';
+import { startPg, dockerAvailable, type PgFixture } from './helpers/pg.js';
+import { buildApp } from '../src/app.js';
+import { loadConfig } from '../src/platform/config.js';
+import { seed } from '../src/db/seed.js';
+import * as t from '../src/db/schema.js';
+
+const hasDocker = await dockerAvailable();
+const d = hasDocker ? describe : describe.skip;
+
+if (!hasDocker) {
+  // eslint-disable-next-line no-console
+  console.warn('[agent-performance] Docker not available — skipping integration tests.');
+}
+
+// ---------------------------------------------------------------------------
+// Shared state — populated in beforeAll
+// ---------------------------------------------------------------------------
+
+// Window used across all tests: a past date range with no ambiguity
+const FROM = '2024-06-01';
+const TO = '2024-06-30';
+const PERIOD_QUERY = `period=custom&from=${FROM}&to=${TO}`;
+
+d('AgentPerformance routes — integration (real Postgres)', () => {
+  let pg: PgFixture;
+  let workspaceId: string;    // "default" workspace (workspace A)
+  let agentAlphaId: string;
+  let agentBetaId: string;
+  let agentWsBId: string;     // workspace-B agent for IDOR test
+  let wsBId: string;
+
+  beforeAll(async () => {
+    pg = await startPg();
+    const config = loadConfig({ ...process.env, NODE_ENV: 'test' } as NodeJS.ProcessEnv);
+
+    // seed() creates the "default" workspace + user + demo data.
+    // LocalNoAuthProvider (used by default in buildApp) resolves this workspace.
+    const { workspaceId: wsId } = await seed(pg.handle.db);
+    workspaceId = wsId;
+    const db = pg.handle.db;
+
+    // ---- Insert test agents in workspace A ----
+    const [alphaAgent] = await db
+      .insert(t.agents)
+      .values({
+        workspaceId,
+        name: 'IT Agent Alpha',
+        provider: 'openai',
+        model: 'gpt-4o',
+        systemPrompt: 'Test agent alpha.',
+      })
+      .returning();
+    agentAlphaId = alphaAgent!.id;
+
+    const [betaAgent] = await db
+      .insert(t.agents)
+      .values({
+        workspaceId,
+        name: 'IT Agent Beta',
+        provider: 'openai',
+        model: 'gpt-4o',
+        systemPrompt: 'Test agent beta.',
+      })
+      .returning();
+    agentBetaId = betaAgent!.id;
+
+    // ---- Insert a repo + PR (needed for reviews.prId NOT NULL constraint) ----
+    const [repo] = await db
+      .insert(t.repos)
+      .values({
+        workspaceId,
+        owner: 'it-owner',
+        name: 'perf-test-repo',
+        fullName: 'it-owner/perf-test-repo',
+      })
+      .returning();
+    const repoId = repo!.id;
+
+    const [pr] = await db
+      .insert(t.pullRequests)
+      .values({
+        workspaceId,
+        repoId,
+        number: 9001,
+        title: 'IT perf test PR',
+        author: 'it-tester',
+        branch: 'feat/perf-test',
+        base: 'main',
+        headSha: 'deadbeef',
+        status: 'open',
+      })
+      .returning();
+    const prId = pr!.id;
+
+    // ---- Insert agent_runs for Agent Alpha ----
+    // A1: done, priced, in window
+    const [runA1] = await db
+      .insert(t.agentRuns)
+      .values({
+        workspaceId,
+        agentId: agentAlphaId,
+        status: 'done',
+        ranAt: new Date('2024-06-10T12:00:00.000Z'),
+        costUsd: 1.5,
+        durationMs: 100,
+        findingsCount: 2,
+        model: 'gpt-4o',
+        provider: 'openai',
+      })
+      .returning();
+
+    // A2: done, null cost, in window
+    const [runA2] = await db
+      .insert(t.agentRuns)
+      .values({
+        workspaceId,
+        agentId: agentAlphaId,
+        status: 'done',
+        ranAt: new Date('2024-06-20T12:00:00.000Z'),
+        costUsd: null,
+        durationMs: 200,
+        findingsCount: 3,
+        model: 'gpt-4o',
+        provider: 'openai',
+      })
+      .returning();
+
+    // A3: failed in window — should be EXCLUDED from aggregateAgents (status != 'done')
+    await db.insert(t.agentRuns).values({
+      workspaceId,
+      agentId: agentAlphaId,
+      status: 'failed',
+      ranAt: new Date('2024-06-25T12:00:00.000Z'),
+      costUsd: 999.0,
+      durationMs: 50,
+      findingsCount: 10,
+    });
+
+    // A_out: done but OUTSIDE the window — should be EXCLUDED by ranAt filter
+    await db.insert(t.agentRuns).values({
+      workspaceId,
+      agentId: agentAlphaId,
+      status: 'done',
+      ranAt: new Date('2024-01-01T12:00:00.000Z'),
+      costUsd: 999.0,
+      durationMs: 999,
+      findingsCount: 99,
+    });
+
+    // ---- Insert agent_runs for Agent Beta ----
+    // B1: done, priced, in window
+    const [runB1] = await db
+      .insert(t.agentRuns)
+      .values({
+        workspaceId,
+        agentId: agentBetaId,
+        status: 'done',
+        ranAt: new Date('2024-06-12T12:00:00.000Z'),
+        costUsd: 2.5,
+        durationMs: 150,
+        findingsCount: 1,
+        model: 'gpt-4o',
+        provider: 'openai',
+      })
+      .returning();
+
+    // B_pending: running (non-done) in window — should be EXCLUDED
+    await db.insert(t.agentRuns).values({
+      workspaceId,
+      agentId: agentBetaId,
+      status: 'running',
+      ranAt: new Date('2024-06-28T12:00:00.000Z'),
+    });
+
+    // ---- Insert reviews + findings for Alpha (A1 and A2) ----
+    // Review for A1: 1 accepted, 1 dismissed (acted=2, accept_rate=0.5)
+    const [revA1] = await db
+      .insert(t.reviews)
+      .values({
+        workspaceId,
+        prId,
+        agentId: agentAlphaId,
+        runId: runA1!.id,
+        kind: 'review',
+      })
+      .returning();
+
+    await db.insert(t.findings).values([
+      {
+        reviewId: revA1!.id,
+        file: 'src/foo.ts',
+        startLine: 1,
+        endLine: 1,
+        severity: 'CRITICAL',
+        category: 'security',
+        title: 'F1 accepted',
+        rationale: 'test',
+        confidence: 0.9,
+        kind: 'finding',
+        acceptedAt: new Date('2024-06-10T13:00:00.000Z'),
+        dismissedAt: null,
+      },
+      {
+        reviewId: revA1!.id,
+        file: 'src/foo.ts',
+        startLine: 2,
+        endLine: 2,
+        severity: 'WARNING',
+        category: 'style',
+        title: 'F2 dismissed',
+        rationale: 'test',
+        confidence: 0.7,
+        kind: 'finding',
+        acceptedAt: null,
+        dismissedAt: new Date('2024-06-10T13:00:00.000Z'),
+      },
+    ]);
+
+    // Review for A2: 1 pending finding
+    const [revA2] = await db
+      .insert(t.reviews)
+      .values({
+        workspaceId,
+        prId,
+        agentId: agentAlphaId,
+        runId: runA2!.id,
+        kind: 'review',
+      })
+      .returning();
+
+    await db.insert(t.findings).values({
+      reviewId: revA2!.id,
+      file: 'src/bar.ts',
+      startLine: 5,
+      endLine: 5,
+      severity: 'SUGGESTION',
+      category: 'readability',
+      title: 'F3 pending',
+      rationale: 'test',
+      confidence: 0.5,
+      kind: 'finding',
+      acceptedAt: null,
+      dismissedAt: null,
+    });
+
+    // ---- Insert review + finding for Beta (B1) ----
+    // 1 accepted finding (acted=1, accept_rate=1.0)
+    const [revB1] = await db
+      .insert(t.reviews)
+      .values({
+        workspaceId,
+        prId,
+        agentId: agentBetaId,
+        runId: runB1!.id,
+        kind: 'review',
+      })
+      .returning();
+
+    await db.insert(t.findings).values({
+      reviewId: revB1!.id,
+      file: 'src/baz.ts',
+      startLine: 10,
+      endLine: 10,
+      severity: 'WARNING',
+      category: 'perf',
+      title: 'F4 accepted',
+      rationale: 'test',
+      confidence: 0.8,
+      kind: 'finding',
+      acceptedAt: new Date('2024-06-12T13:00:00.000Z'),
+      dismissedAt: null,
+    });
+
+    // ---- Workspace B for IDOR test (AC-12) ----
+    const [wsB] = await db
+      .insert(t.workspaces)
+      .values({ name: 'workspace-b-isolation-test' })
+      .returning();
+    wsBId = wsB!.id;
+
+    const [agentWsB] = await db
+      .insert(t.agents)
+      .values({
+        workspaceId: wsBId,
+        name: 'WsB Private Agent',
+        provider: 'openai',
+        model: 'gpt-4o',
+        systemPrompt: 'Private agent in workspace B.',
+      })
+      .returning();
+    agentWsBId = agentWsB!.id;
+  });
+
+  afterAll(async () => {
+    // Cascade delete from workspaces removes all workspace-scoped rows
+    if (workspaceId) {
+      await pg.handle.db.delete(t.workspaces).where(eq(t.workspaces.id, workspaceId));
+    }
+    if (wsBId) {
+      await pg.handle.db.delete(t.workspaces).where(eq(t.workspaces.id, wsBId));
+    }
+    await pg?.stop();
+  });
+
+  // ---------------------------------------------------------------------------
+  // AC-1: GET /agents/performance and GET /agents/:id/stats agree field-for-field
+  // ---------------------------------------------------------------------------
+
+  it('AC-1: performance row and stats response agree on runs, avg_cost_usd, avg_latency_ms, accept_rate for the same agent', async () => {
+    const config = loadConfig({ ...process.env, NODE_ENV: 'test' } as NodeJS.ProcessEnv);
+    const app = await buildApp({ config, db: pg.handle.db });
+
+    try {
+      // GET /agents/performance — workspace-wide dashboard
+      const perfRes = await app.inject({
+        method: 'GET',
+        url: `/agents/performance?${PERIOD_QUERY}`,
+      });
+      expect(perfRes.statusCode, `GET /agents/performance returned ${perfRes.statusCode}: ${perfRes.body}`).toBe(200);
+
+      const perfBody = perfRes.json<{
+        summary: {
+          runs: number;
+          total_cost_usd: number | null;
+          avg_accept_rate: number | null;
+          most_active_agent: string | null;
+        };
+        agents: Array<{
+          agent_id: string;
+          runs: number;
+          avg_cost_usd: number | null;
+          avg_latency_ms: number | null;
+          accept_rate: number | null;
+          trend: number[];
+        }>;
+        cost_by_agent: Array<{ label: string; value: number }>;
+        cost_by_model: Array<{ label: string; value: number }>;
+      }>();
+
+      // Find Agent Alpha's row in the dashboard
+      const alphaRow = perfBody.agents.find((a) => a.agent_id === agentAlphaId);
+      expect(alphaRow).toBeDefined();
+
+      // GET /agents/:id/stats — per-agent detail
+      const statsRes = await app.inject({
+        method: 'GET',
+        url: `/agents/${agentAlphaId}/stats?${PERIOD_QUERY}`,
+      });
+      expect(statsRes.statusCode).toBe(200);
+
+      const statsBody = statsRes.json<{
+        runs: number;
+        avg_cost_usd: number | null;
+        avg_latency_ms: number | null;
+        accept_rate: number | null;
+        trend: Array<{ label: string; value: number }>;
+      }>();
+
+      // ---- AC-1: field-by-field equality ----
+      // runs: A1 + A2 are done in window (A3 is failed, A_out is outside)
+      expect(statsBody.runs).toBe(2);
+      expect(alphaRow!.runs).toBe(statsBody.runs);
+
+      // avg_cost_usd: only A1 is priced (1.5), A2 is null-cost → AVG(1.5) = 1.5
+      expect(statsBody.avg_cost_usd).toBeCloseTo(1.5, 10);
+      expect(alphaRow!.avg_cost_usd).toBeCloseTo(statsBody.avg_cost_usd!, 10);
+
+      // avg_latency_ms: (100+200)/2 = 150
+      expect(statsBody.avg_latency_ms).toBeCloseTo(150, 10);
+      expect(alphaRow!.avg_latency_ms).toBeCloseTo(statsBody.avg_latency_ms!, 10);
+
+      // accept_rate: 1 accepted, 1 dismissed → 1/(1+1) = 0.5
+      expect(statsBody.accept_rate).toBeCloseTo(0.5, 10);
+      expect(alphaRow!.accept_rate).toBeCloseTo(statsBody.accept_rate!, 10);
+    } finally {
+      await app.close();
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // AC-13a: Trend agreement — dashboard trend numbers == stats trend values
+  // ---------------------------------------------------------------------------
+
+  it('AC-13a: dashboard trend[] values equal stats trend StatPoint[] values for same agent+window', async () => {
+    const config = loadConfig({ ...process.env, NODE_ENV: 'test' } as NodeJS.ProcessEnv);
+    const app = await buildApp({ config, db: pg.handle.db });
+
+    try {
+      const perfRes = await app.inject({
+        method: 'GET',
+        url: `/agents/performance?${PERIOD_QUERY}`,
+      });
+      const perfBody = perfRes.json<{
+        agents: Array<{ agent_id: string; trend: number[] }>;
+      }>();
+      const alphaPerf = perfBody.agents.find((a) => a.agent_id === agentAlphaId);
+      expect(alphaPerf).toBeDefined();
+
+      const statsRes = await app.inject({
+        method: 'GET',
+        url: `/agents/${agentAlphaId}/stats?${PERIOD_QUERY}`,
+      });
+      const statsBody = statsRes.json<{
+        trend: Array<{ label: string; value: number }>;
+      }>();
+
+      // Both sides represent the same underlying series from recentRunSeries().
+      // Dashboard: number[] (raw findingsCount)
+      // Stats: StatPoint[] ({ label: ranAt ISO, value: findingsCount })
+      // The values must be equal element-by-element.
+      const statsValues = statsBody.trend.map((p) => p.value);
+      expect(alphaPerf!.trend).toEqual(statsValues);
+
+      // Also verify the trend content for Alpha.
+      // recentRunSeries() is NOT window-scoped — it returns the last N done runs
+      // globally. A_out (2024-01-01, findingsCount=99) is outside the custom
+      // period but is still a done run and sorts oldest-first:
+      //   A_out (2024-01-01, fc=99) < A1 (2024-06-10, fc=2) < A2 (2024-06-20, fc=3)
+      // → [99, 2, 3]
+      expect(alphaPerf!.trend).toEqual([99, 2, 3]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // AC-12: Workspace isolation — no IDOR
+  // ---------------------------------------------------------------------------
+
+  it('AC-12: GET /agents/:id/stats with workspace-B agent id returns 404 (workspace A context, no B data leaked)', async () => {
+    const config = loadConfig({ ...process.env, NODE_ENV: 'test' } as NodeJS.ProcessEnv);
+    const app = await buildApp({ config, db: pg.handle.db });
+
+    try {
+      // The app uses workspace A (LocalNoAuthProvider → "default" workspace).
+      // agentWsBId belongs to workspace B.
+      const res = await app.inject({
+        method: 'GET',
+        url: `/agents/${agentWsBId}/stats?period=30d`,
+      });
+
+      expect(res.statusCode).toBe(404);
+
+      // Verify the error envelope is clean — no workspace-B data leaked
+      const body = res.json<{
+        error?: { code?: string; message?: string };
+        agent_name?: unknown;
+        agent_id?: unknown;
+        runs?: unknown;
+      }>();
+
+      // Error envelope present
+      expect(body.error).toBeDefined();
+      expect(body.error!.code).toBe('not_found');
+
+      // The error message must NOT contain workspace-B agent's name
+      expect(body.error!.message).not.toContain('WsB Private Agent');
+      expect(body.error!.message).not.toContain(wsBId);
+
+      // No stats fields in the body
+      expect(body.agent_name).toBeUndefined();
+      expect(body.runs).toBeUndefined();
+    } finally {
+      await app.close();
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // AC-15: No LLM provider or run-executor dependency
+  // ---------------------------------------------------------------------------
+
+  it('AC-15: agent-performance module contains no LLMProvider or run-executor imports (static grep)', () => {
+    // Grep for actual import/require/from statements only — not comments that
+    // mention the forbidden symbols (service.ts has a comment saying "MUST NOT
+    // import LLMProvider" which should not trip this check).
+    // Pattern: lines starting with optional whitespace then 'import' or
+    // 'require(' that also contain the forbidden symbols.
+    let grepOutput = '';
+    let grepError = false;
+    try {
+      grepOutput = execSync(
+        String.raw`grep -rn "^\s*import.*\(LLMProvider\|run-executor\|runExecutor\)\|require.*\(LLMProvider\|run-executor\|runExecutor\)" server/src/modules/agent-performance/`,
+        { encoding: 'utf8', cwd: '/Users/helga/Sites/neoversity/dev-digest/dev-digest' },
+      );
+    } catch {
+      // grep exits 1 when no matches found — that's the success case for this test
+      grepError = true;
+    }
+
+    if (!grepError) {
+      // grep found actual import lines — fail with diagnostic output
+      throw new Error(
+        `agent-performance module imports LLMProvider or run-executor:\n${grepOutput}`,
+      );
+    }
+    // grep returned exit code 1 (no import matches) → the module is LLM-free ✓
+  });
+
+  // ---------------------------------------------------------------------------
+  // Summary invariants (cross-check workspace-wide totals)
+  // ---------------------------------------------------------------------------
+
+  it('workspace summary: total_cost_usd = sum of agent costs (AC-2 via real Postgres)', async () => {
+    const config = loadConfig({ ...process.env, NODE_ENV: 'test' } as NodeJS.ProcessEnv);
+    const app = await buildApp({ config, db: pg.handle.db });
+
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/agents/performance?${PERIOD_QUERY}`,
+      });
+      expect(res.statusCode).toBe(200);
+
+      const body = res.json<{
+        summary: { total_cost_usd: number | null };
+        cost_by_agent: Array<{ label: string; value: number }>;
+        cost_by_model: Array<{ label: string; value: number }>;
+      }>();
+
+      // Both test agents have priced runs (alpha=1.5, beta=2.5); seeded demo
+      // agents have no runs so they don't contribute.
+      const sumByAgent = body.cost_by_agent.reduce((s, c) => s + c.value, 0);
+      const sumByModel = body.cost_by_model.reduce((s, c) => s + c.value, 0);
+
+      expect(body.summary.total_cost_usd).not.toBeNull();
+      // summary.total_cost_usd ≥ 4.0 (our two agents; seed may have priced runs too)
+      // Use ≥ because the seed PR's demo review has no agent_runs linked → cost=null
+      expect(body.summary.total_cost_usd!).toBeGreaterThanOrEqual(4.0);
+      // The three-way invariant
+      expect(sumByAgent).toBeCloseTo(body.summary.total_cost_usd!, 10);
+      expect(sumByModel).toBeCloseTo(body.summary.total_cost_usd!, 10);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('non-done runs and out-of-window runs are excluded from aggregates', async () => {
+    const config = loadConfig({ ...process.env, NODE_ENV: 'test' } as NodeJS.ProcessEnv);
+    const app = await buildApp({ config, db: pg.handle.db });
+
+    try {
+      // Use the exact test window; the outside run (2024-01-01) must not appear
+      const res = await app.inject({
+        method: 'GET',
+        url: `/agents/${agentAlphaId}/stats?${PERIOD_QUERY}`,
+      });
+      const body = res.json<{ runs: number; avg_cost_usd: number | null }>();
+
+      // Only A1 and A2 are done-in-window; A3 is failed; A_out is out-of-window
+      expect(body.runs).toBe(2);
+      // A_out's costUsd=999 must not contaminate avg_cost_usd
+      // avg_cost_usd = AVG(1.5) = 1.5 (only A1 has a price)
+      expect(body.avg_cost_usd).toBeCloseTo(1.5, 10);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('array-binding (ARRAY[...]::uuid[]) works against real Postgres for recentRunSeries', async () => {
+    // This test validates the INSIGHTS 2026-07-16 postgres-js fix implicitly:
+    // recentRunSeries() is called with [agentAlphaId, agentBetaId] when the
+    // performance endpoint runs. If the ARRAY binding regressed to ANY($1),
+    // the query would throw PostgresError code 42809 and the endpoint would
+    // return a 500 or an empty trend array.
+    const config = loadConfig({ ...process.env, NODE_ENV: 'test' } as NodeJS.ProcessEnv);
+    const app = await buildApp({ config, db: pg.handle.db });
+
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/agents/performance?${PERIOD_QUERY}`,
+      });
+      expect(res.statusCode).toBe(200);
+
+      const body = res.json<{
+        agents: Array<{ agent_id: string; trend: number[] }>;
+      }>();
+
+      // Both test agents must have non-empty trend arrays — proves recentRunSeries
+      // returned data (array binding succeeded against real Postgres)
+      const alphaRow = body.agents.find((a) => a.agent_id === agentAlphaId);
+      const betaRow = body.agents.find((a) => a.agent_id === agentBetaId);
+
+      expect(alphaRow).toBeDefined();
+      expect(betaRow).toBeDefined();
+      expect(alphaRow!.trend.length).toBeGreaterThan(0);
+      expect(betaRow!.trend.length).toBeGreaterThan(0);
+    } finally {
+      await app.close();
+    }
+  });
+});

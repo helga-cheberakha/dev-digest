@@ -28,8 +28,12 @@ interface RunStatsRow extends Record<string, unknown> {
   runs: string; // COUNT(*) → bigint string in postgres-js
   total_cost_usd: number | null;
   avg_cost_usd: number | null;
-  avg_latency_ms: number | null;
-  last_run_at: Date | null;
+  // AVG(integer column) → postgres NUMERIC → postgres-js returns as string.
+  // Cast via Number() in the mapping below.
+  avg_latency_ms: string | null;
+  // db.execute() returns timestamptz as a string, not a Date object.
+  // Cast via new Date() in the mapping below.
+  last_run_at: string | null;
   provider: string | null;
   model: string | null;
 }
@@ -48,7 +52,8 @@ interface FindingsStatsRow extends Record<string, unknown> {
 interface RecentRunRow extends Record<string, unknown> {
   agent_id: string;
   findings_count: number | null;
-  ran_at: Date;
+  // db.execute() returns timestamptz as a string, not a Date object.
+  ran_at: string;
 }
 
 interface CostByModelRow extends Record<string, unknown> {
@@ -76,8 +81,14 @@ export class AgentPerformanceRepository {
     window: TimeWindow,
     agentId?: string,
   ): Promise<AgentAgg[]> {
+    // Query 1: agent_runs only — bare column is unambiguous.
     const agentFilter = agentId
       ? sql`AND agent_id = ${agentId}::uuid`
+      : sql``;
+
+    // Query 2: agent_runs ar JOIN reviews r — both tables have agent_id; must qualify.
+    const agentFilterQ2 = agentId
+      ? sql`AND ar.agent_id = ${agentId}::uuid`
       : sql``;
 
     // ---- Query 1: run-level stats -------------------------------------------
@@ -97,8 +108,8 @@ export class AgentPerformanceRepository {
       FROM agent_runs
       WHERE workspace_id = ${workspaceId}::uuid
         AND status = 'done'
-        AND ran_at >= ${window.fromTs}
-        AND ran_at <= ${window.toTs}
+        AND ran_at >= ${window.fromTs.toISOString()}::timestamptz
+        AND ran_at <= ${window.toTs.toISOString()}::timestamptz
         ${agentFilter}
       GROUP BY agent_id
     `)) as unknown as RunStatsRow[];
@@ -125,9 +136,9 @@ export class AgentPerformanceRepository {
       JOIN findings f ON f.review_id = r.id
       WHERE ar.workspace_id = ${workspaceId}::uuid
         AND ar.status = 'done'
-        AND ar.ran_at >= ${window.fromTs}
-        AND ar.ran_at <= ${window.toTs}
-        ${agentFilter}
+        AND ar.ran_at >= ${window.fromTs.toISOString()}::timestamptz
+        AND ar.ran_at <= ${window.toTs.toISOString()}::timestamptz
+        ${agentFilterQ2}
       GROUP BY r.agent_id
     `)) as unknown as FindingsStatsRow[];
 
@@ -142,8 +153,8 @@ export class AgentPerformanceRepository {
         runs: Number(r.runs),
         totalCostUsd: r.total_cost_usd,
         avgCostUsd: r.avg_cost_usd,
-        avgLatencyMs: r.avg_latency_ms,
-        lastRunAt: r.last_run_at,
+        avgLatencyMs: r.avg_latency_ms !== null ? Number(r.avg_latency_ms) : null,
+        lastRunAt: r.last_run_at ? new Date(r.last_run_at) : null,
         provider: r.provider,
         model: r.model,
         findingsTotal: f ? Number(f.findings_total) : 0,
@@ -211,7 +222,7 @@ export class AgentPerformanceRepository {
       }
       series.push({
         findingsCount: row.findings_count ?? 0,
-        ranAt: row.ran_at,
+        ranAt: new Date(row.ran_at),
       });
     }
     return result;
@@ -243,8 +254,8 @@ export class AgentPerformanceRepository {
       WHERE workspace_id = ${workspaceId}::uuid
         AND status = 'done'
         AND cost_usd IS NOT NULL
-        AND ran_at >= ${window.fromTs}
-        AND ran_at <= ${window.toTs}
+        AND ran_at >= ${window.fromTs.toISOString()}::timestamptz
+        AND ran_at <= ${window.toTs.toISOString()}::timestamptz
         ${agentFilter}
       GROUP BY model
     `)) as unknown as CostByModelRow[];
