@@ -180,8 +180,14 @@ export const CiExportInput = z.object({
   /** "open_pr" opens a PR with the files; "files" just returns/persists them. */
   action: z.enum(['open_pr', 'files']).default('open_pr'),
   post_as: z.enum(['github_review', 'pr_comment', 'none']).default('github_review'),
-  triggers: z.array(z.string()).default(['opened', 'synchronize', 'reopened']),
+  triggers: z.array(z.enum(['opened', 'synchronize', 'reopened'])).default(['opened', 'synchronize', 'reopened']),
   base: z.string().default('main'),
+  /**
+   * Per-file content overrides applied to the generated bundle before
+   * commit/return (AC-5). Each entry replaces the contents of the matching
+   * generated file; overrides for unknown paths are silently ignored.
+   */
+  file_overrides: z.array(z.object({ path: z.string(), contents: z.string() })).nullish(),
 });
 export type CiExportInput = z.infer<typeof CiExportInput>;
 /** Caller-facing input type — `.default()` fields stay optional (web hooks). */
@@ -199,7 +205,11 @@ export type CiInstallation = z.infer<typeof CiInstallation>;
 
 /** Response of `POST /agents/:id/export-ci`. */
 export const CiExport = z.object({
-  installation: CiInstallation,
+  /**
+   * Persisted installation row — null when action==='files' (Preview/Download
+   * path never persists an installation; only open_pr success does).
+   */
+  installation: CiInstallation.nullable(),
   files: z.array(CiFile),
   pr_url: z.string().nullable(),
 });
@@ -221,6 +231,7 @@ export const CiRun = z.object({
   source: z.string().nullable(),
   agent: z.string().nullish(),
   duration_s: z.number().nullish(),
+  github_run_id: z.string().nullish(),
 });
 export type CiRun = z.infer<typeof CiRun>;
 
@@ -240,6 +251,20 @@ export const CiResultArtifact = z.object({
   pr_number: z.number().int().nullish(),
 });
 export type CiResultArtifact = z.infer<typeof CiResultArtifact>;
+
+/**
+ * Multi-agent wrapper — the runner writes ONE of these per CI run (one
+ * `CiResultArtifact` entry per agent manifest found under `.devdigest/agents/`,
+ * AC-20). A bare single-object `devdigest-result.json` (pre-multi-agent
+ * runners already installed in a target repo) is still accepted by the
+ * ingest path as an equivalent one-element bundle — see
+ * `server/src/modules/ci/service.ts`.
+ */
+export const CiResultBundle = z.object({
+  version: z.string().nullish(),
+  agents: z.array(CiResultArtifact).min(1),
+});
+export type CiResultBundle = z.infer<typeof CiResultBundle>;
 
 // ===========================================================================
 // Conformance (PRD ↔ PR) — API record (the analysis shape is `Conformance`)

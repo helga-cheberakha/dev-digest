@@ -21,8 +21,15 @@ export interface FsDeps {
   readDir?: typeof readdirSync;
 }
 
-/** Find the single agent manifest file under `<devdigestDir>/agents/`. */
-export function findManifestPath(devdigestDir: string, deps: FsDeps = {}): string {
+/**
+ * Find every agent manifest file under `<devdigestDir>/agents/` (AC-20).
+ *
+ * A repo may have more than one exported agent (multi-agent CI review, at
+ * parity with the studio's local multi-agent review) — `run.ts` loads and
+ * reviews with EACH manifest returned here independently. Sorted for a
+ * deterministic run/post order across CI invocations.
+ */
+export function findManifestPaths(devdigestDir: string, deps: FsDeps = {}): string[] {
   const readDir = deps.readDir ?? readdirSync;
   const agentsDir = path.join(devdigestDir, 'agents');
   let entries: string[];
@@ -33,16 +40,11 @@ export function findManifestPath(devdigestDir: string, deps: FsDeps = {}): strin
       `Agent manifest directory not found: ${agentsDir} (${(err as Error).message})`,
     );
   }
-  const yamlFiles = entries.filter((f) => f.endsWith('.yaml') || f.endsWith('.yml'));
+  const yamlFiles = entries.filter((f) => f.endsWith('.yaml') || f.endsWith('.yml')).sort();
   if (yamlFiles.length === 0) {
     throw new RunnerError(`No agent manifest (*.yaml) found in ${agentsDir}`);
   }
-  if (yamlFiles.length > 1) {
-    throw new RunnerError(
-      `Expected exactly one agent manifest in ${agentsDir}, found ${yamlFiles.length}: ${yamlFiles.join(', ')}`,
-    );
-  }
-  return path.join(agentsDir, yamlFiles[0]!);
+  return yamlFiles.map((f) => path.join(agentsDir, f));
 }
 
 /** Read, parse, and Zod-validate the manifest at `manifestPath` (AC-20). */
@@ -74,10 +76,4 @@ export function loadAgentManifest(manifestPath: string, deps: FsDeps = {}): Agen
     throw new RunnerError(`Agent manifest at ${manifestPath} failed validation: ${issues}`);
   }
   return result.data;
-}
-
-/** Convenience: locate + load + validate in one call. */
-export function loadManifest(devdigestDir: string, deps: FsDeps = {}): AgentManifest {
-  const manifestPath = findManifestPath(devdigestDir, deps);
-  return loadAgentManifest(manifestPath, deps);
 }

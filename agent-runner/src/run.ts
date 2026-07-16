@@ -1,12 +1,13 @@
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import type { LLMProvider, GitHubReviewPayload, CiResultArtifact } from '@devdigest/shared';
 import { reviewPullRequest, toReviewPayload, gateTriggered, countBlockers } from '@devdigest/reviewer-core';
-import { loadManifest } from './manifest.js';
+import { findManifestPaths, loadAgentManifest } from './manifest.js';
 import { loadSkillBodies } from './skills.js';
 import { resolvePrContext, type CiEnv } from './context.js';
 import { parseUnifiedDiff, stripIgnoredFiles } from './diff.js';
 import { fetchPrDiff, postGithubReview, postPrComment, type FetchLike } from './github.js';
-import { buildResultArtifact } from './artifact.js';
+import { buildResultArtifact, buildResultBundle } from './artifact.js';
 import { RunnerError } from './errors.js';
 
 /**
@@ -23,13 +24,19 @@ import { RunnerError } from './errors.js';
  * against the GROUNDED findings — never from `review.verdict` (the model's
  * self-report), which is discarded here on purpose.
  *
- * Hard-fail (Q5): a single try/catch wraps the ENTIRE pipeline. Any failure —
- * invalid manifest (AC-20), missing skill file, unresolvable CI context,
- * diff-fetch failure, or an LLM/model-call error inside `reviewPullRequest` —
- * short-circuits to `{ exitCode: 1, artifact: null, posted: null }` before any
- * GitHub post or artifact write. Do not add per-stage catches that post partial
- * state; the whole point is that a failure anywhere upstream of "we have a
- * grounded review" produces NOTHING (no synthetic review skeleton).
+ * Multi-agent: a repo may have more than one exported agent's manifest under
+ * `.devdigest/agents/` (the studio already supports multi-agent PR review
+ * locally — CI now matches that). The PR context + diff are shared, fetched
+ * ONCE, and a failure resolving either is a hard, whole-run failure (Q5 —
+ * there is nothing agent-specific to isolate yet). From there, EACH manifest
+ * is loaded, reviewed, and posted INDEPENDENTLY: one agent's failure (bad
+ * manifest, missing skill file, LLM error) is isolated to that agent — it is
+ * recorded and contributes to a non-zero exit code, but never blocks its
+ * siblings from running (a corrupted second manifest must not silently
+ * swallow the first agent's review). All successful agents' artifacts are
+ * combined into ONE `CiResultBundle` written to `resultPath`; if every agent
+ * failed, nothing is written (preserves the original single-agent hard-fail
+ * invariant: total failure → no artifact, no synthetic review skeleton).
  */
 
 export type PostAs = 'github_review' | 'pr_comment' | 'none';
@@ -42,7 +49,7 @@ export interface RunCiDeps {
   llm: LLMProvider;
   /** How to post the result — `'github_review' | 'pr_comment' | 'none'` (AC-24). */
   postAs: PostAs;
-  /** Absolute path to write the `CiResultArtifact` JSON to. */
+  /** Absolute path to write the combined `CiResultBundle` JSON to. */
   resultPath: string;
   fetchImpl?: FetchLike;
   readFile?: typeof readFileSync;
@@ -60,21 +67,34 @@ export interface RunCiDeps {
   ) => Promise<string>;
 }
 
-export interface RunCiSuccess {
-  exitCode: number;
+export interface AgentRunSuccess {
+  agentName: string;
+  ok: true;
   artifact: CiResultArtifact;
   posted: { kind: PostAs; payload?: GitHubReviewPayload };
   blockers: number;
   gateTriggered: boolean;
+}
+
+export interface AgentRunFailure {
+  /** The manifest's filename stem when the manifest itself failed to load;
+   *  otherwise the manifest's declared `name`. */
+  agentName: string;
+  ok: false;
+  error: string;
+}
+
+export type AgentRunOutcome = AgentRunSuccess | AgentRunFailure;
+
+export interface RunCiSuccess {
+  exitCode: number;
+  agents: AgentRunOutcome[];
   error?: undefined;
 }
 
 export interface RunCiFailure {
   exitCode: number;
-  artifact: null;
-  posted: null;
-  blockers?: undefined;
-  gateTriggered?: undefined;
+  agents: null;
   error: string;
 }
 
@@ -88,86 +108,115 @@ export async function runCi(deps: RunCiDeps): Promise<RunCiResult> {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const fetchDiffImpl = deps.fetchDiff ?? fetchPrDiff;
 
+  let manifestPaths: string[];
+  let ctx: ReturnType<typeof resolvePrContext>;
+  let githubToken: string | undefined;
+  let diff: ReturnType<typeof parseUnifiedDiff>;
+
+  // Shared preconditions (Q5): a failure here aborts the ENTIRE run — no
+  // agent-specific work has happened yet, so there is nothing to isolate.
   try {
-    // 1. Load + validate the manifest BEFORE it is used for anything (AC-20).
-    const manifest = loadManifest(deps.devdigestDir, { readFile, readDir });
-    const skills = loadSkillBodies(deps.devdigestDir, manifest.skills, readFile);
+    manifestPaths = findManifestPaths(deps.devdigestDir, { readFile, readDir });
 
-    // 2. Resolve CI context (PR number/title/body/repo) from env + event payload.
-    const ctx = resolvePrContext(deps.env, readFile);
+    ctx = resolvePrContext(deps.env, readFile);
 
-    const githubToken = deps.env.GITHUB_TOKEN;
+    githubToken = deps.env.GITHUB_TOKEN;
     if (deps.postAs !== 'none' && !githubToken) {
       throw new RunnerError(`GITHUB_TOKEN is required to post as '${deps.postAs}'`);
     }
 
-    // 3. Assemble the diff from the CI context. Strip DevDigest's own exported
-    //    artifacts (`.devdigest/**`, the generated workflow) BEFORE parse: the
-    //    minified runner bundle would otherwise fail the whole review with a
-    //    GitHub 422 "diff too large", and reviewing our own config is noise.
     const rawDiff = await fetchDiffImpl(ctx, githubToken ?? '', fetchImpl);
-    const diff = parseUnifiedDiff(stripIgnoredFiles(rawDiff));
-
-    // 4. Run the SAME engine the studio uses. `reviewPullRequest` internally
-    //    calls `assemblePrompt`/`wrapUntrusted` (diff → `<untrusted
-    //    source="diff">`, prDescription → `<untrusted source="pr-description">`,
-    //    AC-21) and the mandatory `groundFindings()` gate (AC-22: an all-dropped
-    //    result is a valid zero-finding review, not an error — it flows through
-    //    normally below).
-    const start = now();
-    const outcome = await reviewPullRequest({
-      systemPrompt: manifest.system_prompt,
-      model: manifest.model,
-      diff,
-      llm: deps.llm,
-      strategy: manifest.strategy,
-      skills,
-      prDescription: ctx.body,
-      task: `Review PR #${ctx.prNumber}: ${ctx.title}`,
-    });
-    const durationMs = now() - start;
-
-    // 5. Deterministic verdict/gate from GROUNDED findings + `ci_fail_on`
-    //    (AC-23) — never `outcome.review.verdict`.
-    const payload = toReviewPayload(outcome.review, {
-      failOn: manifest.ci_fail_on,
-      diff,
-      title: manifest.name,
-    });
-    const blockers = countBlockers(outcome.review.findings, manifest.ci_fail_on);
-    const triggered = gateTriggered(outcome.review.findings, manifest.ci_fail_on);
-
-    // 6. Build + write the artifact before posting, so a GitHub-side posting
-    //    failure never loses the already-computed, already-grounded result.
-    const artifact = buildResultArtifact({
-      findings: outcome.review.findings,
-      costUsd: outcome.costUsd,
-      durationMs,
-      agent: manifest.name,
-      prNumber: ctx.prNumber,
-    });
-    writeFile(deps.resultPath, `${JSON.stringify(artifact, null, 2)}\n`);
-
-    // 7. Post per `post_as` (AC-24).
-    if (deps.postAs === 'github_review') {
-      await postGithubReview(ctx, githubToken as string, payload, fetchImpl);
-    } else if (deps.postAs === 'pr_comment') {
-      await postPrComment(ctx, githubToken as string, payload.body, fetchImpl);
-    }
-    // 'none' → post nothing (exit-code only).
-
-    // 8. Exit non-zero IFF the gate triggered REQUEST_CHANGES (AC-25).
-    return {
-      exitCode: triggered ? 1 : 0,
-      artifact,
-      posted: { kind: deps.postAs, payload },
-      blockers,
-      gateTriggered: triggered,
-    };
+    diff = parseUnifiedDiff(stripIgnoredFiles(rawDiff));
   } catch (err) {
-    // Hard-fail (Q5): non-zero exit, nothing posted, no artifact, no synthetic
-    // review skeleton — regardless of which stage above threw.
     const message = err instanceof Error ? err.message : String(err);
-    return { exitCode: 1, artifact: null, posted: null, error: message };
+    return { exitCode: 1, agents: null, error: message };
   }
+
+  const agents: AgentRunOutcome[] = [];
+
+  for (const manifestPath of manifestPaths) {
+    const agentStem = path.basename(manifestPath).replace(/\.ya?ml$/, '');
+    try {
+      // 1. Load + validate the manifest BEFORE it is used for anything (AC-20).
+      const manifest = loadAgentManifest(manifestPath, { readFile });
+      const skills = loadSkillBodies(deps.devdigestDir, manifest.skills, readFile);
+
+      // 2. Run the SAME engine the studio uses. `reviewPullRequest` internally
+      //    calls `assemblePrompt`/`wrapUntrusted` (diff → `<untrusted
+      //    source="diff">`, prDescription → `<untrusted source="pr-description">`,
+      //    AC-21) and the mandatory `groundFindings()` gate (AC-22).
+      const start = now();
+      const outcome = await reviewPullRequest({
+        systemPrompt: manifest.system_prompt,
+        model: manifest.model,
+        diff,
+        llm: deps.llm,
+        strategy: manifest.strategy,
+        skills,
+        prDescription: ctx.body,
+        task: `Review PR #${ctx.prNumber}: ${ctx.title}`,
+      });
+      const durationMs = now() - start;
+
+      // 3. Deterministic verdict/gate from GROUNDED findings + `ci_fail_on`
+      //    (AC-23) — never `outcome.review.verdict`.
+      const payload = toReviewPayload(outcome.review, {
+        failOn: manifest.ci_fail_on,
+        diff,
+        title: manifest.name,
+      });
+      const blockers = countBlockers(outcome.review.findings, manifest.ci_fail_on);
+      const triggered = gateTriggered(outcome.review.findings, manifest.ci_fail_on);
+
+      // 4. Build the artifact before posting, so a GitHub-side posting failure
+      //    never loses the already-computed, already-grounded result.
+      const artifact = buildResultArtifact({
+        findings: outcome.review.findings,
+        costUsd: outcome.costUsd,
+        durationMs,
+        agent: manifest.name,
+        prNumber: ctx.prNumber,
+      });
+
+      // 5. Post per `post_as` (AC-24) — each agent posts its OWN review/comment;
+      //    `toReviewPayload`'s title already carries `manifest.name`, so
+      //    multiple agents' posts on the same PR are distinguishable.
+      if (deps.postAs === 'github_review') {
+        await postGithubReview(ctx, githubToken as string, payload, fetchImpl);
+      } else if (deps.postAs === 'pr_comment') {
+        await postPrComment(ctx, githubToken as string, payload.body, fetchImpl);
+      }
+      // 'none' → post nothing (exit-code only).
+
+      agents.push({
+        agentName: manifest.name,
+        ok: true,
+        artifact,
+        posted: { kind: deps.postAs, payload },
+        blockers,
+        gateTriggered: triggered,
+      });
+    } catch (err) {
+      // Hard-fail for THIS agent only (Q5, now per-agent): nothing posted and
+      // no artifact contributed for it — but sibling agents still run.
+      const message = err instanceof Error ? err.message : String(err);
+      agents.push({ agentName: agentStem, ok: false, error: message });
+    }
+  }
+
+  // 6. Write ONE combined bundle from every agent that produced a grounded
+  //    result. Nothing written if all agents failed (AC-26/Q5, generalized).
+  const succeeded = agents.filter((a): a is AgentRunSuccess => a.ok);
+  if (succeeded.length > 0) {
+    const bundle = buildResultBundle(succeeded.map((a) => a.artifact));
+    writeFile(deps.resultPath, `${JSON.stringify(bundle, null, 2)}\n`);
+  }
+
+  // 7. Exit non-zero iff ANY agent hard-failed OR any agent's gate triggered
+  //    REQUEST_CHANGES (AC-25, generalized to N agents).
+  const anyFailure = agents.some((a) => !a.ok);
+  const anyGateTriggered = succeeded.some((a) => a.gateTriggered);
+  const exitCode = anyFailure || anyGateTriggered ? 1 : 0;
+
+  return { exitCode, agents };
 }

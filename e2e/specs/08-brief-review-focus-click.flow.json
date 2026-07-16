@@ -8,7 +8,8 @@
     { "cmd": ["wait", "--url", "/pulls/482"], "label": "navigate to the PR detail route" },
     { "cmd": ["wait", "--load", "networkidle"], "label": "PR detail data settles" },
     { "cmd": ["wait", "--text", "Confirm the new rate-limit window default is safe for existing callers"], "label": "seeded Brief's Review Focus item renders (cache hit, no LLM call)" },
-    { "cmd": ["find", "text", "src/config.ts", "click"], "label": "click the Review Focus file_ref" },
+    { "cmd": ["eval", "document.querySelector('main').scrollTop = document.querySelector('main').scrollHeight"], "label": "scroll the file_ref into view (the page's scroll container is a nested <main>, not the window — agent-browser's click does not auto-scroll it)" },
+    { "cmd": ["find", "role", "button", "click", "--name", "src/config.ts"], "label": "click the Review Focus file_ref" },
     { "cmd": ["wait", "--url", "tab=diff"], "label": "switches to the Files changed tab" },
     { "cmd": ["wait", "--text", "src/config.ts"], "label": "the target file is visible in the diff viewer (scrolled to + highlighted)" }
   ]

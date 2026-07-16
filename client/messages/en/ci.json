@@ -2,6 +2,8 @@
   "runs": {
     "emptyTitle": "No CI runs yet",
     "emptyBody": "Once you export an agent to CI, every automated review shows up here.",
+    "emptyCta": "Set up CI for an agent",
+    "noMatch": "No runs match your current filters.",
     "title": "CI Runs",
     "subtitle": "Agent reviews executed inside CI · not local runs",
     "autoRefresh": "auto-refresh on",
@@ -9,14 +11,18 @@
     "refreshing": "Refreshing…",
     "filters": {
       "last7Days": "Last 7 days",
+      "allTime": "All time",
       "allAgents": "All agents",
       "allRepos": "All repos",
-      "allStatuses": "All statuses"
+      "allStatuses": "All statuses",
+      "allSources": "All sources"
     },
     "table": {
       "timestamp": "Timestamp",
       "pullRequest": "Pull request",
+      "agent": "Agent",
       "source": "Source",
+      "duration": "Duration",
       "findings": "Findings",
       "cost": "Cost",
       "status": "Status"
@@ -45,13 +51,7 @@
     },
     "targets": {
       "gha": "GitHub Actions",
-      "circle": "CircleCI",
-      "jenkins": "Jenkins",
-      "cli": "Generic CLI",
-      "ghaDesc": "Runs on pull_request events",
-      "circleDesc": "config.yml job",
-      "jenkinsDesc": "Pipeline stage",
-      "cliDesc": "devdigest review --pr"
+      "ghaDesc": "Runs on pull_request events"
     },
     "recommended": "recommended",
     "repoLabel": "Target repository",
@@ -68,11 +68,30 @@
       "none": "None (exit code only)"
     },
     "blockMergeTitle": "Block merge on findings",
-    "blockMergeDesc": "Requires a GitHub App — not available with PAT in local mode",
+    "blockMergeDesc": "Set a branch protection rule requiring this status check — no GitHub App needed",
     "installCardTitle": "Open a PR with these files",
-    "installCardBody": "DevDigest opens a PR in {repo} titled “Add DevDigest CI review” with the {count} generated files.",
+    "installCardBody": "DevDigest opens a PR in {repo} titled 'Add DevDigest CI review' with the {count} generated files.",
     "ownerRepo": "owner/repo",
-    "secretNote": "Add {key} to the repo's Actions secrets before the workflow runs."
+    "secretNote": "Add {key} to the repo's Actions secrets before the workflow runs.",
+    "triggers": {
+      "opened": "On PR open",
+      "synchronize": "On push to PR",
+      "reopened": "On PR reopen"
+    },
+    "secretsLabel": "Secrets expected",
+    "secretReady": "auto-provided / ready",
+    "secretNotSet": "not set",
+    "successTitle": "Deployment ready",
+    "viewPr": "View pull request",
+    "downloadFiles": "Download files",
+    "done": "Done",
+    "noRepo": "No active repository — select a repo to deploy to.",
+    "previewNote": "Server-generated files. Edits you make here are applied when opening a PR or downloading — only changed files are sent.",
+    "blockMergeHint": "Only GitHub review can block merges",
+    "openPrAction": "Open a PR with these files",
+    "prOpened": "Pull request opened",
+    "generatePreview": "Generate preview",
+    "previewLoading": "Generating preview…"
   },
   "ciTab": {
     "heading": "Continuous Integration",
@@ -81,8 +100,23 @@
     "publish": "Publish to CI",
     "update": "Update CI",
     "noRepo": "Connect a repository first",
-    "empty": "Not deployed to CI yet. Use “Publish to CI” to open a PR that adds the workflow + agent config.",
-    "installed": "installed {date}"
+    "empty": "Not deployed to CI yet. Use 'Publish to CI' to open a PR that adds the workflow + agent config.",
+    "installed": "installed {date}",
+    "emptyTitle": "Not in CI yet",
+    "emptyBody": "Deploy this agent to run automatically on every pull request in a repo's CI pipeline.",
+    "emptyCta": "Add to CI",
+    "activeBadge": "Active in {count} repos",
+    "addRepo": "Add repository",
+    "updateConfig": "Update CI config",
+    "failOnLabel": "Fail CI on",
+    "failOnHelper": "Exit non-zero when a finding at or above this severity lands. Pair with a required status check to block merges.",
+    "failOn": {
+      "never": "Never",
+      "critical": "Critical",
+      "warning": "Warning or above",
+      "any": "Any finding"
+    },
+    "ciDeployment": "CI deployment"
   },
   "publishDialog": {
     "title": "Publish to CI",

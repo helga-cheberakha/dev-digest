@@ -25,9 +25,11 @@ import { PriceBook } from './price-book.js';
 import { ConfigError } from './errors.js';
 import { AgentsRepository } from '../modules/agents/repository.js';
 import { BlastRepository } from '../modules/blast/repository.js';
+import { CiRepository } from '../modules/ci/repository.js';
 import { EvalRepository } from '../modules/eval/repository.js';
 import { SkillsRepository } from '../modules/skills/repository.js';
 import { ReviewRepository } from '../modules/reviews/repository.js';
+import { RepoRepository } from '../modules/repos/repository.js';
 import { ConventionsRepository } from '../modules/conventions/repository.js';
 import { IntentRepository } from '../modules/intent/repository.js';
 import type { RepoIntel } from '../modules/repo-intel/types.js';
@@ -57,7 +59,9 @@ export interface ContainerOverrides {
   depgraph?: DepGraph;
   tokenizer?: Tokenizer;
   blastRepo?: BlastRepository;
+  ciRepo?: CiRepository;
   evalRepo?: EvalRepository;
+  reposRepo?: RepoRepository;
 }
 
 export class Container {
@@ -79,9 +83,11 @@ export class Container {
   // `container.agentsRepo` instead of reaching into another module's folder.
   private _agentsRepo?: AgentsRepository;
   private _blastRepo?: BlastRepository;
+  private _ciRepo?: CiRepository;
   private _evalRepo?: EvalRepository;
   private _reviewRepo?: ReviewRepository;
   private _skillsRepo?: SkillsRepository;
+  private _reposRepo?: RepoRepository;
   private _conventionsRepo?: ConventionsRepository;
   private _intentRepo?: IntentRepository;
   private _repoIntel?: RepoIntel;
@@ -111,6 +117,16 @@ export class Container {
   get blastRepo(): BlastRepository {
     if (this.overrides.blastRepo) return this.overrides.blastRepo;
     return (this._blastRepo ??= new BlastRepository(this.db));
+  }
+
+  get ciRepo(): CiRepository {
+    if (this.overrides.ciRepo) return this.overrides.ciRepo;
+    return (this._ciRepo ??= new CiRepository(this.db));
+  }
+
+  get reposRepo(): RepoRepository {
+    if (this.overrides.reposRepo) return this.overrides.reposRepo;
+    return (this._reposRepo ??= new RepoRepository(this.db));
   }
 
   get evalRepo(): EvalRepository {

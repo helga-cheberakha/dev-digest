@@ -4,7 +4,18 @@ import { IconBtn, Avatar, Kbd } from "../primitives";
 import { DefaultLink } from "./DefaultLink";
 import type { ShellContext, Crumb } from "./types";
 
-export function Topbar({ ctx, crumb = [] }: { ctx: ShellContext; crumb?: Crumb[] }) {
+export function Topbar({
+  ctx,
+  crumb = [],
+  isMobile,
+  onOpenMobileNav,
+}: {
+  ctx: ShellContext;
+  crumb?: Crumb[];
+  isMobile?: boolean;
+  /** Present only on mobile — opens the off-canvas sidebar (see AppFrame). */
+  onOpenMobileNav?: () => void;
+}) {
   const Link = ctx.Link ?? DefaultLink;
   return (
     <header
@@ -15,11 +26,14 @@ export function Topbar({ ctx, crumb = [] }: { ctx: ShellContext; crumb?: Crumb[]
         background: "var(--bg-primary)",
         display: "flex",
         alignItems: "center",
-        gap: 16,
-        padding: "0 24px",
+        gap: isMobile ? 8 : 16,
+        padding: isMobile ? "0 12px" : "0 24px",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+      {onOpenMobileNav && (
+        <IconBtn icon="Menu" label="Open navigation" onClick={onOpenMobileNav} />
+      )}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, overflow: "hidden" }}>
         {crumb.map((c, i) => {
           const last = i === crumb.length - 1;
           const text = (
@@ -30,6 +44,11 @@ export function Topbar({ ctx, crumb = [] }: { ctx: ShellContext; crumb?: Crumb[]
                 fontWeight: last ? 600 : 500,
                 color: last ? "var(--text-primary)" : "var(--text-secondary)",
                 whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                display: "inline-block",
+                maxWidth: isMobile ? 140 : undefined,
+                verticalAlign: "bottom",
               }}
             >
               {c.label}
@@ -51,9 +70,11 @@ export function Topbar({ ctx, crumb = [] }: { ctx: ShellContext; crumb?: Crumb[]
           marginLeft: "auto",
           display: "flex",
           alignItems: "center",
+          justifyContent: isMobile ? "center" : undefined,
           gap: 10,
-          width: 260,
-          padding: "8px 14px",
+          width: isMobile ? 32 : 260,
+          flexShrink: 0,
+          padding: isMobile ? "8px" : "8px 14px",
           borderRadius: 7,
           border: "1px solid var(--border)",
           background: "var(--bg-surface)",
@@ -62,8 +83,8 @@ export function Topbar({ ctx, crumb = [] }: { ctx: ShellContext; crumb?: Crumb[]
         }}
       >
         <Icon.Search size={14} />
-        <span style={{ flex: 1, textAlign: "left" }}>Search or jump to…</span>
-        <Kbd>⌘K</Kbd>
+        {!isMobile && <span style={{ flex: 1, textAlign: "left" }}>Search or jump to…</span>}
+        {!isMobile && <Kbd>⌘K</Kbd>}
       </button>
       {ctx.onToggleTheme && (
         <IconBtn
@@ -72,8 +93,8 @@ export function Topbar({ ctx, crumb = [] }: { ctx: ShellContext; crumb?: Crumb[]
           onClick={ctx.onToggleTheme}
         />
       )}
-      {ctx.onRefresh && <IconBtn icon="RefreshCw" label="Refresh" onClick={ctx.onRefresh} />}
-      <IconBtn icon="Bell" label="Notifications" />
+      {!isMobile && ctx.onRefresh && <IconBtn icon="RefreshCw" label="Refresh" onClick={ctx.onRefresh} />}
+      {!isMobile && <IconBtn icon="Bell" label="Notifications" />}
       <Avatar name="you" size={26} />
     </header>
   );

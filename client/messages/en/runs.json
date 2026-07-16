@@ -10,6 +10,7 @@
   "conflicts": {
     "title": "Where agents disagree",
     "onlyConflicts": "Show only conflicts",
+    "onlyConflictsHint": "Hide locations every agent agrees on — keep only mixed flag / no-flag or differing-severity groups",
     "empty": "No conflicts — the agents agree on every flagged location.",
     "didNotFlag": "did not flag"
   },
@@ -116,8 +117,10 @@
       "tabs": "tabs"
     },
     "runAll": "Run all agents",
+    "runAgain": "Run again",
     "running": "Running…",
-    "meta": "{count} agents · fan-out via p-queue · {duration}s total · {cost}",
+    "progress": "{done}/{total} agents complete",
+    "meta": "{count} agents · parallel · fan-out via worktrees · {duration} total · {cost}",
     "noAgents": {
       "title": "Enable agents to run reviews",
       "body": "Multi-agent review runs the PR through every enabled agent in parallel. You have no agents enabled yet.",
@@ -130,5 +133,31 @@
       "cta": "Run all agents"
     },
     "crumb": "Multi-Agent Review"
+  },
+  "configure": {
+    "title": "Configure multi-agent review",
+    "subtitle": "Choose which agents to run on this PR in parallel",
+    "crumb": "Configure run",
+    "prLabel": "Pull Request",
+    "prValue": "#{number} · {title}",
+    "selectPrPlaceholder": "Select a pull request…",
+    "noPullRequests": "No open pull requests",
+    "lastRun": "Last run: {count, plural, one {# agent} other {# agents}} · {time}",
+    "viewResults": "View results",
+    "agentsTitle": "Agents to run",
+    "noPrBody": "Choose which PR to review above, then select the agents to run on it.",
+    "noEstimate": "No estimate",
+    "summaryLabel": "Parallel fan-out",
+    "summaryTimeLabel": "time",
+    "summaryCostLabel": "cost",
+    "summaryDuration": "{seconds}s",
+    "runButton": "Run multi-agent review ({count})",
+    "running": "Running…",
+    "recentRuns": {
+      "title": "Recent reviews",
+      "empty": "No multi-agent reviews yet.",
+      "item": "#{number} · {title}",
+      "meta": "{count, plural, one {# agent} other {# agents}} · {time}"
+    }
   }
 }

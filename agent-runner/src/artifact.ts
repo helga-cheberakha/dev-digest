@@ -1,5 +1,5 @@
 import type { Finding } from '@devdigest/shared';
-import { CiResultArtifact } from '@devdigest/shared';
+import { CiResultArtifact, CiResultBundle } from '@devdigest/shared';
 import { RunnerError } from './errors.js';
 
 /** Runner version string embedded in every artifact (informational only). */
@@ -48,6 +48,21 @@ export function buildResultArtifact(input: BuildResultArtifactInput): CiResultAr
     // this ever fires it's a genuine internal bug, not a user/config error.
     throw new RunnerError(
       `Internal error: built result artifact failed CiResultArtifact validation: ${result.error.message}`,
+    );
+  }
+  return result.data;
+}
+
+/**
+ * Wrap one or more per-agent artifacts into the combined multi-agent bundle
+ * written as `devdigest-result.json` — one CI run may review the PR with more
+ * than one agent (a repo can have several exported agents' manifests).
+ */
+export function buildResultBundle(artifacts: CiResultArtifact[]): CiResultBundle {
+  const result = CiResultBundle.safeParse({ version: RUNNER_VERSION, agents: artifacts });
+  if (!result.success) {
+    throw new RunnerError(
+      `Internal error: built result bundle failed CiResultBundle validation: ${result.error.message}`,
     );
   }
   return result.data;

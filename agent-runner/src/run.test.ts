@@ -2,10 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { LLMProvider, StructuredResult, Review, CiResultArtifact } from '@devdigest/shared';
-import { CiResultArtifact as CiResultArtifactSchema } from '@devdigest/shared';
+import type { LLMProvider, StructuredResult, Review, CiResultBundle } from '@devdigest/shared';
+import { CiResultBundle as CiResultBundleSchema } from '@devdigest/shared';
 import { reviewPullRequest, toReviewPayload } from '@devdigest/reviewer-core';
-import { runCi, type RunCiDeps } from './run.js';
+import { runCi, type RunCiDeps, type AgentRunSuccess } from './run.js';
 import type { FetchLike } from './github.js';
 import { parseUnifiedDiff } from './diff.js';
 
@@ -204,10 +204,51 @@ describe('runCi (T8 agent-runner orchestrator)', () => {
     const result = await runCi(baseDeps({ llm: stub.llm }));
 
     expect(result.exitCode).toBe(1);
-    expect(result.artifact).toBeNull();
-    expect(result.error).toMatch(/failed validation/i);
+    expect(result.agents).not.toBeNull();
+    expect(result.agents).toHaveLength(1);
+    const outcome = result.agents![0]!;
+    expect(outcome.ok).toBe(false);
+    expect(outcome.ok === false && outcome.error).toMatch(/failed validation/i);
     expect(stub.capturedMessages).toHaveLength(0); // never reached the LLM
     expect(existsSync(resultPath)).toBe(false);
+  });
+
+  it('multi-agent: one bad manifest does not block a sibling agent from running and posting', async () => {
+    // A second, valid manifest alongside the invalid one from the test above.
+    writeFileSync(
+      path.join(dir, 'agents', 'security-reviewer.yaml'),
+      'name: "bad"\nmodel: "m"\nsystem_prompt: "p"\nci_fail_on: "sometimes"\n',
+    );
+    writeFileSync(
+      path.join(dir, 'agents', 'general-reviewer.yaml'),
+      VALID_MANIFEST_YAML.replace('Security Reviewer', 'General Reviewer'),
+    );
+    const stub = makeStubLlm(ALL_HALLUCINATED_REVIEW); // grounds to zero findings, no gate trigger
+    const { fetchImpl, calls } = makeFetchRecorder();
+    const result = await runCi(
+      baseDeps({ llm: stub.llm, fetchDiff: async () => FIXTURE_DIFF_RAW, fetchImpl }),
+    );
+
+    expect(result.agents).toHaveLength(2);
+    // findManifestPaths sorts alphabetically: general-reviewer.yaml < security-reviewer.yaml.
+    const good = result.agents![0]!;
+    const bad = result.agents![1]!;
+    expect(bad.ok).toBe(false);
+    expect(good.ok).toBe(true);
+    if (good.ok) {
+      expect(good.artifact.agent).toBe('General Reviewer');
+    }
+    // The good agent still posted despite its sibling failing.
+    expect(calls).toHaveLength(1);
+    // One failure among the agents is still enough to fail the whole run.
+    expect(result.exitCode).toBe(1);
+
+    // Only the successful agent's artifact is in the written bundle.
+    const onDisk = JSON.parse(readFileSync(resultPath, 'utf8')) as unknown;
+    const parsed = CiResultBundleSchema.safeParse(onDisk);
+    expect(parsed.success).toBe(true);
+    expect((parsed.data as CiResultBundle).agents).toHaveLength(1);
+    expect((parsed.data as CiResultBundle).agents[0]!.agent).toBe('General Reviewer');
   });
 
   it('AC-21: the assembled prompt fences the diff and PR body as <untrusted> and carries the injection guard', async () => {
@@ -238,9 +279,11 @@ describe('runCi (T8 agent-runner orchestrator)', () => {
     );
 
     expect(result.error).toBeUndefined();
-    expect(result.artifact).not.toBeNull();
-    expect(result.artifact!.findings_count).toBe(0);
-    expect(result.gateTriggered).toBe(false);
+    expect(result.agents).not.toBeNull();
+    const outcome = result.agents![0]!;
+    expect(outcome.ok).toBe(true);
+    expect(outcome.ok === true && outcome.artifact.findings_count).toBe(0);
+    expect(outcome.ok === true && outcome.gateTriggered).toBe(false);
     expect(result.exitCode).toBe(0);
   });
 
@@ -253,9 +296,10 @@ describe('runCi (T8 agent-runner orchestrator)', () => {
     );
 
     expect(result.error).toBeUndefined();
-    expect(result.blockers).toBe(1); // only the grounded CRITICAL counts
-    expect(result.gateTriggered).toBe(true);
-    expect(result.posted!.payload!.event).toBe('REQUEST_CHANGES');
+    const outcome = result.agents![0]!;
+    expect(outcome.ok === true && outcome.blockers).toBe(1); // only the grounded CRITICAL counts
+    expect(outcome.ok === true && outcome.gateTriggered).toBe(true);
+    expect(outcome.ok === true && outcome.posted.payload!.event).toBe('REQUEST_CHANGES');
     expect(result.exitCode).toBe(1);
   });
 
@@ -295,10 +339,11 @@ describe('runCi (T8 agent-runner orchestrator)', () => {
 
     expect(calls).toHaveLength(0);
     expect(result.exitCode).toBe(0);
-    expect(result.gateTriggered).toBe(false);
+    const outcome = result.agents![0]!;
+    expect(outcome.ok === true && outcome.gateTriggered).toBe(false);
   });
 
-  it('AC-26: the written devdigest-result.json passes CiResultArtifact.safeParse', async () => {
+  it('AC-26: the written devdigest-result.json passes CiResultBundle.safeParse', async () => {
     const stub = makeStubLlm(GROUNDED_PLUS_HALLUCINATED_REVIEW);
     const result = await runCi(
       baseDeps({ llm: stub.llm, fetchDiff: async () => FIXTURE_DIFF_RAW }),
@@ -307,9 +352,11 @@ describe('runCi (T8 agent-runner orchestrator)', () => {
     expect(result.error).toBeUndefined();
     expect(existsSync(resultPath)).toBe(true);
     const onDisk = JSON.parse(readFileSync(resultPath, 'utf8')) as unknown;
-    const parsed = CiResultArtifactSchema.safeParse(onDisk);
+    const parsed = CiResultBundleSchema.safeParse(onDisk);
     expect(parsed.success).toBe(true);
-    const artifact = parsed.data as CiResultArtifact;
+    const bundle = parsed.data as CiResultBundle;
+    expect(bundle.agents).toHaveLength(1);
+    const artifact = bundle.agents[0]!;
     expect(artifact.findings_count).toBe(1);
     expect(artifact.critical).toBe(1);
     expect(artifact.pr_number).toBe(42);
@@ -324,9 +371,10 @@ describe('runCi (T8 agent-runner orchestrator)', () => {
     );
 
     expect(result.exitCode).toBe(1);
-    expect(result.artifact).toBeNull();
-    expect(result.posted).toBeNull();
-    expect(result.error).toMatch(/simulated model\/network failure/);
+    expect(result.agents).toHaveLength(1);
+    const outcome = result.agents![0]!;
+    expect(outcome.ok).toBe(false);
+    expect(outcome.ok === false && outcome.error).toMatch(/simulated model\/network failure/);
     expect(calls).toHaveLength(0); // nothing posted to the PR
     expect(existsSync(resultPath)).toBe(false); // no artifact written
   });
@@ -359,6 +407,7 @@ describe('runCi (T8 agent-runner orchestrator)', () => {
       title: 'Security Reviewer',
     });
 
-    expect(result.posted!.payload).toEqual(directPayload);
+    const outcome = result.agents![0]! as AgentRunSuccess;
+    expect(outcome.posted.payload).toEqual(directPayload);
   });
 });

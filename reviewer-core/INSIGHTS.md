@@ -18,6 +18,8 @@ so the next agent/session doesn't relearn it. Append-only — see the
 
 ## Recurring Errors & Fixes
 
+- **2026-07-16** — The OpenAI SDK's own `maxRetries` (passed to `new OpenAI({maxRetries})`) only retries network failures and non-2xx statuses inside `makeRequest` — a 200 OK with a truncated/empty body fails LATER when the caller awaits the response and the SDK lazily calls `response.json()` in `APIPromise`'s `.then()`, by which point the SDK's retry loop has already exited "successfully". Surfaces as `TypeError: invalid json response body at <url> reason: Unexpected end of JSON input` (undici's fetch) straight out of `chat.completions.create()`, uncaught by the SDK and unretried. Real incident: OpenRouter/upstream model cut a response short mid-CI-run, hard-failing one agent's whole review while sibling agents on the same PR succeeded. Fixed with `withBodyParseRetry` — a small wrapper matching only `/invalid json response body/i` (never blanket-retries auth/schema/other errors) around the `create()` call, 2 retries with linear backoff. Evidence: `reviewer-core/src/llm/openrouter.ts` (`isTransientBodyParseError`, `withBodyParseRetry`), `reviewer-core/src/llm/openrouter.test.ts`.
+
 ## Session Notes
 
 ## Open Questions

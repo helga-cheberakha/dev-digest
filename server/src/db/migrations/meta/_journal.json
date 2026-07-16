@@ -134,6 +134,62 @@
       "when": 1783715932179,
       "tag": "0018_next_valeria_richards",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1784109388398,
+      "tag": "0019_panoramic_firedrake",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1784114358235,
+      "tag": "0020_mighty_black_tarantula",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1784117688959,
+      "tag": "0021_friendly_scrambler",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1784151085810,
+      "tag": "0022_fair_princess_powerful",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1784182496121,
+      "tag": "0023_mean_rockslide",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1784203496905,
+      "tag": "0024_groovy_trauma",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1784206541050,
+      "tag": "0025_lumpy_young_avengers",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1784207904000,
+      "tag": "0026_curly_sunfire",
+      "breakpoints": true
     }
   ]
 }

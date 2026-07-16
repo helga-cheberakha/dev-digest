@@ -65,6 +65,7 @@ export async function listRunsForPull(
     ran_at: run.ranAt ? run.ranAt.toISOString() : null,
     score: run.score,
     blockers: run.blockers,
+    multi_agent_run_id: run.multiAgentRunId,
   }));
 }
 

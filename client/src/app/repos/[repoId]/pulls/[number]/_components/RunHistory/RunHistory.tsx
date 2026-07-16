@@ -8,6 +8,7 @@ import { RunCostBadge } from "@/components/RunCostBadge";
 import { FindingsCountChips, countBySeverity, totalCount } from "@/components/FindingsCountChips";
 import { FindingsHoverCard } from "@/components/FindingsHoverCard";
 import { FindingPreview } from "@/components/FindingPreview";
+import { formatCost } from "@/lib/cost";
 
 /**
  * PR timeline — every agent run interleaved with the PR's commits, newest-first
@@ -77,8 +78,11 @@ const commitRowStyle: React.CSSProperties = {
   background: "transparent",
 };
 
+type Batch = { multiAgentRunId: string; runs: RunSummary[] };
+
 type TimelineItem =
   | { kind: "run"; ts: number; run: RunSummary }
+  | { kind: "batch"; ts: number; batch: Batch }
   | { kind: "commit"; ts: number; commit: PrCommit };
 
 /** Epoch ms for sorting; unparseable / missing timestamps sort last. */
@@ -86,6 +90,55 @@ function tsOf(s: string | null | undefined): number {
   if (!s) return 0;
   const n = Date.parse(s);
   return Number.isNaN(n) ? 0 : n;
+}
+
+/** Group runs sharing a non-null multi_agent_run_id — a fan-out launch creates
+    N agent_runs rows that would otherwise read as N disconnected timeline
+    entries. Runs with no multi_agent_run_id pass through unchanged. */
+function groupByMultiAgentRun(runs: RunSummary[]): (RunSummary | Batch)[] {
+  const batches = new Map<string, RunSummary[]>();
+  const solo: RunSummary[] = [];
+  for (const run of runs) {
+    if (run.multi_agent_run_id) {
+      const list = batches.get(run.multi_agent_run_id) ?? [];
+      list.push(run);
+      batches.set(run.multi_agent_run_id, list);
+    } else {
+      solo.push(run);
+    }
+  }
+  const grouped: (RunSummary | Batch)[] = [...solo];
+  for (const [multiAgentRunId, batchRuns] of batches) {
+    grouped.push({ multiAgentRunId, runs: batchRuns });
+  }
+  return grouped;
+}
+
+function isBatch(x: RunSummary | Batch): x is Batch {
+  return "multiAgentRunId" in x;
+}
+
+/** Worst-first priority so the batch badge reflects the most urgent status
+    among its runs, same ranking as a single run's outcomeOf(). */
+function batchOutcome(batch: Batch): Outcome {
+  if (batch.runs.some((r) => r.status === "failed")) return outcomeOf(batch.runs.find((r) => r.status === "failed")!);
+  if (batch.runs.some((r) => r.status === "running")) return outcomeOf(batch.runs.find((r) => r.status === "running")!);
+  if (batch.runs.some((r) => (r.blockers ?? 0) > 0))
+    return outcomeOf(batch.runs.find((r) => (r.blockers ?? 0) > 0)!);
+  if (batch.runs.some((r) => (r.findings_count ?? 0) > 0))
+    return outcomeOf(batch.runs.find((r) => (r.findings_count ?? 0) > 0)!);
+  return outcomeOf(batch.runs[0]!);
+}
+
+/** total_cost_usd = SUM, total_duration_ms = MAX — same convention as the
+    multi-agent results page (parallel fan-out; AC-28). */
+function batchTotals(batch: Batch): { costUsd: number | null; durationMs: number | null } {
+  const costs = batch.runs.map((r) => r.cost_usd).filter((c): c is number => c != null);
+  const durations = batch.runs.map((r) => r.duration_ms).filter((d): d is number => d != null);
+  return {
+    costUsd: costs.length > 0 ? costs.reduce((a, b) => a + b, 0) : null,
+    durationMs: durations.length > 0 ? Math.max(...durations) : null,
+  };
 }
 
 export function RunHistory({
@@ -99,6 +152,7 @@ export function RunHistory({
   onOpenTrace,
   onGoToReview,
   onDelete,
+  onViewMultiAgentRun,
 }: {
   runs: RunSummary[];
   commits?: PrCommit[];
@@ -116,12 +170,19 @@ export function RunHistory({
   /** Jump to this run's inline review accordion below (clicking the agent name). */
   onGoToReview?: (runId: string) => void;
   onDelete?: (runId: string) => void;
+  /** Navigate to a multi-agent run's results page (the batch row's "View results"). */
+  onViewMultiAgentRun?: (multiAgentRunId: string) => void;
 }) {
   const t = useTranslations("prReview");
   if (runs.length === 0 && commits.length === 0) return null;
 
+  const grouped = groupByMultiAgentRun(runs);
   const items: TimelineItem[] = [
-    ...runs.map((run) => ({ kind: "run" as const, ts: tsOf(run.ran_at), run })),
+    ...grouped.map((g) =>
+      isBatch(g)
+        ? { kind: "batch" as const, ts: Math.max(...g.runs.map((r) => tsOf(r.ran_at))), batch: g }
+        : { kind: "run" as const, ts: tsOf(g.ran_at), run: g },
+    ),
     ...commits.map((commit) => ({
       kind: "commit" as const,
       ts: tsOf(commit.committed_at),
@@ -160,6 +221,46 @@ export function RunHistory({
                   {new Date(c.committed_at).toLocaleTimeString()}
                 </span>
               )}
+            </div>
+          );
+        }
+
+        if (item.kind === "batch") {
+          const { batch } = item;
+          const o = batchOutcome(batch);
+          const { costUsd, durationMs } = batchTotals(batch);
+          return (
+            <div key={`batch:${batch.multiAgentRunId}`} style={rowStyle}>
+              <Icon.Users size={16} style={{ color: o.color, flexShrink: 0 }} />
+              <Badge color={o.color} bg={o.bg} icon={o.icon}>
+                {t(`runStatus.${o.key}`)}
+              </Badge>
+              <div style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>
+                  {t("timeline.multiAgentBatch", { count: batch.runs.length })}
+                </div>
+                <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                  {durationMs != null && `${(durationMs / 1000).toFixed(1)}s`}
+                  {durationMs != null && costUsd != null && " · "}
+                  {formatCost(costUsd)}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onViewMultiAgentRun?.(batch.multiAgentRunId)}
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: "var(--accent-text)",
+                  background: "none",
+                  border: "none",
+                  cursor: onViewMultiAgentRun ? "pointer" : "default",
+                  padding: 0,
+                  flexShrink: 0,
+                }}
+              >
+                {t("timeline.viewMultiAgentResults")}
+              </button>
             </div>
           );
         }

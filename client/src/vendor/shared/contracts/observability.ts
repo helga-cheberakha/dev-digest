@@ -138,3 +138,41 @@ export const CuratorResult = z.object({
   dry_run: z.boolean(),
 });
 export type CuratorResult = z.infer<typeof CuratorResult>;
+
+// ---------------------------------------------------------------------------
+// Multi-Agent Run Request / Pre-run Estimates (T1 additions)
+// ---------------------------------------------------------------------------
+
+/** Request body for POST /pulls/:id/multi-agent-run. */
+export const MultiAgentRunRequest = z.object({
+  agent_ids: z.array(z.string().uuid()).min(1),
+});
+export type MultiAgentRunRequest = z.infer<typeof MultiAgentRunRequest>;
+
+/** Cost/duration estimate for one agent before a multi-agent run is launched. */
+export const AgentEstimate = z.object({
+  agent_id: z.string(),
+  est_duration_ms: z.number().int().nullable(),
+  est_cost_usd: z.number().nullable(),
+  last_run_summary: z.string().nullish(),
+});
+export type AgentEstimate = z.infer<typeof AgentEstimate>;
+
+/** Most recent multi-agent run for a PR (Configure page "last run" banner). */
+export const LatestMultiAgentRun = z.object({
+  id: z.string(),
+  ran_at: z.string(),
+  agent_count: z.number().int(),
+});
+export type LatestMultiAgentRun = z.infer<typeof LatestMultiAgentRun>;
+
+/** One row in a repo's recent multi-agent runs list (Configure page "Recent reviews"). */
+export const RecentMultiAgentRun = z.object({
+  id: z.string(),
+  ran_at: z.string(),
+  agent_count: z.number().int(),
+  pr_id: z.string(),
+  pr_number: z.number().int().nullable(),
+  pr_title: z.string().nullable(),
+});
+export type RecentMultiAgentRun = z.infer<typeof RecentMultiAgentRun>;

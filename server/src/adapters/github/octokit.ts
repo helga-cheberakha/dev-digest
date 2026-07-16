@@ -1,4 +1,5 @@
 import { Octokit } from 'octokit';
+import { unzipSync } from 'fflate';
 import type {
   GitHubClient,
   RepoRef,
@@ -11,10 +12,14 @@ import type {
   OpenPrPayload,
   CommitFilesPayload,
   IssueMeta,
+  CiWorkflowRun,
 } from '@devdigest/shared';
 import { withRetry, withTimeout } from '../../platform/resilience.js';
 
 const TIMEOUT = 30_000;
+
+/** Maximum compressed artifact size accepted before unzipping (zip-bomb guard). */
+const MAX_ARTIFACT_SIZE_BYTES = 20 * 1024 * 1024; // 20 MB
 
 function mapStatus(state: string, merged: boolean | undefined): PrStatus {
   if (merged) return 'merged';
@@ -29,8 +34,12 @@ function mapStatus(state: string, merged: boolean | undefined): PrStatus {
 export class OctokitGitHubClient implements GitHubClient {
   private octokit: Octokit;
 
-  constructor(token: string) {
-    this.octokit = new Octokit({ auth: token });
+  /**
+   * @param token GitHub PAT — used when `octokitOverride` is not supplied.
+   * @param octokitOverride Inject a pre-configured Octokit instance (tests only).
+   */
+  constructor(token: string, octokitOverride?: Octokit) {
+    this.octokit = octokitOverride ?? new Octokit({ auth: token });
   }
 
   async listPullRequests(repo: RepoRef): Promise<PrMeta[]> {
@@ -368,5 +377,72 @@ export class OctokitGitHubClient implements GitHubClient {
       withTimeout(this.octokit.rest.users.getAuthenticated(), TIMEOUT),
     );
     return res.data.login;
+  }
+
+  async listWorkflowRuns(repo: RepoRef, workflowFile: string): Promise<CiWorkflowRun[]> {
+    return withRetry(() =>
+      withTimeout(
+        (async () => {
+          const res = await this.octokit.rest.actions.listWorkflowRuns({
+            owner: repo.owner,
+            repo: repo.name,
+            workflow_id: workflowFile,
+            status: 'completed',
+            per_page: 50,
+          });
+          return res.data.workflow_runs.map((run) => ({
+            runId: run.id,
+            status: run.status ?? null,
+            conclusion: run.conclusion ?? null,
+            htmlUrl: run.html_url,
+            headBranch: run.head_branch ?? null,
+          }));
+        })(),
+        TIMEOUT,
+      ),
+    );
+  }
+
+  async downloadRunArtifact(
+    repo: RepoRef,
+    runId: number,
+    artifactName: string,
+  ): Promise<Buffer | null> {
+    try {
+      // 1. List artifacts for this run.
+      const { data: artifactsList } =
+        await this.octokit.rest.actions.listWorkflowRunArtifacts({
+          owner: repo.owner,
+          repo: repo.name,
+          run_id: runId,
+        });
+      const artifact = artifactsList.artifacts.find((a) => a.name === artifactName);
+      if (!artifact) return null;
+
+      // 2. Size guard — check BEFORE any download or decompression (zip-bomb protection).
+      if (artifact.size_in_bytes > MAX_ARTIFACT_SIZE_BYTES) return null;
+
+      // 3. Download the artifact zip (GitHub redirects to S3; Octokit follows the redirect).
+      const zipResponse = await this.octokit.request(
+        'GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}/{archive_format}',
+        {
+          owner: repo.owner,
+          repo: repo.name,
+          artifact_id: artifact.id,
+          archive_format: 'zip',
+        },
+      );
+      const zipData = new Uint8Array(zipResponse.data as ArrayBuffer);
+
+      // 4. Unzip in-memory and locate the result JSON file.
+      const entries = unzipSync(zipData);
+      const resultEntry = entries['devdigest-result.json'];
+      if (!resultEntry) return null;
+
+      return Buffer.from(resultEntry);
+    } catch {
+      // Any transport or decompression error → treat as absent artifact.
+      return null;
+    }
   }
 }

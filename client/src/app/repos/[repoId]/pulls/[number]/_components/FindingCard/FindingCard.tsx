@@ -13,12 +13,12 @@ import {
   MonoLink,
   ConfidenceNum,
   Button,
-  Markdown,
   type Severity,
   type Category,
 } from "@devdigest/ui";
 import type { FindingRecord, FindingActionKind } from "@devdigest/shared";
 import { Tooltip } from "@/components/Tooltip";
+import { SafeMarkdown } from "@/components/SafeMarkdown";
 import { SEV_COLOR, SEV_COLOR_FALLBACK } from "./constants";
 import { lineLabel } from "./helpers";
 import { githubBlobUrl } from "../../../../../../../lib/github-urls";
@@ -34,6 +34,7 @@ export function FindingCard({
   repoFullName,
   headSha,
   hasEvalCase,
+  showLearnReply,
 }: {
   f: FindingRecord;
   focused?: boolean;
@@ -47,9 +48,18 @@ export function FindingCard({
    *  "Turn into eval case" control opens that case instead of drafting a
    *  duplicate. */
   hasEvalCase?: boolean;
+  /** Render "Learn" + "Reply to author" alongside Accept/Dismiss/Turn into eval
+   *  case (multi-agent Tabs mode, AC-25). Both are wired-but-inert — local
+   *  visual ack only, no network call — there's no `/findings/:id/learn` or
+   *  `/findings/:id/reply` route (server only registers accept/dismiss, see
+   *  `server/src/modules/reviews/routes.ts`). Off by default: the single-agent
+   *  PR page doesn't show them. */
+  showLearnReply?: boolean;
 }) {
   const t = useTranslations("prReview");
   const [expanded, setExpanded] = React.useState(defaultExpanded ?? false);
+  const [learnAck, setLearnAck] = React.useState(false);
+  const [replyAck, setReplyAck] = React.useState(false);
   const sevColor = SEV_COLOR[f.severity] ?? SEV_COLOR_FALLBACK;
   const fileHref =
     repoFullName && headSha
@@ -85,13 +95,13 @@ export function FindingCard({
       {expanded && (
         <div style={s.body}>
           <div style={s.prose}>
-            <Markdown>{f.rationale}</Markdown>
+            <SafeMarkdown content={f.rationale} />
           </div>
           {f.suggestion && (
             <div style={s.suggestionWrap}>
               <div style={s.suggestionLabel}>{t("finding.suggestedFix")}</div>
               <div style={s.prose}>
-                <Markdown>{f.suggestion}</Markdown>
+                <SafeMarkdown content={f.suggestion} />
               </div>
             </div>
           )}
@@ -175,6 +185,28 @@ export function FindingCard({
                 />
               )}
             </Tooltip>
+            {showLearnReply && (
+              <>
+                <Button
+                  kind="ghost"
+                  size="sm"
+                  icon="Brain"
+                  active={learnAck}
+                  onClick={() => setLearnAck(true)}
+                >
+                  {t("finding.learn")}
+                </Button>
+                <Button
+                  kind="ghost"
+                  size="sm"
+                  icon="MessageSquare"
+                  active={replyAck}
+                  onClick={() => setReplyAck(true)}
+                >
+                  {t("finding.replyToAuthor")}
+                </Button>
+              </>
+            )}
           </div>
         </div>
       )}
