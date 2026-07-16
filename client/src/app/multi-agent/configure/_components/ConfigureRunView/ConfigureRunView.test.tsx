@@ -203,11 +203,18 @@ function setDefaultMocks() {
     isPending: false,
   } as unknown as ReturnType<typeof useLaunchMultiAgentRun>);
 
-  vi.mocked(usePullDetail).mockReturnValue({
-    data: { number: 42, title: "Fix security issue" },
+  // Keyed by prId (not a blanket return) so a test that switches the selected
+  // PR can actually detect a regression where the displayed PR fails to
+  // update — see "updates the displayed PR number when the selected PR changes".
+  const PULL_DETAILS: Record<string, { number: number; title: string }> = {
+    "pr-42": { number: 42, title: "Fix security issue" },
+    "pr-40": { number: 40, title: "Stale one" },
+  };
+  vi.mocked(usePullDetail).mockImplementation((prId?: string | number | null) => ({
+    data: prId != null ? PULL_DETAILS[String(prId)] : undefined,
     isLoading: false,
     isError: false,
-  } as unknown as ReturnType<typeof usePullDetail>);
+  }) as unknown as ReturnType<typeof usePullDetail>);
 
   vi.mocked(usePulls).mockReturnValue({
     data: [
@@ -269,6 +276,31 @@ describe("ConfigureRunView", () => {
     // Selecting a PR from the picker populates the agents section (same as
     // arriving with ?prId= pre-selected)
     expect(await screen.findByText("Alpha Reviewer")).toBeInTheDocument();
+  });
+
+  it("updates the displayed PR number and title when the selected PR changes (usePullDetail re-fetches per prId)", async () => {
+    // The PR-picker trigger is the button rendered immediately before
+    // dropdown-items inside the Dropdown mock — the item list can contain a
+    // button with the SAME label (the PR is also a selectable item), so the
+    // trigger must be queried by DOM position, not by text alone.
+    function triggerText(): string {
+      const items = screen.getByTestId("dropdown-items");
+      const trigger = items.parentElement!.querySelector("button");
+      return trigger?.textContent ?? "";
+    }
+
+    const { unmount } = renderView("pr-42");
+    await screen.findByText("Alpha Reviewer");
+    expect(triggerText()).toBe("#42 · Fix security issue");
+    unmount();
+
+    // A fresh mount with a different initialPrId must reflect PR #40's own
+    // detail data, not the previous PR's — catches a regression where the
+    // component ignores prId and always shows whatever usePullDetail returns
+    // first (the bug a blanket mock could never detect).
+    renderView("pr-40");
+    await screen.findByText("Alpha Reviewer");
+    expect(triggerText()).toBe("#40 · Stale one");
   });
 
   it("shows a 'last run' banner for the selected PR and navigates to it on click", async () => {

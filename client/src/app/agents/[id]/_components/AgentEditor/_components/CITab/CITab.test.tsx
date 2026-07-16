@@ -91,6 +91,18 @@ const EXPORT_RESULT: CiExport = {
   pr_url: "https://github.com/acme/payments-api/pull/42",
 };
 
+// The real server only ever returns a non-null `installation` for
+// action:'open_pr' — action:'files' (Preview step) returns installation:
+// null and persists nothing (server/src/modules/ci/service.ts, Fix C). Using
+// EXPORT_RESULT's non-null installation for preview-step tests would hide a
+// regression where the client crashes or shows a false "installed" state on
+// a null installation.
+const PREVIEW_RESULT: CiExport = {
+  installation: null,
+  files: EXPORT_RESULT.files,
+  pr_url: null,
+};
+
 // ---------------------------------------------------------------------------
 // Render helper
 // ---------------------------------------------------------------------------
@@ -391,12 +403,12 @@ describe("ExportWizard — step navigation", () => {
 
 describe("ExportWizard — Preview step file editing", () => {
   it("shows file content in a textarea after Generate preview resolves", async () => {
-    mockExportMutateAsync.mockResolvedValue(EXPORT_RESULT);
+    mockExportMutateAsync.mockResolvedValue(PREVIEW_RESULT);
 
     // Wire mutate to call onSuccess callback synchronously
     mockExportMutate.mockImplementation(
       (_vars: unknown, options?: { onSuccess?: (data: CiExport) => void }) => {
-        options?.onSuccess?.(EXPORT_RESULT);
+        options?.onSuccess?.(PREVIEW_RESULT);
       },
     );
 
@@ -417,7 +429,7 @@ describe("ExportWizard — Preview step file editing", () => {
   it("updating a textarea value is tracked in state", async () => {
     mockExportMutate.mockImplementation(
       (_vars: unknown, options?: { onSuccess?: (data: CiExport) => void }) => {
-        options?.onSuccess?.(EXPORT_RESULT);
+        options?.onSuccess?.(PREVIEW_RESULT);
       },
     );
 
@@ -437,6 +449,31 @@ describe("ExportWizard — Preview step file editing", () => {
 
     // The textarea reflects the edited value
     expect(textarea).toHaveValue("name: DevDigest-edited\n");
+  });
+
+  it("does not show the installed/success state after a preview resolves with a null installation", async () => {
+    // action:'files' never persists an installation server-side (see
+    // PREVIEW_RESULT's comment) — the wizard must stay on the Preview step,
+    // not jump to the Install step's success UI, when installation is null.
+    mockExportMutate.mockImplementation(
+      (_vars: unknown, options?: { onSuccess?: (data: CiExport) => void }) => {
+        options?.onSuccess?.(PREVIEW_RESULT);
+      },
+    );
+
+    renderCITab();
+    fireEvent.click(screen.getByRole("button", { name: /add to ci/i }));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i })); // → Preview
+    fireEvent.click(screen.getByRole("button", { name: /generate preview/i }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("textbox", { name: ".github/workflows/devdigest.yml" }),
+      ).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText("Deployment ready")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /view pull request/i })).not.toBeInTheDocument();
   });
 });
 
