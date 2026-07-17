@@ -580,6 +580,49 @@ d('AgentPerformance routes — integration (real Postgres)', () => {
     }
   });
 
+  // ---------------------------------------------------------------------------
+  // last_run_at is NOT window-scoped (the fix this test was added for)
+  // ---------------------------------------------------------------------------
+
+  it('last_run_at reflects all-time most-recent done run, NOT limited to the selected window', async () => {
+    const config = loadConfig({ ...process.env, NODE_ENV: 'test' } as NodeJS.ProcessEnv);
+    const app = await buildApp({ config, db: pg.handle.db });
+
+    try {
+      // Narrow window: 2024-06-01..2024-06-15.
+      // Alpha's done runs visible in this window: A1 (2024-06-10) only.
+      // Alpha's all-time most-recent done run: A2 (2024-06-20), OUTSIDE this window.
+      //
+      // Pre-fix (windowed MAX in aggregateAgents): last_run_at would be
+      //   '2024-06-10T12:00:00.000Z' (A1, the latest run within the narrow window).
+      // Post-fix (allTimeLastRunAt — unwindowed): last_run_at must be
+      //   '2024-06-20T12:00:00.000Z' (A2, the true all-time most-recent done run).
+      const narrowQuery = 'period=custom&from=2024-06-01&to=2024-06-15';
+
+      const perfRes = await app.inject({
+        method: 'GET',
+        url: `/agents/performance?${narrowQuery}`,
+      });
+      expect(perfRes.statusCode, `GET /agents/performance returned ${perfRes.statusCode}: ${perfRes.body}`).toBe(200);
+
+      const perfBody = perfRes.json<{
+        agents: Array<{
+          agent_id: string;
+          last_run_at: string | null;
+        }>;
+      }>();
+
+      const alphaRow = perfBody.agents.find((a) => a.agent_id === agentAlphaId);
+      expect(alphaRow, 'Agent Alpha must appear in the response').toBeDefined();
+
+      // A2 ran on 2024-06-20 — outside the narrow window (ends 2024-06-15) but
+      // is the all-time most-recent done run for Alpha. The fix must surface it.
+      expect(alphaRow!.last_run_at).toBe('2024-06-20T12:00:00.000Z');
+    } finally {
+      await app.close();
+    }
+  });
+
   it('array-binding (ARRAY[...]::uuid[]) works against real Postgres for recentRunSeries', async () => {
     // This test validates the INSIGHTS 2026-07-16 postgres-js fix implicitly:
     // recentRunSeries() is called with [agentAlphaId, agentBetaId] when the

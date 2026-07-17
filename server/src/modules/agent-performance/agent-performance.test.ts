@@ -63,6 +63,8 @@ function makeService(
     aggregateAgents?: AgentAgg[];
     recentRunSeries?: Map<string, { findingsCount: number; ranAt: Date }[]>;
     costByModel?: { model: string; value: number }[];
+    /** Map of agentId → all-time last run Date (unwindowed). Default: empty map. */
+    allTimeLastRunAt?: Map<string, Date>;
   } = {},
 ): AgentPerformanceService {
   const mockContainer = {
@@ -83,6 +85,12 @@ function makeService(
       .fn()
       .mockResolvedValue(repoOverrides.recentRunSeries ?? new Map()),
     costByModel: vi.fn().mockResolvedValue(repoOverrides.costByModel ?? []),
+    // allTimeLastRunAt() returns the all-time most-recent done run per agent.
+    // Default is an empty Map → lastRunAt = null for all agents (safe for
+    // tests that don't check last_run_at).
+    allTimeLastRunAt: vi
+      .fn()
+      .mockResolvedValue(repoOverrides.allTimeLastRunAt ?? new Map()),
   };
 
   return service;

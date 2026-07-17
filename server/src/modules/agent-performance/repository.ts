@@ -31,11 +31,17 @@ interface RunStatsRow extends Record<string, unknown> {
   // AVG(integer column) → postgres NUMERIC → postgres-js returns as string.
   // Cast via Number() in the mapping below.
   avg_latency_ms: string | null;
-  // db.execute() returns timestamptz as a string, not a Date object.
-  // Cast via new Date() in the mapping below.
-  last_run_at: string | null;
   provider: string | null;
   model: string | null;
+}
+
+// last_run_at is intentionally NOT in RunStatsRow — it is computed all-time
+// (unwindowed) by allTimeLastRunAt() and merged in by service.aggregate().
+
+interface LastRunRow extends Record<string, unknown> {
+  agent_id: string;
+  // db.execute() returns timestamptz as a string, not a Date object.
+  last_run_at: string;
 }
 
 interface FindingsStatsRow extends Record<string, unknown> {
@@ -73,8 +79,13 @@ export class AgentPerformanceRepository {
    * Optionally scoped to a single agent when `agentId` is provided.
    *
    * Merges two queries:
-   *   1. Run-level stats (count, cost, latency, last_run_at, provider/model).
+   *   1. Run-level stats (count, cost, latency, provider/model) — window-scoped.
    *   2. Findings stats via reviews (totals, accept/dismiss/pending, by severity).
+   *
+   * Note: last_run_at is NOT computed here (it was previously window-scoped via
+   * MAX(ran_at), which was incorrect). The service calls allTimeLastRunAt() and
+   * patches it in after this method returns. AgentAgg.lastRunAt is always null
+   * coming out of this method.
    */
   async aggregateAgents(
     workspaceId: string,
@@ -91,10 +102,13 @@ export class AgentPerformanceRepository {
       ? sql`AND ar.agent_id = ${agentId}::uuid`
       : sql``;
 
-    // ---- Query 1: run-level stats -------------------------------------------
+    // ---- Query 1: run-level stats (window-scoped) ---------------------------
     // Uses agent_runs_agent_id_status_ran_at_idx via (status, ran_at) filter.
     // array_agg(… ORDER BY ran_at DESC)[1] picks provider/model from the most
     // recent done run in the window without a second query.
+    // MAX(ran_at) is intentionally OMITTED here — last_run_at must reflect the
+    // all-time most-recent done run, not the most-recent within the window.
+    // It is computed unwindowed by allTimeLastRunAt() and merged in by the service.
     const runRows = (await this.db.execute<RunStatsRow>(sql`
       SELECT
         agent_id,
@@ -102,7 +116,6 @@ export class AgentPerformanceRepository {
         SUM(cost_usd) FILTER (WHERE cost_usd IS NOT NULL)                 AS total_cost_usd,
         AVG(cost_usd) FILTER (WHERE cost_usd IS NOT NULL)                 AS avg_cost_usd,
         AVG(duration_ms)                                                   AS avg_latency_ms,
-        MAX(ran_at)                                                        AS last_run_at,
         (array_agg(provider ORDER BY ran_at DESC))[1]                     AS provider,
         (array_agg(model    ORDER BY ran_at DESC))[1]                     AS model
       FROM agent_runs
@@ -154,7 +167,9 @@ export class AgentPerformanceRepository {
         totalCostUsd: r.total_cost_usd,
         avgCostUsd: r.avg_cost_usd,
         avgLatencyMs: r.avg_latency_ms !== null ? Number(r.avg_latency_ms) : null,
-        lastRunAt: r.last_run_at ? new Date(r.last_run_at) : null,
+        // lastRunAt is always null here; service.aggregate() patches it in from
+        // allTimeLastRunAt() so it reflects the true all-time most-recent done run.
+        lastRunAt: null,
         provider: r.provider,
         model: r.model,
         findingsTotal: f ? Number(f.findings_total) : 0,
@@ -226,6 +241,42 @@ export class AgentPerformanceRepository {
       });
     }
     return result;
+  }
+
+  /**
+   * Return the all-time most-recent `done` ran_at per agent, scoped only by
+   * workspace and status — NOT filtered by any time window.
+   *
+   * Called by service.aggregate() after aggregateAgents() so that
+   * AgentPerfRow.last_run_at reflects the true last run regardless of which
+   * period the operator has selected.
+   *
+   * When `agentIds` is provided, only those agents are queried (for single-agent
+   * or partial lookups). When omitted, all workspace agents are included.
+   */
+  async allTimeLastRunAt(
+    workspaceId: string,
+    agentIds?: string[],
+  ): Promise<Map<string, Date>> {
+    const agentFilter =
+      agentIds && agentIds.length > 0
+        ? sql`AND agent_id = ANY(ARRAY[${sql.join(
+            agentIds.map((id) => sql`${id}`),
+            sql`, `,
+          )}]::uuid[])`
+        : sql``;
+
+    const rows = (await this.db.execute<LastRunRow>(sql`
+      SELECT agent_id, MAX(ran_at) AS last_run_at
+      FROM agent_runs
+      WHERE workspace_id = ${workspaceId}::uuid
+        AND status = 'done'
+        ${agentFilter}
+      GROUP BY agent_id
+    `)) as unknown as LastRunRow[];
+
+    // db.execute() returns timestamptz as a string — cast via new Date().
+    return new Map(rows.map((r) => [r.agent_id, new Date(r.last_run_at)]));
   }
 
   /**

@@ -157,7 +157,7 @@ export function AgentPerformanceView() {
         {header}
 
         <div style={s.section} data-testid="perf-summary-cards">
-          <SummaryCards summary={data.summary} />
+          <SummaryCards summary={data.summary} period={perfWindow} />
         </div>
 
         <div style={s.section} data-testid="perf-agent-table">

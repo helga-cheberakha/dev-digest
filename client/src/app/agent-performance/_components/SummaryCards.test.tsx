@@ -11,6 +11,7 @@ import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { SummaryCards } from "./SummaryCards";
 import type { AgentPerf } from "@devdigest/shared";
+import type { PerfWindow } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -79,6 +80,38 @@ describe("SummaryCards", () => {
     render(<SummaryCards summary={makeSummary({ most_active_agent: null })} />);
     const dashes = screen.getAllByText("—");
     expect(dashes.length).toBeGreaterThanOrEqual(1);
+  });
+
+  describe("period label", () => {
+    it("defaults to '(30d)' when no period prop is passed", () => {
+      render(<SummaryCards summary={makeSummary()} />);
+      expect(screen.getByText(/total runs \(30d\)/i)).toBeInTheDocument();
+      expect(screen.getByText(/total cost \(30d\)/i)).toBeInTheDocument();
+    });
+
+    it("shows '(30d)' label when period is 30d", () => {
+      const period: PerfWindow = { period: "30d" };
+      render(<SummaryCards summary={makeSummary()} period={period} />);
+      expect(screen.getByText(/total runs \(30d\)/i)).toBeInTheDocument();
+      expect(screen.getByText(/total cost \(30d\)/i)).toBeInTheDocument();
+    });
+
+    it("shows '(24h)' label when period is 1d — not '(30d)'", () => {
+      const period: PerfWindow = { period: "1d" };
+      render(<SummaryCards summary={makeSummary()} period={period} />);
+      // Must say (24h), NOT (30d)
+      expect(screen.getByText(/total runs \(24h\)/i)).toBeInTheDocument();
+      expect(screen.getByText(/total cost \(24h\)/i)).toBeInTheDocument();
+      expect(screen.queryByText(/total runs \(30d\)/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/total cost \(30d\)/i)).not.toBeInTheDocument();
+    });
+
+    it("shows '(custom)' label when period is custom", () => {
+      const period: PerfWindow = { period: "custom", from: "2026-06-01", to: "2026-06-30" };
+      render(<SummaryCards summary={makeSummary()} period={period} />);
+      expect(screen.getByText(/total runs \(custom\)/i)).toBeInTheDocument();
+      expect(screen.getByText(/total cost \(custom\)/i)).toBeInTheDocument();
+    });
   });
 
   it("accepts all-null summary without throwing", () => {

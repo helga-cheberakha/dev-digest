@@ -278,12 +278,14 @@ export function AgentPerfTable({ rows, onView }: AgentPerfTableProps) {
         const isExpanded = expanded.has(row.agent_id);
         return (
           <div key={row.agent_id}>
-            {/* Main row */}
-            <div style={rowStyle} role="row">
+            {/* Main row — clicking anywhere on the row navigates; the
+                disclosure toggle and View button stop propagation so they
+                do not double-fire. */}
+            <div style={rowStyle} role="row" onClick={() => onView(row.agent_id)}>
               {/* Disclosure toggle */}
               <div style={{ padding: "0 4px" }}>
                 <button
-                  onClick={() => toggleExpand(row.agent_id)}
+                  onClick={(e) => { e.stopPropagation(); toggleExpand(row.agent_id); }}
                   aria-expanded={isExpanded}
                   aria-label={isExpanded ? "Collapse row" : "Expand row"}
                   style={{
@@ -331,10 +333,11 @@ export function AgentPerfTable({ rows, onView }: AgentPerfTableProps) {
                 {row.last_run_at ? formatTimeAgo(row.last_run_at) : NO_DATA_GLYPH}
               </div>
 
-              {/* View button — calls injected onView, no navigation here */}
+              {/* View button — stop propagation so the row-level onClick
+                  does not fire a second time when the button is clicked */}
               <div style={{ padding: "0 8px" }}>
                 <button
-                  onClick={() => onView(row.agent_id)}
+                  onClick={(e) => { e.stopPropagation(); onView(row.agent_id); }}
                   aria-label={`View ${row.agent_name}`}
                   style={{
                     background: "none",

@@ -40,9 +40,13 @@ export class AgentPerformanceService {
     window: TimeWindow,
     agentId?: string,
   ): Promise<AgentAgg[]> {
-    const [repoAggs, allAgents] = await Promise.all([
+    // allTimeLastRunAt is NOT window-scoped: it returns the true all-time
+    // most-recent done run per agent, so last_run_at is correct even when the
+    // operator selects a narrow period that predates the agent's actual last run.
+    const [repoAggs, allAgents, lastRunAtMap] = await Promise.all([
       this.repo.aggregateAgents(workspaceId, window, agentId),
       this.container.agentsRepo.list(workspaceId),
+      this.repo.allTimeLastRunAt(workspaceId, agentId ? [agentId] : undefined),
     ]);
 
     const aggById = new Map(repoAggs.map((a) => [a.agentId, a]));
@@ -53,12 +57,16 @@ export class AgentPerformanceService {
       : allAgents;
 
     return relevantAgents.map((agent): AgentAgg => {
+      const lastRunAt = lastRunAtMap.get(agent.id) ?? null;
       const existing = aggById.get(agent.id);
       if (existing) {
-        // Patch in the agent name (repository doesn't join agents table)
-        return { ...existing, agentName: agent.name };
+        // Patch in the agent name (repository doesn't join agents table) and
+        // the all-time last_run_at (not the windowed null from aggregateAgents).
+        return { ...existing, agentName: agent.name, lastRunAt };
       }
-      // Zero-run placeholder — all numeric aggregates are null-safe defaults
+      // Zero-run placeholder — all numeric aggregates are null-safe defaults.
+      // lastRunAt comes from allTimeLastRunAt so it's still correct for agents
+      // that ran outside the selected window.
       return {
         agentId: agent.id,
         agentName: agent.name,
@@ -66,7 +74,7 @@ export class AgentPerformanceService {
         totalCostUsd: null,
         avgCostUsd: null,
         avgLatencyMs: null,
-        lastRunAt: null,
+        lastRunAt,
         provider: null,
         model: null,
         findingsTotal: 0,

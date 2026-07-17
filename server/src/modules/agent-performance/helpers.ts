@@ -99,7 +99,9 @@ export interface AgentAgg {
   provider: string | null;
   /** Model from the agent's most-recent done run in window (null if no runs). */
   model: string | null;
-  /** Most-recent ran_at across done runs (null if no runs). */
+  /** All-time most-recent ran_at across done runs (null if no done runs ever).
+   *  NOT window-scoped — always reflects the true last run regardless of the
+   *  period the operator has selected. */
   lastRunAt: Date | null;
 }
 

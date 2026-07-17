@@ -265,5 +265,31 @@ describe("AgentPerfTable", () => {
       expect(onView).toHaveBeenNthCalledWith(1, "agent-high");
       expect(onView).toHaveBeenNthCalledWith(2, "agent-low");
     });
+
+    it("clicking the row body (not the View button) fires onView", () => {
+      const onView = vi.fn();
+      renderTable([ROW_HIGH], onView);
+
+      // Click a non-interactive element inside the row (agent name text)
+      // to exercise the row-container's onClick handler.
+      const agentName = screen.getByText("High Accept");
+      fireEvent.click(agentName);
+
+      expect(onView).toHaveBeenCalledOnce();
+      expect(onView).toHaveBeenCalledWith("agent-high");
+    });
+
+    it("clicking the disclosure toggle does NOT fire onView (only expand/collapse)", () => {
+      const onView = vi.fn();
+      renderTable([ROW_HIGH], onView);
+
+      const toggleBtn = screen.getByRole("button", { name: /expand row/i });
+      fireEvent.click(toggleBtn);
+
+      // Row should expand but onView must never have been called
+      expect(onView).not.toHaveBeenCalled();
+      // Toggle DID expand the row
+      expect(toggleBtn).toHaveAttribute("aria-expanded", "true");
+    });
   });
 });

@@ -12,6 +12,7 @@
 
 import React from "react";
 import type { AgentPerf } from "@devdigest/shared";
+import type { PerfWindow } from "@/lib/api";
 import { formatCost } from "@/lib/cost";
 import { NO_DATA_GLYPH } from "./colors";
 
@@ -21,11 +22,27 @@ import { NO_DATA_GLYPH } from "./colors";
 
 export interface SummaryCardsProps {
   summary: AgentPerf["summary"];
+  /** The currently-selected period window. Drives the label suffix on the
+   *  "Total runs" and "Total cost" cards. Defaults to 30d behaviour when
+   *  omitted so existing callers without the prop keep working. */
+  period?: PerfWindow;
 }
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Returns a short label suffix that reflects the selected period window:
+ *   30d      → "(30d)"
+ *   1d       → "(24h)"
+ *   custom   → "(custom)"
+ */
+function periodSuffix(period: PerfWindow | undefined): string {
+  if (!period || period.period === "30d") return "(30d)";
+  if (period.period === "1d") return "(24h)";
+  return "(custom)";
+}
 
 function StatCard({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -74,12 +91,13 @@ function formatAcceptRate(rate: number | null): string {
 // Component
 // ---------------------------------------------------------------------------
 
-export function SummaryCards({ summary }: SummaryCardsProps) {
+export function SummaryCards({ summary, period }: SummaryCardsProps) {
+  const suffix = periodSuffix(period);
   return (
     <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-      <StatCard label="Total runs (30d)" value={summary.runs} />
+      <StatCard label={`Total runs ${suffix}`} value={summary.runs} />
       {/* formatCost already returns "—" for null — matches the null-cost rule */}
-      <StatCard label="Total cost (30d)" value={formatCost(summary.total_cost_usd)} />
+      <StatCard label={`Total cost ${suffix}`} value={formatCost(summary.total_cost_usd)} />
       <StatCard label="Avg accept-rate" value={formatAcceptRate(summary.avg_accept_rate)} />
       <StatCard label="Most active" value={summary.most_active_agent ?? NO_DATA_GLYPH} />
     </div>
