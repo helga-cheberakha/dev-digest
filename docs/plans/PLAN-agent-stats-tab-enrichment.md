@@ -153,6 +153,16 @@ T1 → T2 → T3 → T4 → T5 → T6 (owned-path non-overlap stops being a cons
     the leading `agent_id` still serves it — acceptable per spec perf note, no new index.
   - **Acceptance:** new repo methods exported and typed; `cd server && npx tsc --noEmit` passes;
     covered by T3's added unit/integration tests (repo methods exercised there).
+  - **DRIFT (accepted 2026-07-17):** during the pr-self-review pass, a new composite index
+    `agent_runs(agent_id, ran_at)` was added (migration `server/src/db/migrations/0027_jittery_prism.sql`,
+    documented at `server/src/db/schema/runs.ts:52-56`) despite this plan's Risks section originally
+    stating "no new index/migration". Accepted: Run History's all-statuses read (no `status='done'`
+    filter) doesn't benefit from the existing `agent_runs_agent_id_status_ran_at_idx` composite, so a
+    dedicated `(agent_id, ran_at)` index measurably helps pagination/ordering at scale. Owned paths for
+    this task now additionally include `server/src/db/migrations/0027_jittery_prism.sql`,
+    `server/src/db/migrations/meta/0027_snapshot.json`, `server/src/db/migrations/meta/_journal.json`,
+    and `server/src/db/schema/runs.ts`. Per `CLAUDE.md`'s do-not-touch rule for
+    `server/src/db/migrations/`, this was coordinated (pr-self-review flagged it, not a silent edit).
 - **T3 — Helpers + service + route + backend tests**
   - **Action:**
     1. In `helpers.ts`: add `previousWindow(window): TimeWindow` (shift back by
@@ -298,7 +308,10 @@ T1 → T2 → T3 → T4 → T5 → T6 (owned-path non-overlap stops being a cons
 - **Adaptive bucketing degenerating to 1 bar** for short windows → `SEVERITY_BUCKET_TARGET` + a
   minimum-bucket rule in `bucketSeverity`, unit-tested for 1d and 30d windows (AC-6).
 - **Run History perf on all-statuses read** (no `status='done'` prefix) → leading `agent_id` still
-  serves the index; page size capped at 100; spec accepts this. No new index/migration.
+  serves the index; page size capped at 100; spec accepts this. **Update 2026-07-17 (accepted DRIFT):**
+  a dedicated `agent_runs(agent_id, ran_at)` index was added during pr-self-review
+  (`0027_jittery_prism.sql`) rather than relying on the existing `status`-prefixed composite — see T2's
+  DRIFT note.
 - **Generated runner bundle** holds a stale `AgentStats` schema → left untouched (build artifact);
   flagged so no one hand-edits it.
 - **AskUserQuestion unavailable** → plan is DRAFT with two clearly-scoped defaults; neither changes

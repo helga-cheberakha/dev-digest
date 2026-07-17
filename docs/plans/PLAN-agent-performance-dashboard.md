@@ -216,7 +216,7 @@ Concurrent sets (disjoint Owned paths): **Phase 1** {T1, T4, T5} · **Phase 2** 
   - **Module:** client
   - **Type:** ui
   - **Skills to use:** frontend-architecture, react-best-practices, react-testing-library, typescript-expert, security
-  - **Owned paths:** `client/src/app/agent-performance/_components/colors.ts`, `client/src/app/agent-performance/_components/SummaryCards.tsx`, `client/src/app/agent-performance/_components/AgentPerfTable.tsx`, `client/src/app/agent-performance/_components/CostBreakdown.tsx`, `client/src/app/agent-performance/_components/AgentPerfTable.test.tsx`, `client/src/app/agent-performance/_components/SummaryCards.test.tsx`
+  - **Owned paths:** `client/src/lib/colors.ts`, `client/src/app/agent-performance/_components/SummaryCards.tsx`, `client/src/app/agent-performance/_components/AgentPerfTable.tsx`, `client/src/app/agent-performance/_components/CostBreakdown.tsx`, `client/src/app/agent-performance/_components/AgentPerfTable.test.tsx`, `client/src/app/agent-performance/_components/SummaryCards.test.tsx`
   - **Depends-on:** none
   - **Covers:** AC-8 (table + donut regions), AC-9, AC-16 (UI glyph), AC-11 (UI "—"), AC-13/AC-13a (row-expand trend), AC-7 (sort/expand no network)
   - **Risk:** medium
@@ -228,6 +228,20 @@ Concurrent sets (disjoint Owned paths): **Phase 1** {T1, T4, T5} · **Phase 2** 
   - **Acceptance:** `cd client && npx tsc --noEmit && npx vitest run src/app/agent-performance/_components`
     pass; the two test files assert accept-desc-nulls-last order, client re-sort with zero network
     calls, disclosure expand, and no `0%`/`$0.00` for null metrics.
+  - **DRIFT (accepted 2026-07-17):** `colors.ts` was originally created at
+    `client/src/app/agent-performance/_components/colors.ts` (a route-private folder), then relocated
+    to `client/src/lib/colors.ts` by the follow-on `PLAN-agent-stats-tab-enrichment` once
+    `CategoryDonut` (Stats tab) needed the same label→colour helpers and a cross-route-private-folder
+    import would have violated `frontend-architecture` conventions. Owned path corrected above to match
+    the current location; all three consumers (`AgentPerfTable.tsx`, `SummaryCards.tsx`,
+    `CostBreakdown.tsx`) import from the new path.
+  - **Design-conformance fix (2026-07-17):** the mock's "AVG ACCEPT RATE" summary card shows a small
+    ring/gauge badge with the rounded percentage inside it, in addition to the big `61%` text — the
+    original implementation rendered plain text only. `SummaryCards.tsx` now renders the existing
+    design-system `CircularScore` primitive (`@devdigest/ui`, `client/src/vendor/ui/primitives/CircularScore.tsx`)
+    as a corner badge on that card only (`size=36`), reusing the score→colour thresholds already built
+    into `CircularScore` rather than adding a fourth gauge implementation. No badge is rendered when
+    `avg_accept_rate` is `null` (AC-16 still holds — no `0%`-filled gauge for missing data).
 
 ### Phase 2 — Wiring
 
@@ -314,7 +328,7 @@ Concurrent sets (disjoint Owned paths): **Phase 1** {T1, T4, T5} · **Phase 2** 
   - **Module:** client
   - **Type:** ui
   - **Skills to use:** frontend-architecture, next-best-practices, react-best-practices, react-testing-library, typescript-expert
-  - **Owned paths:** `client/src/app/agents/[id]/_components/AgentEditor/_components/StatsTab.tsx`, `client/src/app/agents/[id]/_components/AgentEditor/constants.ts`, `client/src/app/agents/[id]/_components/AgentEditor/AgentEditor.tsx`, `client/src/app/agents/[id]/page.tsx`, `client/src/app/agents/[id]/_components/AgentEditor/_components/StatsTab.test.tsx`, `client/messages/en/agents.json`
+  - **Owned paths:** `client/src/app/agents/[id]/_components/AgentEditor/_components/StatsTab/StatsTab.tsx`, `client/src/app/agents/[id]/_components/AgentEditor/_components/StatsTab/index.ts`, `client/src/app/agents/[id]/_components/AgentEditor/constants.ts`, `client/src/app/agents/[id]/_components/AgentEditor/AgentEditor.tsx`, `client/src/app/agents/[id]/page.tsx`, `client/src/app/agents/[id]/_components/AgentEditor/_components/StatsTab/StatsTab.test.tsx`, `client/messages/en/agents.json`
   - **Depends-on:** T4
   - **Covers:** AC-13 (Stats tab target of navigation), AC-13a (Stats-tab labelled trend), AC-16 / AC-11 (UI)
   - **Risk:** low
@@ -325,6 +339,11 @@ Concurrent sets (disjoint Owned paths): **Phase 1** {T1, T4, T5} · **Phase 2** 
   - **Acceptance:** `cd client && npx tsc --noEmit && npx vitest run src/app/agents` pass; navigating
     to `/agents/:id?tab=stats` renders `StatsTab` (not `config`); null accept-rate shows a no-data
     glyph.
+  - **DRIFT (accepted 2026-07-17):** the flat `StatsTab.tsx` this task originally created was later
+    split by the follow-on `PLAN-agent-stats-tab-enrichment` into a `StatsTab/` folder
+    (`StatsTab.tsx` + `index.ts` barrel + a `_components/` subfolder of chart/table pieces), once the
+    enrichment added six new presentational subcomponents. Owned path corrected above. `AgentEditor.tsx`'s
+    import resolves through the barrel transparently — no behavioural change.
 
 ### Phase 3 — Backend verification
 
@@ -346,7 +365,7 @@ Concurrent sets (disjoint Owned paths): **Phase 1** {T1, T4, T5} · **Phase 2** 
   - **Module:** server
   - **Type:** backend
   - **Skills to use:** fastify-best-practices, drizzle-orm-patterns, typescript-expert, react-testing-library (Vitest patterns only)
-  - **Owned paths:** `server/src/modules/agent-performance/agent-performance.test.ts`, `server/test/agent-performance.it.test.ts`
+  - **Owned paths:** `server/src/modules/agent-performance/agent-performance.test.ts`, `server/test/agent-performance.it.test.ts`, `server/src/modules/agent-performance/routes.test.ts`
   - **Depends-on:** T2
   - **Covers:** AC-1, AC-2, AC-3, AC-4, AC-11, AC-12, AC-13a, AC-15, AC-16 (server assertions)
   - **Risk:** medium
@@ -355,6 +374,14 @@ Concurrent sets (disjoint Owned paths): **Phase 1** {T1, T4, T5} · **Phase 2** 
     `agent_runs` with mixed `status` and some null `cost_usd` to exercise AC-4/AC-11.
   - **Acceptance:** `cd server && npx vitest run agent-performance` (unit) and the integration test
     pass; AC-1 field-equality and the AC-13a trend-agreement assertions are green.
+  - **DRIFT (accepted 2026-07-17):** AC-15 was implemented as a **static grep test**
+    (`agent-performance.it.test.ts`: "module contains no LLMProvider or run-executor imports")
+    instead of the plan's originally specified dynamic "inject a throwing `LLMProvider` mock, confirm
+    both endpoints still return 200" test. Accepted as-is: the module has no import path through which
+    an `LLMProvider` mock could even be injected, so the static assertion is a strictly stronger proof
+    for this module's shape than a runtime mock would be. No further action needed. `routes.test.ts`
+    (added alongside `routes.ts` in T2, not originally listed as a T3 owned path) is folded into T3's
+    owned paths above since it's where the route-level smoke assertions for T2's Acceptance live.
 
 ## Testing strategy
 - **Backend unit** — `cd server && npx vitest run agent-performance` (T3 colocated): aggregation
