@@ -1,17 +1,25 @@
 /*
  * StatsTab — per-agent quality metrics tab in the Agent Editor.
  * Shows runs/accept-rate/cost/latency metric cards, a findings-by-severity
- * breakdown, and a labelled run-trend list for the selected time window.
+ * breakdown, a run-trend list, category donut, and a paginated run history table
+ * with a trace drawer for the selected time window.
  */
 "use client";
 
 import React, { useState } from "react";
 import { useTranslations } from "next-intl";
 import { Skeleton, SectionLabel } from "@devdigest/ui";
-import { useAgentStats } from "@/lib/hooks/agentPerformance";
+import { useAgentStats, useAgentRuns } from "@/lib/hooks/agentPerformance";
 import { formatCost } from "@/lib/cost";
 import type { PerfWindow } from "@/lib/api";
 import type { StatPoint } from "@devdigest/shared";
+import RunTraceDrawer from "@/app/repos/[repoId]/pulls/[number]/_components/RunTraceDrawer";
+import { Sparkline } from "./_components/Sparkline";
+import { AcceptRateGauge } from "./_components/AcceptRateGauge";
+import { CostDelta } from "./_components/CostDelta";
+import { SeverityStackedBars } from "./_components/SeverityStackedBars";
+import { CategoryDonut } from "./_components/CategoryDonut";
+import { RunHistoryTable } from "./_components/RunHistoryTable";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -39,12 +47,15 @@ function MetricCard({
   value,
   isNoData,
   noDataLabel,
+  extra,
 }: {
   label: string;
   value: string;
   /** When true, renders the value with the "no data" visual treatment. */
   isNoData?: boolean;
   noDataLabel?: string;
+  /** Optional content rendered below the main value (overlay/augmentation). */
+  extra?: React.ReactNode;
 }) {
   return (
     <div
@@ -89,6 +100,7 @@ function MetricCard({
           </span>
         )}
       </div>
+      {extra != null && <div style={{ marginTop: 8 }}>{extra}</div>}
     </div>
   );
 }
@@ -277,8 +289,25 @@ function TrendList({ points, title }: { points: StatPoint[]; title: string }) {
 export function StatsTab({ agentId }: { agentId: string }) {
   const t = useTranslations("agents");
   const [window, setWindow] = useState<PerfWindow>({ period: "30d" });
+  const [page, setPage] = useState(1);
+  const [openRunId, setOpenRunId] = useState<string | null>(null);
+
+  // Reset page to 1 whenever the time window changes so the user
+  // doesn't land on a page that doesn't exist in the new window's data.
+  const handleWindowChange = (w: PerfWindow) => {
+    setWindow(w);
+    setPage(1);
+  };
 
   const { data, isLoading, isError } = useAgentStats(agentId, window);
+
+  // Independent query for run history — scoped error state so a run-list
+  // failure doesn't blank the stats/chart sections above it.
+  const {
+    data: runsData,
+    isLoading: runsLoading,
+    isError: runsError,
+  } = useAgentRuns(agentId, window, page, 25);
 
   const periodLabels = {
     "1d": t("stats.window.1d"),
@@ -295,7 +324,7 @@ export function StatsTab({ agentId }: { agentId: string }) {
       <div style={{ marginBottom: 20 }}>
         <PeriodSelector
           window={window}
-          onChange={setWindow}
+          onChange={handleWindowChange}
           labels={periodLabels}
         />
       </div>
@@ -323,7 +352,7 @@ export function StatsTab({ agentId }: { agentId: string }) {
       {/* ── Data ── */}
       {!isLoading && !isError && data && (
         <>
-          {/* Empty state: zero runs */}
+          {/* Empty state: zero runs — cards/trend hidden, new blocks still render */}
           {data.runs === 0 ? (
             <p style={{ fontSize: 13, color: "var(--text-muted)" }}>
               {t("stats.emptyState")}
@@ -332,10 +361,17 @@ export function StatsTab({ agentId }: { agentId: string }) {
             <>
               {/* ── Metric cards ── */}
               <div style={{ display: "flex", gap: 12, marginBottom: 28 }}>
+                {/* RUNS — with inline Sparkline (guarded for length-1 NaN per INSIGHTS 2026-07-11) */}
                 <MetricCard
                   label={t("stats.tiles.runs")}
                   value={String(data.runs)}
+                  extra={
+                    data.trend.length >= 2 ? (
+                      <Sparkline points={data.trend} />
+                    ) : undefined
+                  }
                 />
+                {/* ACCEPT RATE — augmented with radial gauge */}
                 <MetricCard
                   label={t("stats.tiles.acceptRate")}
                   value={
@@ -345,57 +381,24 @@ export function StatsTab({ agentId }: { agentId: string }) {
                   }
                   isNoData={data.accept_rate == null}
                   noDataLabel={noDataLabel}
+                  extra={<AcceptRateGauge acceptRate={data.accept_rate} />}
                 />
+                {/* AVG COST — augmented with delta vs prior window */}
                 <MetricCard
                   label={t("stats.tiles.avgCost")}
                   value={formatCost(data.avg_cost_usd)}
+                  extra={
+                    <CostDelta
+                      current={data.avg_cost_usd}
+                      previous={data.avg_cost_usd_prev}
+                    />
+                  }
                 />
+                {/* AVG LATENCY — unchanged */}
                 <MetricCard
                   label={t("stats.tiles.avgLatency")}
                   value={latencyDisplay(data.avg_latency_ms)}
                 />
-              </div>
-
-              {/* ── Findings by severity ── */}
-              <SectionLabel icon="AlertTriangle">
-                {t("stats.findingsBySeverity")}
-              </SectionLabel>
-              <div
-                style={{
-                  display: "flex",
-                  gap: 12,
-                  marginBottom: 28,
-                }}
-              >
-                {(
-                  [
-                    { key: "CRITICAL", labelKey: "stats.severity.critical", color: "var(--crit)", bg: "var(--crit-bg)" },
-                    { key: "WARNING", labelKey: "stats.severity.warning", color: "var(--warn)", bg: "var(--warn-bg)" },
-                    { key: "SUGGESTION", labelKey: "stats.severity.suggestion", color: "var(--accent)", bg: "var(--bg-elevated)" },
-                  ] as const
-                ).map(({ key, labelKey, color, bg }) => (
-                  <div
-                    key={key}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      padding: "10px 14px",
-                      background: bg,
-                      border: `1px solid ${color}`,
-                      borderRadius: 8,
-                      flex: 1,
-                    }}
-                  >
-                    <span style={{ fontSize: 20, fontWeight: 700, color }}
-                      className="tnum">
-                      {data.findings_by_severity[key]}
-                    </span>
-                    <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                      {t(labelKey)}
-                    </span>
-                  </div>
-                ))}
               </div>
 
               {/* ── Run trend ── */}
@@ -406,6 +409,59 @@ export function StatsTab({ agentId }: { agentId: string }) {
                 />
               )}
             </>
+          )}
+
+          {/* ──────────────────────────────────────────────────────────────── */}
+          {/* The sections below render for ALL windows (including zero runs). */}
+          {/* Each T5 component handles empty arrays / null gracefully.        */}
+          {/* ──────────────────────────────────────────────────────────────── */}
+
+          {/* ── Findings by severity (replaces flat severity boxes) ── */}
+          <SectionLabel icon="AlertTriangle">
+            {t("stats.findingsBySeverity")}
+          </SectionLabel>
+          <div style={{ marginBottom: 28 }}>
+            <SeverityStackedBars buckets={data.severity_by_bucket} />
+          </div>
+
+          {/* ── Findings by Category ── */}
+          <SectionLabel icon="BarChart">
+            {t("stats.findingsByCategory")}
+          </SectionLabel>
+          <div style={{ marginBottom: 28 }}>
+            <CategoryDonut costByCategory={data.cost_by_category} />
+          </div>
+
+          {/* ── Run History — own independent loading/error state ── */}
+          <SectionLabel icon="History">
+            {t("stats.runHistory")}
+          </SectionLabel>
+          <div style={{ marginBottom: 28 }}>
+            {runsLoading ? (
+              <Skeleton height={80} />
+            ) : runsError ? (
+              <p style={{ fontSize: 13, color: "var(--crit)", margin: 0 }}>
+                {t("stats.runsErrorState")}
+              </p>
+            ) : (
+              <RunHistoryTable
+                rows={runsData?.rows ?? []}
+                onViewTrace={(row) => setOpenRunId(row.run_id)}
+                page={page}
+                limit={25}
+                total={runsData?.total ?? 0}
+                onPageChange={setPage}
+              />
+            )}
+          </div>
+
+          {/* ── Run Trace Drawer — opens when a table row's trace action is clicked ── */}
+          {openRunId != null && (
+            <RunTraceDrawer
+              runId={openRunId}
+              agentName={data.agent_name}
+              onClose={() => setOpenRunId(null)}
+            />
           )}
         </>
       )}

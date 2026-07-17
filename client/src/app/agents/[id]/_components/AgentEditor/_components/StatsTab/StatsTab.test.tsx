@@ -3,33 +3,80 @@
  *
  * Asserts:
  * 1. Seeded agent stats render correctly (runs, accept_rate%, cost, latency,
- *    findings_by_severity counts, labelled trend list).
- * 2. accept_rate: null → no-data glyph rendered with aria-label, NOT "0%".
- * 3. Loading state renders Skeleton placeholders and no numeric metrics.
- * 4. Error state renders the error message and no numeric metrics.
+ *    severity stacked bars with legend labels, labelled trend list).
+ * 2. accept_rate: null → no-data glyph rendered with aria-label AND
+ *    AcceptRateGauge null empty state ("Accept rate: no data"), NOT "0%".
+ * 3. avg_cost_usd_prev: null → CostDelta renders "—".
+ * 4. Loading state renders Skeleton placeholders and no numeric metrics.
+ * 5. Error state renders the error message and no numeric metrics.
+ * 6. Happy path — all new blocks render (Sparkline, AcceptRateGauge, CostDelta,
+ *    SeverityStackedBars, CategoryDonut, RunHistoryTable).
+ * 7. Clicking a Run History row's trace action opens RunTraceDrawer.
+ * 8. Zero-run agent renders empty states across all new blocks without throwing.
+ * 9. useAgentRuns error → Run History section shows error, stats cards still render.
  *
  * Uses fireEvent only — @testing-library/user-event is not installed
  * (client/INSIGHTS.md 2026-07-06).
  *
  * ResizeObserver is stubbed in the global test setup (src/test/setup.ts).
- * useAgentStats is mocked at the hook level.
+ * useAgentStats and useAgentRuns are mocked at the hook level.
+ * RunTraceDrawer is mocked to avoid its internal hook dependencies.
+ * next/link is mocked to a plain <a> element (no App Router needed in tests).
  */
 
+import React from "react";
 import { describe, it, expect, afterEach, vi, beforeEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { NextIntlClientProvider } from "next-intl";
 import agentsMessages from "../../../../../../../../messages/en/agents.json";
 import { StatsTab } from "./StatsTab";
 
 // ---------------------------------------------------------------------------
-// Mock useAgentStats
+// Module mocks (must come before imports that use them)
 // ---------------------------------------------------------------------------
 
-vi.mock("@/lib/hooks/agentPerformance", () => ({
-  useAgentStats: vi.fn(),
+// next/link renders a plain <a> in the test environment
+vi.mock("next/link", () => ({
+  default: ({
+    href,
+    children,
+    style,
+  }: {
+    href: string;
+    children: React.ReactNode;
+    style?: React.CSSProperties;
+  }) => (
+    <a href={href} style={style}>
+      {children}
+    </a>
+  ),
 }));
 
-import { useAgentStats } from "@/lib/hooks/agentPerformance";
+// RunTraceDrawer: mock the barrel (same path as the import in StatsTab.tsx)
+vi.mock(
+  "@/app/repos/[repoId]/pulls/[number]/_components/RunTraceDrawer",
+  () => ({
+    default: ({
+      runId,
+      onClose,
+    }: {
+      runId: string;
+      onClose: () => void;
+    }) => (
+      <div data-testid="run-trace-drawer" data-run-id={runId}>
+        <button onClick={onClose}>Close drawer</button>
+      </div>
+    ),
+  }),
+);
+
+// Mock both agentPerformance hooks
+vi.mock("@/lib/hooks/agentPerformance", () => ({
+  useAgentStats: vi.fn(),
+  useAgentRuns: vi.fn(),
+}));
+
+import { useAgentStats, useAgentRuns } from "@/lib/hooks/agentPerformance";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -50,6 +97,12 @@ const STATS_WITH_DATA = {
   avg_cost_usd: 0.02,
   avg_latency_ms: 1350,
   findings_by_severity: { CRITICAL: 12, WARNING: 54, SUGGESTION: 61 },
+  // New fields required by T6
+  avg_cost_usd_prev: 0.025,
+  severity_by_bucket: [
+    { label: "Jun", CRITICAL: 12, WARNING: 54, SUGGESTION: 61 },
+  ],
+  cost_by_category: [{ category: "security", cost_usd: 0.015 }],
   trend: [
     { label: "2026-06-01", value: 5 },
     { label: "2026-06-08", value: 8 },
@@ -64,15 +117,54 @@ const STATS_NULL_ACCEPT_RATE = {
   dismiss_rate: null,
 };
 
-/** Zero-runs stats — all aggregate fields null. */
+/** Stats with a null previous cost — CostDelta should render "—". */
+const STATS_NULL_PREV_COST = {
+  ...STATS_WITH_DATA,
+  avg_cost_usd_prev: null,
+};
+
+/** Zero-runs stats — all aggregate fields null/empty. */
 const STATS_ZERO_RUNS = {
   ...STATS_WITH_DATA,
   runs: 0,
   accept_rate: null,
   avg_cost_usd: null,
+  avg_cost_usd_prev: null,
   avg_latency_ms: null,
   findings_by_severity: { CRITICAL: 0, WARNING: 0, SUGGESTION: 0 },
+  severity_by_bucket: [],
+  cost_by_category: [],
   trend: [],
+};
+
+/** Happy-path run history with one row that has a trace. */
+const RUNS_WITH_TRACE = {
+  rows: [
+    {
+      run_id: "run-abc-123",
+      ran_at: "2026-07-01T10:00:00.000Z",
+      pr_number: null,
+      pr_title: null,
+      pr_repo_id: null,
+      tokens_in: 1500,
+      tokens_out: 450,
+      cost_usd: 0.02,
+      findings_count: 3,
+      source: "local" as const,
+      status: "completed",
+      has_trace: true,
+    },
+  ],
+  page: 1,
+  limit: 25,
+  total: 1,
+};
+
+const RUNS_EMPTY = {
+  rows: [],
+  page: 1,
+  limit: 25,
+  total: 0,
 };
 
 // ---------------------------------------------------------------------------
@@ -91,13 +183,23 @@ function renderStatsTab() {
 // Setup / teardown
 // ---------------------------------------------------------------------------
 
+// Provide a default useAgentRuns return value before every test so the
+// unconditional hook call never returns undefined (which would crash on destructure).
+beforeEach(() => {
+  vi.mocked(useAgentRuns).mockReturnValue({
+    data: RUNS_EMPTY,
+    isLoading: false,
+    isError: false,
+  } as unknown as ReturnType<typeof useAgentRuns>);
+});
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
 });
 
 // ---------------------------------------------------------------------------
-// Tests
+// Existing tests (must remain green)
 // ---------------------------------------------------------------------------
 
 describe("StatsTab — seeded data renders correctly", () => {
@@ -116,8 +218,9 @@ describe("StatsTab — seeded data renders correctly", () => {
 
   it("renders accept_rate as percentage when present", () => {
     renderStatsTab();
-    // 0.816 × 100 → 82%
-    expect(screen.getByText("82%")).toBeInTheDocument();
+    // 0.816 × 100 → 82%; appears in both MetricCard value and AcceptRateGauge centre
+    const eightyTwoPct = screen.getAllByText("82%");
+    expect(eightyTwoPct.length).toBeGreaterThanOrEqual(1);
   });
 
   it("renders avg_cost_usd via formatCost", () => {
@@ -131,20 +234,22 @@ describe("StatsTab — seeded data renders correctly", () => {
     expect(screen.getByText("1350 ms")).toBeInTheDocument();
   });
 
-  it("renders findings_by_severity counts", () => {
+  it("renders findings_by_severity counts via SeverityStackedBars hidden table", () => {
     renderStatsTab();
-    // "12" also appears as the last trend-bar value, so use getAllByText
+    // Values appear in the visually-hidden data table inside SeverityStackedBars.
+    // "12" also appears as the last trend-bar value, so use getAllByText.
     const twelves = screen.getAllByText("12");
     expect(twelves.length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("54")).toBeInTheDocument(); // WARNING
     expect(screen.getByText("61")).toBeInTheDocument(); // SUGGESTION
   });
 
-  it("renders severity labels", () => {
+  it("renders severity legend labels from SeverityStackedBars", () => {
     renderStatsTab();
-    expect(screen.getByText("Critical")).toBeInTheDocument();
-    expect(screen.getByText("Warning")).toBeInTheDocument();
-    expect(screen.getByText("Suggestion")).toBeInTheDocument();
+    // Labels appear in the legend and in the visually-hidden table header
+    expect(screen.getAllByText("Critical").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Warning").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Suggestion").length).toBeGreaterThanOrEqual(1);
   });
 
   it("renders trend with both labels and values", () => {
@@ -174,11 +279,18 @@ describe("StatsTab — null accept_rate renders no-data glyph, not 0%", () => {
     // Must NOT render "0%"
     expect(screen.queryByText("0%")).not.toBeInTheDocument();
 
-    // Must render the no-data element with aria-label
+    // Must render the no-data element with aria-label (MetricCard existing glyph)
     const noDataEl = screen.getByRole("img", { name: "no data yet" });
     expect(noDataEl).toBeInTheDocument();
     // The glyph itself is the "·" character defined in agents.json stats.noData
     expect(noDataEl).toHaveTextContent("·");
+  });
+
+  it("AcceptRateGauge renders its null empty state, not a 0% gauge", () => {
+    renderStatsTab();
+    // AcceptRateGauge(null) renders role="img" aria-label="Accept rate: no data"
+    const gauge = screen.getByRole("img", { name: "Accept rate: no data" });
+    expect(gauge).toBeInTheDocument();
   });
 });
 
@@ -235,6 +347,22 @@ describe("StatsTab — empty state (zero runs)", () => {
     // No tile values rendered
     expect(screen.queryByText("RUNS")).not.toBeInTheDocument();
   });
+
+  it("renders new blocks with empty states without throwing", () => {
+    renderStatsTab();
+    // SeverityStackedBars empty state
+    expect(
+      screen.getByText("No severity data for this period."),
+    ).toBeInTheDocument();
+    // CategoryDonut empty state
+    expect(
+      screen.getByText("No cost data by category for this period."),
+    ).toBeInTheDocument();
+    // RunHistoryTable empty state
+    expect(
+      screen.getByText("No runs recorded for this agent yet."),
+    ).toBeInTheDocument();
+  });
 });
 
 describe("StatsTab — tab routing (VALID_TABS sanity check)", () => {
@@ -251,5 +379,176 @@ describe("StatsTab — tab routing (VALID_TABS sanity check)", () => {
       "ag1",
       expect.objectContaining({ period: "30d" }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// New tests (T6 acceptance)
+// ---------------------------------------------------------------------------
+
+describe("StatsTab — happy path: new blocks render with non-trivial data", () => {
+  beforeEach(() => {
+    vi.mocked(useAgentStats).mockReturnValue({
+      data: STATS_WITH_DATA,
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useAgentStats>);
+    vi.mocked(useAgentRuns).mockReturnValue({
+      data: RUNS_WITH_TRACE,
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useAgentRuns>);
+  });
+
+  it("Sparkline renders with aria-label describing the trend direction", () => {
+    renderStatsTab();
+    // Sparkline renders an SVG with role="img" and an aria-label about trend direction
+    const sparkline = screen.getByRole("img", {
+      name: /Trend: (upward|downward|flat)/i,
+    });
+    expect(sparkline).toBeInTheDocument();
+  });
+
+  it("AcceptRateGauge renders the accept rate ring gauge", () => {
+    renderStatsTab();
+    // AcceptRateGauge(0.816) renders role="img" aria-label="Accept rate: 82%"
+    const gauge = screen.getByRole("img", { name: "Accept rate: 82%" });
+    expect(gauge).toBeInTheDocument();
+  });
+
+  it("CostDelta renders a cost change indicator (not '—')", () => {
+    renderStatsTab();
+    // CostDelta(0.02, 0.025) → cheaper → shows "↓ -$0.005..." or similar glyph
+    // We verify it does NOT show the null-data "—" (which would appear if both are null)
+    // The delta text contains an arrow glyph
+    const deltaEl = screen.getByText(/[↑↓→]/);
+    expect(deltaEl).toBeInTheDocument();
+  });
+
+  it("SeverityStackedBars section header renders", () => {
+    renderStatsTab();
+    expect(screen.getByText("Findings by severity")).toBeInTheDocument();
+  });
+
+  it("CategoryDonut section header renders", () => {
+    renderStatsTab();
+    expect(screen.getByText("Findings by Category")).toBeInTheDocument();
+  });
+
+  it("RunHistoryTable section header renders", () => {
+    renderStatsTab();
+    expect(screen.getByText("Run History")).toBeInTheDocument();
+  });
+
+  it("RunHistoryTable renders a run row and its View trace button", () => {
+    renderStatsTab();
+    // The row's "View trace" button is present (has_trace: true)
+    const traceBtn = screen.getByRole("button", {
+      name: /View trace for run run-abc-123/i,
+    });
+    expect(traceBtn).toBeInTheDocument();
+  });
+});
+
+describe("StatsTab — CostDelta null previous cost renders '—'", () => {
+  beforeEach(() => {
+    vi.mocked(useAgentStats).mockReturnValue({
+      data: STATS_NULL_PREV_COST,
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useAgentStats>);
+  });
+
+  it("CostDelta renders '—' when avg_cost_usd_prev is null", () => {
+    renderStatsTab();
+    // CostDelta(0.02, null) → renders "—" because previous is null
+    // The "—" from CostDelta is the only "—" rendered (latency=1350ms, pr=null but no rows)
+    const emDashes = screen.getAllByText("—");
+    expect(emDashes.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("StatsTab — trace drawer opens on row click", () => {
+  beforeEach(() => {
+    vi.mocked(useAgentStats).mockReturnValue({
+      data: STATS_WITH_DATA,
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useAgentStats>);
+    vi.mocked(useAgentRuns).mockReturnValue({
+      data: RUNS_WITH_TRACE,
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useAgentRuns>);
+  });
+
+  it("clicking View trace opens RunTraceDrawer with the correct runId", () => {
+    renderStatsTab();
+
+    // Drawer not visible initially
+    expect(
+      screen.queryByTestId("run-trace-drawer"),
+    ).not.toBeInTheDocument();
+
+    // Click the trace button for the row
+    const traceBtn = screen.getByRole("button", {
+      name: /View trace for run run-abc-123/i,
+    });
+    fireEvent.click(traceBtn);
+
+    // Drawer should now be in the document with the correct runId
+    const drawer = screen.getByTestId("run-trace-drawer");
+    expect(drawer).toBeInTheDocument();
+    expect(drawer).toHaveAttribute("data-run-id", "run-abc-123");
+  });
+
+  it("closing the RunTraceDrawer unmounts it", () => {
+    renderStatsTab();
+
+    const traceBtn = screen.getByRole("button", {
+      name: /View trace for run run-abc-123/i,
+    });
+    fireEvent.click(traceBtn);
+
+    // Drawer is now open
+    expect(screen.getByTestId("run-trace-drawer")).toBeInTheDocument();
+
+    // Click the mocked drawer's close button
+    fireEvent.click(screen.getByRole("button", { name: "Close drawer" }));
+
+    // Drawer should be gone
+    expect(
+      screen.queryByTestId("run-trace-drawer"),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("StatsTab — run history error does not blank the whole tab", () => {
+  beforeEach(() => {
+    vi.mocked(useAgentStats).mockReturnValue({
+      data: STATS_WITH_DATA,
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useAgentStats>);
+    vi.mocked(useAgentRuns).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+    } as unknown as ReturnType<typeof useAgentRuns>);
+  });
+
+  it("stats cards still render when run history query fails", () => {
+    renderStatsTab();
+    // Stats card values are still visible
+    expect(screen.getByText("42")).toBeInTheDocument();
+    expect(screen.getByText("$0.02")).toBeInTheDocument();
+    // Run history shows its own error affordance
+    expect(
+      screen.getByText("Could not load run history."),
+    ).toBeInTheDocument();
+    // Stats error message is NOT shown
+    expect(
+      screen.queryByText("Could not load agent stats."),
+    ).not.toBeInTheDocument();
   });
 });

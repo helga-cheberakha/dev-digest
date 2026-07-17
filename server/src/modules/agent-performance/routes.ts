@@ -13,16 +13,16 @@
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { AgentPerf, AgentStats } from '@devdigest/shared';
+import { AgentPerf, AgentStats, AgentRunHistory } from '@devdigest/shared';
 import { getContext } from '../_shared/context.js';
 import { IdParams } from '../_shared/schemas.js';
 import { AgentPerformanceService } from './service.js';
 import { resolveWindow } from './helpers.js';
-import { MAX_RANGE_DAYS } from './constants.js';
+import { MAX_RANGE_DAYS, RUN_HISTORY_DEFAULT_LIMIT } from './constants.js';
 import { AppError } from '../../platform/errors.js';
 
 // ---------------------------------------------------------------------------
-// Query schema shared by both routes
+// Query schema shared by both stats routes
 // ---------------------------------------------------------------------------
 
 /**
@@ -128,6 +128,34 @@ export default async function agentPerformanceRoutes(appBase: FastifyInstance) {
       const window = resolveWindow(period, from, to);
       const result = await service.getAgentStats(workspaceId, id, window);
       return AgentStats.parse(result);
+    },
+  );
+
+  // ---- Per-agent run history -----------------------------------------------
+  // Parametric path: /agents/:id/runs
+  // NotFoundError from the service (agent not in workspace) → HTTP 404 (same
+  // mapping as the stats route above — cross-workspace agent ids never leak rows).
+  app.get(
+    '/agents/:id/runs',
+    {
+      schema: {
+        params: IdParams,
+        querystring: WindowQuery.extend({
+          page: z.coerce.number().int().min(1).default(1),
+          limit: z.coerce.number().int().min(1).default(RUN_HISTORY_DEFAULT_LIMIT),
+        }),
+      },
+    },
+    async (req) => {
+      const { workspaceId } = await getContext(container, req);
+      const { id } = req.params;
+      const { period, from, to, page, limit } = req.query;
+
+      validateWindowQuery(period, from, to);
+
+      const window = resolveWindow(period, from, to);
+      const result = await service.getAgentRuns(workspaceId, id, window, page, limit);
+      return AgentRunHistory.parse(result);
     },
   );
 }

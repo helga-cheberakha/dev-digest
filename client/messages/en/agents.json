@@ -156,7 +156,10 @@
     },
     "trendTitle": "Run trend",
     "emptyState": "No runs in this period.",
-    "errorState": "Could not load agent stats."
+    "errorState": "Could not load agent stats.",
+    "findingsByCategory": "Findings by Category",
+    "runHistory": "Run History",
+    "runsErrorState": "Could not load run history."
   },
   "mount": {
     "body": "Mount point for {owner}. The Agent Editor shell + tab routing are wired by A2 — {owner} renders this tab."

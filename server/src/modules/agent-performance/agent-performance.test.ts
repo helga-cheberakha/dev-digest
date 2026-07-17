@@ -17,6 +17,9 @@ import {
   resolveWindow,
   toAgentPerfRow,
   toAgentStats,
+  previousWindow,
+  bucketSeverity,
+  sumCostByCategory,
   type AgentAgg,
 } from './helpers.js';
 import type { StatPoint } from '@devdigest/shared';
@@ -51,6 +54,13 @@ function makeAgg(overrides: Partial<AgentAgg> = {}): AgentAgg {
 function makeAgent(id: string, name: string): AgentRow {
   return { id, name } as unknown as AgentRow;
 }
+
+/** Minimal extras for toAgentStats call sites that don't exercise the new fields. */
+const EMPTY_EXTRAS = {
+  avgCostUsdPrev: null,
+  severityByBucket: [] as ReturnType<typeof bucketSeverity>,
+  costByCategory: [] as ReturnType<typeof sumCostByCategory>,
+};
 
 /**
  * Build a service with mocked agentsRepo and a swapped-out repository.
@@ -158,6 +168,188 @@ describe('resolveWindow', () => {
 });
 
 // ---------------------------------------------------------------------------
+// previousWindow — pure function
+// ---------------------------------------------------------------------------
+
+describe('previousWindow', () => {
+  it('shifts the window back by exactly its own duration', () => {
+    const fromTs = new Date('2024-06-01T00:00:00.000Z');
+    const toTs = new Date('2024-07-01T00:00:00.000Z'); // 30 days
+    const durationMs = toTs.getTime() - fromTs.getTime();
+
+    const prev = previousWindow({ fromTs, toTs });
+
+    // prev.toTs === original fromTs
+    expect(prev.toTs.toISOString()).toBe(fromTs.toISOString());
+    // prev.fromTs === original fromTs − duration
+    expect(prev.fromTs.toISOString()).toBe(
+      new Date(fromTs.getTime() - durationMs).toISOString(),
+    );
+    // prev window has the same duration
+    expect(prev.toTs.getTime() - prev.fromTs.getTime()).toBe(durationMs);
+  });
+
+  it('works correctly for a 7-day window (common preset)', () => {
+    const fromTs = new Date('2024-06-10T00:00:00.000Z');
+    const toTs = new Date('2024-06-17T00:00:00.000Z'); // 7 days
+    const prev = previousWindow({ fromTs, toTs });
+
+    expect(prev.fromTs.toISOString()).toBe('2024-06-03T00:00:00.000Z');
+    expect(prev.toTs.toISOString()).toBe('2024-06-10T00:00:00.000Z');
+  });
+
+  it('does not mutate the input window', () => {
+    const fromTs = new Date('2024-06-01T00:00:00.000Z');
+    const toTs = new Date('2024-06-08T00:00:00.000Z');
+    const originalFromMs = fromTs.getTime();
+    const originalToMs = toTs.getTime();
+
+    previousWindow({ fromTs, toTs });
+
+    expect(fromTs.getTime()).toBe(originalFromMs);
+    expect(toTs.getTime()).toBe(originalToMs);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bucketSeverity — pure function
+// ---------------------------------------------------------------------------
+
+describe('bucketSeverity', () => {
+  const ONE_DAY = 24 * 60 * 60 * 1000;
+  const TARGET = 7;
+
+  it('1-day window produces MORE than 1 bucket (not degenerate)', () => {
+    const fromTs = new Date('2024-06-15T00:00:00.000Z');
+    const toTs = new Date('2024-06-16T00:00:00.000Z'); // exactly 1 day
+    const buckets = bucketSeverity([], { fromTs, toTs }, TARGET);
+    expect(buckets.length).toBeGreaterThan(1);
+  });
+
+  it('30-day window produces roughly weekly buckets (~4-6 buckets)', () => {
+    const fromTs = new Date('2024-05-17T00:00:00.000Z');
+    const toTs = new Date('2024-06-16T00:00:00.000Z'); // 30 days
+    const buckets = bucketSeverity([], { fromTs, toTs }, TARGET);
+    expect(buckets.length).toBeGreaterThanOrEqual(4);
+    expect(buckets.length).toBeLessThanOrEqual(6);
+  });
+
+  it('buckets are ordered oldest→newest (labels are non-empty strings)', () => {
+    const fromTs = new Date('2024-06-01T00:00:00.000Z');
+    const toTs = new Date('2024-07-01T00:00:00.000Z'); // 30 days
+    const buckets = bucketSeverity([], { fromTs, toTs }, TARGET);
+    expect(buckets.length).toBeGreaterThan(0);
+    for (const b of buckets) {
+      expect(typeof b.label).toBe('string');
+      expect(b.label.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('counts rows correctly by severity', () => {
+    const fromTs = new Date('2024-06-15T00:00:00.000Z');
+    const toTs = new Date('2024-06-16T00:00:00.000Z'); // 1 day → multi-hour buckets
+    // Three findings at the start of the window (all in bucket 0)
+    const rows = [
+      { ran_at: '2024-06-15T01:00:00.000Z', severity: 'CRITICAL' },
+      { ran_at: '2024-06-15T01:30:00.000Z', severity: 'WARNING' },
+      { ran_at: '2024-06-15T02:00:00.000Z', severity: 'SUGGESTION' },
+    ];
+    const buckets = bucketSeverity(rows, { fromTs, toTs }, TARGET);
+    // Total across all buckets must match the input
+    const totalCritical = buckets.reduce((s, b) => s + b.CRITICAL, 0);
+    const totalWarning = buckets.reduce((s, b) => s + b.WARNING, 0);
+    const totalSuggestion = buckets.reduce((s, b) => s + b.SUGGESTION, 0);
+    expect(totalCritical).toBe(1);
+    expect(totalWarning).toBe(1);
+    expect(totalSuggestion).toBe(1);
+  });
+
+  it('ignores rows outside the window defensively', () => {
+    const fromTs = new Date('2024-06-15T00:00:00.000Z');
+    const toTs = new Date('2024-06-16T00:00:00.000Z');
+    const rows = [
+      { ran_at: '2024-06-14T23:59:59.000Z', severity: 'CRITICAL' }, // before window
+      { ran_at: '2024-06-16T00:00:01.000Z', severity: 'WARNING' },  // after window
+    ];
+    const buckets = bucketSeverity(rows, { fromTs, toTs }, TARGET);
+    const totalAll = buckets.reduce((s, b) => s + b.CRITICAL + b.WARNING + b.SUGGESTION, 0);
+    expect(totalAll).toBe(0);
+  });
+
+  it('returns at least 1 bucket even for a zero-duration window', () => {
+    const ts = new Date('2024-06-15T12:00:00.000Z');
+    const buckets = bucketSeverity([], { fromTs: ts, toTs: ts }, TARGET);
+    expect(buckets.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sumCostByCategory — pure function
+// ---------------------------------------------------------------------------
+
+describe('sumCostByCategory', () => {
+  it('proportionally attributes run cost to categories', () => {
+    // One run: $10 total, 3 findings (2 security + 1 bug).
+    // formula: category_finding_count × (cost_usd / run_finding_count)
+    //   security: 2 × (10 / 3) ≈ 6.667
+    //   bug:      1 × (10 / 3) ≈ 3.333
+    const rows = [
+      { category: 'security', cost_usd: 10, category_finding_count: 2, run_finding_count: 3 },
+      { category: 'bug',      cost_usd: 10, category_finding_count: 1, run_finding_count: 3 },
+    ];
+    const result = sumCostByCategory(rows);
+
+    expect(result).toHaveLength(2);
+    const security = result.find((r) => r.category === 'security');
+    const bug = result.find((r) => r.category === 'bug');
+
+    expect(security).toBeDefined();
+    expect(bug).toBeDefined();
+    expect(security!.cost_usd).toBeCloseTo(6.667, 2);
+    expect(bug!.cost_usd).toBeCloseTo(3.333, 2);
+    // Sum should equal the full run cost
+    expect(security!.cost_usd + bug!.cost_usd).toBeCloseTo(10, 5);
+  });
+
+  it('sums across multiple runs for the same category', () => {
+    // Two runs, each $6, 2 findings each (1 security + 1 bug each).
+    // security: 2 × (6/2) = 6; bug: 2 × (6/2) = 6
+    const rows = [
+      { category: 'security', cost_usd: 6, category_finding_count: 1, run_finding_count: 2 },
+      { category: 'bug',      cost_usd: 6, category_finding_count: 1, run_finding_count: 2 },
+      { category: 'security', cost_usd: 6, category_finding_count: 1, run_finding_count: 2 },
+      { category: 'bug',      cost_usd: 6, category_finding_count: 1, run_finding_count: 2 },
+    ];
+    const result = sumCostByCategory(rows);
+    const security = result.find((r) => r.category === 'security');
+    const bug = result.find((r) => r.category === 'bug');
+    expect(security!.cost_usd).toBeCloseTo(6, 5);
+    expect(bug!.cost_usd).toBeCloseTo(6, 5);
+  });
+
+  it('skips rows where run_finding_count === 0 (defensive guard)', () => {
+    const rows = [
+      { category: 'security', cost_usd: 10, category_finding_count: 1, run_finding_count: 0 },
+    ];
+    const result = sumCostByCategory(rows);
+    expect(result).toHaveLength(0);
+  });
+
+  it('returns empty array for empty input', () => {
+    expect(sumCostByCategory([])).toEqual([]);
+  });
+
+  it('omits categories with no rows (absent, not zero-valued)', () => {
+    // Only 'bug' rows → 'security' is absent from the result
+    const rows = [
+      { category: 'bug', cost_usd: 5, category_finding_count: 1, run_finding_count: 1 },
+    ];
+    const result = sumCostByCategory(rows);
+    expect(result.some((r) => r.category === 'security')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // toAgentPerfRow — pure function
 // ---------------------------------------------------------------------------
 
@@ -244,7 +436,7 @@ describe('toAgentStats', () => {
   it('AC-4: zero-run agent → runs=0, accept_rate=null, cost/duration null', () => {
     const agg = makeAgg({ runs: 0 });
     const trend: StatPoint[] = [];
-    const stats = toAgentStats(agg, trend);
+    const stats = toAgentStats(agg, trend, EMPTY_EXTRAS);
 
     expect(stats.runs).toBe(0);
     expect(stats.accept_rate).toBeNull();
@@ -255,7 +447,7 @@ describe('toAgentStats', () => {
 
   it('AC-16: zero acted findings → accept_rate=null (not 0)', () => {
     const agg = makeAgg({ runs: 2, accepted: 0, dismissed: 0, pending: 5 });
-    const stats = toAgentStats(agg, []);
+    const stats = toAgentStats(agg, [], EMPTY_EXTRAS);
 
     expect(stats.accept_rate).toBeNull();
     expect(stats.dismiss_rate).toBeNull();
@@ -266,8 +458,32 @@ describe('toAgentStats', () => {
       { label: '2024-06-10T12:00:00.000Z', value: 2 },
       { label: '2024-06-20T12:00:00.000Z', value: 3 },
     ];
-    const stats = toAgentStats(makeAgg({ runs: 2 }), trend);
+    const stats = toAgentStats(makeAgg({ runs: 2 }), trend, EMPTY_EXTRAS);
     expect(stats.trend).toEqual(trend);
+  });
+
+  it('extras are passed through to the output object', () => {
+    const severityBuckets = [
+      { label: '06/01', CRITICAL: 1, WARNING: 2, SUGGESTION: 0 },
+    ];
+    const costCats = [{ category: 'bug' as const, cost_usd: 3.5 }];
+    const stats = toAgentStats(makeAgg({ runs: 1 }), [], {
+      avgCostUsdPrev: 4.2,
+      severityByBucket: severityBuckets,
+      costByCategory: costCats,
+    });
+
+    expect(stats.avg_cost_usd_prev).toBeCloseTo(4.2);
+    expect(stats.severity_by_bucket).toEqual(severityBuckets);
+    expect(stats.cost_by_category).toEqual(costCats);
+  });
+
+  it('avg_cost_usd_prev=null when no priced runs in previous window', () => {
+    const stats = toAgentStats(makeAgg({ runs: 1 }), [], {
+      ...EMPTY_EXTRAS,
+      avgCostUsdPrev: null,
+    });
+    expect(stats.avg_cost_usd_prev).toBeNull();
   });
 });
 

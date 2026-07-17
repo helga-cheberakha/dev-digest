@@ -13,11 +13,20 @@
  */
 
 import type { Container } from '../../platform/container.js';
-import type { AgentPerf, AgentPerfRow, PerfCostSegment, AgentStats, StatPoint } from '@devdigest/shared';
+import type { AgentPerf, AgentPerfRow, PerfCostSegment, AgentStats, StatPoint, AgentRunHistory } from '@devdigest/shared';
 import { NotFoundError } from '../../platform/errors.js';
 import { AgentPerformanceRepository } from './repository.js';
-import { toAgentPerfRow, toAgentStats, type AgentAgg, type TimeWindow } from './helpers.js';
-import { TREND_RUN_COUNT } from './constants.js';
+import {
+  toAgentPerfRow,
+  toAgentStats,
+  toRunHistoryRow,
+  previousWindow,
+  bucketSeverity,
+  sumCostByCategory,
+  type AgentAgg,
+  type TimeWindow,
+} from './helpers.js';
+import { TREND_RUN_COUNT, RUN_HISTORY_MAX_LIMIT, SEVERITY_BUCKET_TARGET } from './constants.js';
 
 export class AgentPerformanceService {
   private readonly repo: AgentPerformanceRepository;
@@ -188,19 +197,29 @@ export class AgentPerformanceService {
    *
    * Throws NotFoundError when the agent does not exist in the workspace.
    * Trend StatPoint.label is the run's ISO date string (ran_at).
+   *
+   * Now also fetches:
+   *   - avg_cost_usd_prev: avg cost over the immediately preceding window
+   *   - severity_by_bucket: findings broken down by severity × time bucket
+   *   - cost_by_category: run cost attributed to finding categories
    */
   async getAgentStats(
     workspaceId: string,
     agentId: string,
     window: TimeWindow,
   ): Promise<AgentStats> {
-    // Verify the agent exists; throw 404 so T2's route can map it
+    // Verify the agent exists; throw 404 so the route can map it
     const agent = await this.container.agentsRepo.getById(workspaceId, agentId);
     if (!agent) throw new NotFoundError('Agent not found');
 
-    const [aggs, seriesMap] = await Promise.all([
+    const prevWin = previousWindow(window);
+
+    const [aggs, seriesMap, avgCostUsdPrev, severityRows, categoryRows] = await Promise.all([
       this.aggregate(workspaceId, window, agentId),
       this.repo.recentRunSeries(workspaceId, [agentId], TREND_RUN_COUNT),
+      this.repo.avgCostPrevWindow(workspaceId, agentId, prevWin),
+      this.repo.severityBucketRows(workspaceId, agentId, window),
+      this.repo.costByCategoryRows(workspaceId, agentId, window),
     ]);
 
     // There should be exactly one element (the agent), but default to zero-run
@@ -229,6 +248,55 @@ export class AgentPerformanceService {
       value: p.findingsCount,
     }));
 
-    return toAgentStats(agg, trend);
+    const severityByBucket = bucketSeverity(severityRows, window, SEVERITY_BUCKET_TARGET);
+    const costByCategory = sumCostByCategory(categoryRows);
+
+    return toAgentStats(agg, trend, {
+      avgCostUsdPrev,
+      severityByBucket,
+      costByCategory,
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Public: paginated run history for one agent
+  // ---------------------------------------------------------------------------
+
+  /**
+   * GET /agents/:id/runs  →  AgentRunHistory
+   *
+   * Throws NotFoundError (→ 404) when the agent does not exist in the workspace.
+   * This ownership check is identical in spirit to getAgentStats: cross-workspace
+   * agent ids never leak rows.
+   *
+   * @param page  1-based page number (default 1)
+   * @param limit Page size; clamped to [1, RUN_HISTORY_MAX_LIMIT]
+   */
+  async getAgentRuns(
+    workspaceId: string,
+    agentId: string,
+    window: TimeWindow,
+    page: number,
+    limit: number,
+  ): Promise<AgentRunHistory> {
+    // Ownership check — same pattern as getAgentStats
+    const agent = await this.container.agentsRepo.getById(workspaceId, agentId);
+    if (!agent) throw new NotFoundError('Agent not found');
+
+    // Clamp limit to the allowed range
+    const clampedLimit = Math.min(Math.max(1, limit), RUN_HISTORY_MAX_LIMIT);
+    const offset = (page - 1) * clampedLimit;
+
+    const [rawRows, total] = await Promise.all([
+      this.repo.runHistory(workspaceId, agentId, window, clampedLimit, offset),
+      this.repo.runHistoryCount(workspaceId, agentId, window),
+    ]);
+
+    return {
+      rows: rawRows.map(toRunHistoryRow),
+      page,
+      limit: clampedLimit,
+      total,
+    };
   }
 }
