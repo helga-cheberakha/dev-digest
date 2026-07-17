@@ -6,7 +6,7 @@
  */
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Skeleton, SectionLabel, CircularScore } from "@devdigest/ui";
 import { useAgentStats, useAgentRuns } from "@/lib/hooks/agentPerformance";
@@ -140,6 +140,20 @@ function PeriodSelector({
   const [customTo, setCustomTo] = useState(
     isCustom ? window.to : "",
   );
+
+  // Keep internal state in sync when the parent switches `window` away from
+  // (or between) custom ranges out-of-band — e.g. a preset button elsewhere,
+  // or a reset action — so stale dates/an open panel don't linger.
+  useEffect(() => {
+    if (isCustom) {
+      setCustomOpen(true);
+      setCustomFrom(window.from);
+      setCustomTo(window.to);
+    } else {
+      setCustomOpen(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCustom, isCustom ? window.from : null, isCustom ? window.to : null]);
 
   const presets: PresetPeriod[] = ["30d", "1d"];
   const showCustomInputs = isCustom || customOpen;

@@ -198,6 +198,42 @@ function ColHeader({
 }
 
 // ---------------------------------------------------------------------------
+// Shared column/row styles (module-level — not recreated on every render)
+// ---------------------------------------------------------------------------
+
+const GRID_TEMPLATE_COLUMNS = "32px 1fr 72px 88px 72px 80px 80px 60px";
+
+const headerStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: GRID_TEMPLATE_COLUMNS,
+  alignItems: "end",
+  borderBottom: "1px solid var(--border)",
+  paddingBottom: 0,
+};
+
+const rowStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: GRID_TEMPLATE_COLUMNS,
+  alignItems: "center",
+  borderBottom: "1px solid var(--border)",
+  padding: "8px 0",
+  gap: 0,
+  cursor: "pointer",
+};
+
+const cellStyle: React.CSSProperties = {
+  padding: "0 8px",
+  fontSize: 13,
+  color: "var(--text-primary)",
+  fontVariantNumeric: "tabular-nums",
+};
+
+const mutedCell: React.CSSProperties = {
+  ...cellStyle,
+  color: "var(--text-muted)",
+};
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -226,39 +262,6 @@ export function AgentPerfTable({ rows, onView }: AgentPerfTableProps) {
   }
 
   const sorted = sortRows(rows, sort.key, sort.dir);
-
-  // ---------------------------------------------------------------------------
-  // Shared column header style
-  // ---------------------------------------------------------------------------
-  const headerStyle: React.CSSProperties = {
-    display: "grid",
-    gridTemplateColumns: "32px 1fr 72px 88px 72px 80px 80px 60px",
-    alignItems: "end",
-    borderBottom: "1px solid var(--border)",
-    paddingBottom: 0,
-  };
-
-  const rowStyle: React.CSSProperties = {
-    display: "grid",
-    gridTemplateColumns: "32px 1fr 72px 88px 72px 80px 80px 60px",
-    alignItems: "center",
-    borderBottom: "1px solid var(--border)",
-    padding: "8px 0",
-    gap: 0,
-    cursor: "pointer",
-  };
-
-  const cellStyle: React.CSSProperties = {
-    padding: "0 8px",
-    fontSize: 13,
-    color: "var(--text-primary)",
-    fontVariantNumeric: "tabular-nums",
-  };
-
-  const mutedCell: React.CSSProperties = {
-    ...cellStyle,
-    color: "var(--text-muted)",
-  };
 
   return (
     <div style={{ width: "100%", overflowX: "auto" }}>
