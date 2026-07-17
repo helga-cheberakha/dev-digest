@@ -8,14 +8,13 @@
 
 import React, { useState } from "react";
 import { useTranslations } from "next-intl";
-import { Skeleton, SectionLabel } from "@devdigest/ui";
+import { Skeleton, SectionLabel, CircularScore } from "@devdigest/ui";
 import { useAgentStats, useAgentRuns } from "@/lib/hooks/agentPerformance";
 import { formatCost } from "@/lib/cost";
 import type { PerfWindow } from "@/lib/api";
 import type { StatPoint } from "@devdigest/shared";
 import RunTraceDrawer from "@/app/repos/[repoId]/pulls/[number]/_components/RunTraceDrawer";
 import { Sparkline } from "./_components/Sparkline";
-import { AcceptRateGauge } from "./_components/AcceptRateGauge";
 import { CostDelta } from "./_components/CostDelta";
 import { SeverityStackedBars } from "./_components/SeverityStackedBars";
 import { CategoryDonut } from "./_components/CategoryDonut";
@@ -39,6 +38,18 @@ function latencyDisplay(ms: number | null | undefined): string {
 }
 
 // ---------------------------------------------------------------------------
+// Card — shared bordered-panel style reused by metric cards, findings cards,
+// and the run-trend panel so the tab reads as one consistent design system.
+// ---------------------------------------------------------------------------
+
+const CARD_STYLE: React.CSSProperties = {
+  background: "var(--bg-elevated)",
+  border: "1px solid var(--border)",
+  borderRadius: 9,
+  padding: "14px 16px",
+};
+
+// ---------------------------------------------------------------------------
 // Metric card
 // ---------------------------------------------------------------------------
 
@@ -48,25 +59,23 @@ function MetricCard({
   isNoData,
   noDataLabel,
   extra,
+  badge,
 }: {
   label: string;
   value: string;
   /** When true, renders the value with the "no data" visual treatment. */
   isNoData?: boolean;
   noDataLabel?: string;
-  /** Optional content rendered below the main value (overlay/augmentation). */
+  /** Optional content rendered below the main value (e.g. a sparkline). */
   extra?: React.ReactNode;
+  /** Optional ring badge rendered in the card's top-right corner (e.g. accept-rate gauge). */
+  badge?: React.ReactNode;
 }) {
   return (
-    <div
-      style={{
-        flex: 1,
-        background: "var(--bg-elevated)",
-        border: "1px solid var(--border)",
-        borderRadius: 9,
-        padding: "14px 16px",
-      }}
-    >
+    <div style={{ ...CARD_STYLE, position: "relative", flex: 1 }}>
+      {badge != null && (
+        <div style={{ position: "absolute", top: 12, right: 12 }}>{badge}</div>
+      )}
       <div
         style={{
           fontSize: 11,
@@ -219,43 +228,67 @@ function PeriodSelector({
 // Trend list (uses both label + value from StatPoint)
 // ---------------------------------------------------------------------------
 
+/**
+ * StatPoint.label arrives as a raw ISO timestamp (server sends `ranAt.toISOString()`
+ * unformatted — see server/src/modules/agent-performance/service.ts). Format it as
+ * a short absolute date/time here rather than showing the raw ISO string.
+ * Pinned to UTC so the label is identical regardless of the viewer's local timezone.
+ */
+function formatTrendLabel(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const date = new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  }).format(d);
+  const time = new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "UTC",
+  }).format(d);
+  return `${date} ${time}`;
+}
+
 function TrendList({ points, title }: { points: StatPoint[]; title: string }) {
   if (points.length === 0) return null;
 
   const maxVal = Math.max(...points.map((p) => p.value), 1);
 
   return (
-    <div>
+    <div style={{ ...CARD_STYLE, marginBottom: 28 }}>
       <SectionLabel icon="TrendingUp">{title}</SectionLabel>
       <div
         style={{
           display: "flex",
           flexDirection: "column",
-          gap: 6,
-          marginBottom: 24,
+          gap: 10,
+          marginTop: 14,
         }}
       >
         {points.map((pt, i) => (
           <div
             key={i}
-            style={{ display: "flex", alignItems: "center", gap: 10 }}
+            style={{ display: "flex", alignItems: "center", gap: 12 }}
           >
             <span
+              title={pt.label}
               style={{
                 fontSize: 11,
                 color: "var(--text-muted)",
-                width: 90,
+                width: 104,
                 flexShrink: 0,
                 fontFamily: "monospace",
               }}
             >
-              {pt.label}
+              {formatTrendLabel(pt.label)}
             </span>
             <div
               style={{
                 flex: 1,
                 height: 8,
-                background: "var(--bg-elevated)",
+                background: "var(--bg-hover)",
                 borderRadius: 4,
                 overflow: "hidden",
               }}
@@ -371,7 +404,9 @@ export function StatsTab({ agentId }: { agentId: string }) {
                     ) : undefined
                   }
                 />
-                {/* ACCEPT RATE — augmented with radial gauge */}
+                {/* ACCEPT RATE — corner ring badge, same pattern as the
+                    Agent Performance page's SummaryCards (reused here rather
+                    than a separate full-size gauge stacked below the value). */}
                 <MetricCard
                   label={t("stats.tiles.acceptRate")}
                   value={
@@ -381,7 +416,15 @@ export function StatsTab({ agentId }: { agentId: string }) {
                   }
                   isNoData={data.accept_rate == null}
                   noDataLabel={noDataLabel}
-                  extra={<AcceptRateGauge acceptRate={data.accept_rate} />}
+                  badge={
+                    data.accept_rate != null ? (
+                      <CircularScore
+                        score={Math.round(data.accept_rate * 100)}
+                        size={36}
+                        stroke={3}
+                      />
+                    ) : undefined
+                  }
                 />
                 {/* AVG COST — augmented with delta vs prior window */}
                 <MetricCard
@@ -416,20 +459,33 @@ export function StatsTab({ agentId }: { agentId: string }) {
           {/* Each T5 component handles empty arrays / null gracefully.        */}
           {/* ──────────────────────────────────────────────────────────────── */}
 
-          {/* ── Findings by severity (replaces flat severity boxes) ── */}
-          <SectionLabel icon="AlertTriangle">
-            {t("stats.findingsBySeverity")}
-          </SectionLabel>
-          <div style={{ marginBottom: 28 }}>
-            <SeverityStackedBars buckets={data.severity_by_bucket} />
-          </div>
+          {/* ── Findings by severity + Findings by category — side-by-side
+                cards, same CARD_STYLE panel as the metric cards above ── */}
+          <div
+            style={{
+              display: "flex",
+              gap: 12,
+              marginBottom: 28,
+              flexWrap: "wrap",
+            }}
+          >
+            <div style={{ ...CARD_STYLE, flex: 1, minWidth: 280 }}>
+              <SectionLabel icon="AlertTriangle">
+                {t("stats.findingsBySeverity")}
+              </SectionLabel>
+              <div style={{ marginTop: 14 }}>
+                <SeverityStackedBars buckets={data.severity_by_bucket} />
+              </div>
+            </div>
 
-          {/* ── Findings by Category ── */}
-          <SectionLabel icon="BarChart">
-            {t("stats.findingsByCategory")}
-          </SectionLabel>
-          <div style={{ marginBottom: 28 }}>
-            <CategoryDonut costByCategory={data.cost_by_category} />
+            <div style={{ ...CARD_STYLE, flex: 1, minWidth: 280 }}>
+              <SectionLabel icon="BarChart">
+                {t("stats.findingsByCategory")}
+              </SectionLabel>
+              <div style={{ marginTop: 14 }}>
+                <CategoryDonut costByCategory={data.cost_by_category} />
+              </div>
+            </div>
           </div>
 
           {/* ── Run History — own independent loading/error state ── */}

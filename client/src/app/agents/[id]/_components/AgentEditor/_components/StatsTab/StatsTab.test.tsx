@@ -4,12 +4,12 @@
  * Asserts:
  * 1. Seeded agent stats render correctly (runs, accept_rate%, cost, latency,
  *    severity stacked bars with legend labels, labelled trend list).
- * 2. accept_rate: null → no-data glyph rendered with aria-label AND
- *    AcceptRateGauge null empty state ("Accept rate: no data"), NOT "0%".
+ * 2. accept_rate: null → no-data glyph rendered with aria-label, NOT "0%",
+ *    and no CircularScore ring badge (badge only renders when non-null).
  * 3. avg_cost_usd_prev: null → CostDelta renders "—".
  * 4. Loading state renders Skeleton placeholders and no numeric metrics.
  * 5. Error state renders the error message and no numeric metrics.
- * 6. Happy path — all new blocks render (Sparkline, AcceptRateGauge, CostDelta,
+ * 6. Happy path — all new blocks render (Sparkline, CircularScore badge, CostDelta,
  *    SeverityStackedBars, CategoryDonut, RunHistoryTable).
  * 7. Clicking a Run History row's trace action opens RunTraceDrawer.
  * 8. Zero-run agent renders empty states across all new blocks without throwing.
@@ -244,9 +244,10 @@ describe("StatsTab — seeded data renders correctly", () => {
 
   it("renders accept_rate as percentage when present", () => {
     renderStatsTab();
-    // 0.816 × 100 → 82%; appears in both MetricCard value and AcceptRateGauge centre
-    const eightyTwoPct = screen.getAllByText("82%");
-    expect(eightyTwoPct.length).toBeGreaterThanOrEqual(1);
+    // 0.816 × 100 → 82%; the MetricCard value
+    expect(screen.getByText("82%")).toBeInTheDocument();
+    // CircularScore badge renders the same rounded score, no "%" suffix, in its ring centre
+    expect(screen.getByText("82")).toBeInTheDocument();
   });
 
   it("renders avg_cost_usd via formatCost", () => {
@@ -280,9 +281,10 @@ describe("StatsTab — seeded data renders correctly", () => {
 
   it("renders trend with both labels and values", () => {
     renderStatsTab();
-    expect(screen.getByText("2026-06-01")).toBeInTheDocument();
-    expect(screen.getByText("2026-06-08")).toBeInTheDocument();
-    expect(screen.getByText("2026-06-15")).toBeInTheDocument();
+    // Raw ISO labels are formatted as short UTC date/time, not shown verbatim.
+    expect(screen.getByText("1 Jun 00:00")).toBeInTheDocument();
+    expect(screen.getByText("8 Jun 00:00")).toBeInTheDocument();
+    expect(screen.getByText("15 Jun 00:00")).toBeInTheDocument();
     // values
     const fives = screen.getAllByText("5");
     expect(fives.length).toBeGreaterThanOrEqual(1);
@@ -310,13 +312,10 @@ describe("StatsTab — null accept_rate renders no-data glyph, not 0%", () => {
     expect(noDataEl).toBeInTheDocument();
     // The glyph itself is the "·" character defined in agents.json stats.noData
     expect(noDataEl).toHaveTextContent("·");
-  });
 
-  it("AcceptRateGauge renders its null empty state, not a 0% gauge", () => {
-    renderStatsTab();
-    // AcceptRateGauge(null) renders role="img" aria-label="Accept rate: no data"
-    const gauge = screen.getByRole("img", { name: "Accept rate: no data" });
-    expect(gauge).toBeInTheDocument();
+    // No CircularScore ring badge renders when accept_rate is null — the
+    // badge is only passed when data.accept_rate != null (see StatsTab.tsx).
+    expect(screen.queryByRole("img", { name: /accept rate/i })).toBeNull();
   });
 });
 
@@ -435,11 +434,12 @@ describe("StatsTab — happy path: new blocks render with non-trivial data", () 
     expect(sparkline).toBeInTheDocument();
   });
 
-  it("AcceptRateGauge renders the accept rate ring gauge", () => {
+  it("accept-rate CircularScore badge renders the rounded score", () => {
     renderStatsTab();
-    // AcceptRateGauge(0.816) renders role="img" aria-label="Accept rate: 82%"
-    const gauge = screen.getByRole("img", { name: "Accept rate: 82%" });
-    expect(gauge).toBeInTheDocument();
+    // CircularScore(score=82) renders "82" as visible text in its ring centre,
+    // alongside the MetricCard's own "82%" value.
+    expect(screen.getByText("82%")).toBeInTheDocument();
+    expect(screen.getByText("82")).toBeInTheDocument();
   });
 
   it("CostDelta renders a cost change indicator (not '—')", () => {
