@@ -152,7 +152,26 @@
     "severity": {
       "critical": "Critical",
       "warning": "Warning",
-      "suggestion": "Suggestion"
+      "suggestion": "Suggestion",
+      "emptyState": "No severity data for this period."
+    },
+    "category": {
+      "emptyState": "No cost data by category for this period."
+    },
+    "runHistoryTable": {
+      "emptyState": "No runs recorded for this agent yet.",
+      "colTimestamp": "Timestamp",
+      "colPr": "PR",
+      "colTokens": "Tokens (in/out)",
+      "colCost": "Cost",
+      "colFindings": "Findings",
+      "colSource": "Source",
+      "viewTrace": "View trace",
+      "viewTraceFor": "View trace for run {runId}",
+      "noTrace": "No trace available for this run",
+      "prevPage": "← Prev",
+      "nextPage": "Next →",
+      "pageOf": "Page {page} of {totalPages}"
     },
     "trendTitle": "Run trend",
     "emptyState": "No runs in this period.",

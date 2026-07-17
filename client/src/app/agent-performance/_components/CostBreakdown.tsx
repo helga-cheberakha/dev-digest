@@ -15,7 +15,7 @@
 import React from "react";
 import type { PerfCostSegment } from "@devdigest/shared";
 import { Donut } from "@devdigest/ui";
-import { withColors } from "./colors";
+import { withColors } from "@/lib/colors";
 
 // ---------------------------------------------------------------------------
 // Props

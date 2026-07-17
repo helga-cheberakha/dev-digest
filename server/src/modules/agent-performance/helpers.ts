@@ -121,11 +121,14 @@ function formatBucketLabel(date: Date, bucketMs: number): string {
  *
  * Algorithm — adaptive bucket duration:
  *   rawBucket = windowDuration / target
- *   rounded up to the next "sensible unit": 1h, 2h, 4h, 6h, 12h, 1d, 3d, 1w
+ *   rounded up to the next "sensible unit": 1h, 2h, 4h, 6h, 12h, 1d, 3d, 1w,
+ *                                           2w, 30d, 60d, 90d
  *   numBuckets = ⌈windowDuration / bucketMs⌉   (never 0, always ≥ 1)
  *
- * For a 1-day window with target=7: rawBucket ≈ 3.4h → 4h → 6 buckets.
- * For a 30-day window with target=7: rawBucket ≈ 4.3d → 1 week → 5 buckets.
+ * For a 1-day window with target=7:   rawBucket ≈ 3.4h   → 4h    →   6 buckets.
+ * For a 30-day window with target=7:  rawBucket ≈ 4.3d   → 1w    →   5 buckets.
+ * For a 90-day window with target=7:  rawBucket ≈ 12.9d  → 14d   →   7 buckets.
+ * For a 365-day window with target=7: rawBucket ≈ 52.1d  → 60d   →   7 buckets.
  *
  * Rows outside [fromTs, toTs] are ignored defensively.
  * Buckets are returned ordered oldest→newest.
@@ -152,7 +155,11 @@ export function bucketSeverity(
   else if (rawBucket <= 12 * HOUR) { bucketMs = 12 * HOUR; }
   else if (rawBucket <= DAY)      { bucketMs = DAY; }
   else if (rawBucket <= 3 * DAY)  { bucketMs = 3 * DAY; }
-  else                             { bucketMs = WEEK; }
+  else if (rawBucket <= WEEK)     { bucketMs = WEEK; }
+  else if (rawBucket <= 14 * DAY) { bucketMs = 14 * DAY; }  // biweekly
+  else if (rawBucket <= 30 * DAY) { bucketMs = 30 * DAY; }  // monthly
+  else if (rawBucket <= 60 * DAY) { bucketMs = 60 * DAY; }  // bimonthly — 365d/7≈52d → 7 buckets
+  else                             { bucketMs = 90 * DAY; }  // quarterly
 
   const fromMs = window.fromTs.getTime();
   const numBuckets = Math.max(1, Math.ceil(windowMs / bucketMs));

@@ -20,6 +20,7 @@ import {
   previousWindow,
   bucketSeverity,
   sumCostByCategory,
+  toRunHistoryRow,
   type AgentAgg,
 } from './helpers.js';
 import type { StatPoint } from '@devdigest/shared';
@@ -280,6 +281,149 @@ describe('bucketSeverity', () => {
     const ts = new Date('2024-06-15T12:00:00.000Z');
     const buckets = bucketSeverity([], { fromTs: ts, toTs: ts }, TARGET);
     expect(buckets.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('~365-day window produces far fewer than 53 buckets (adaptive long-window bucketing)', () => {
+    // Pre-fix: WEEK was the largest unit → ceil(365/7) = 53 buckets.
+    // Post-fix: 60-day tier catches rawBucket ≈ 52d → ceil(365/60) = 7 buckets.
+    // Assert <= 20 to allow for any boundary rounding; must be meaningfully
+    // below the pre-fix 53, targeting the ≈6-8 spec goal.
+    const fromTs = new Date('2024-01-01T00:00:00.000Z');
+    const toTs = new Date('2024-12-31T23:59:59.999Z'); // 365 days
+    const buckets = bucketSeverity([], { fromTs, toTs }, TARGET);
+    expect(buckets.length).toBeLessThan(20);
+    // Specifically: with the 60-day tier, ceil(365/60) = 7 — within spec target
+    expect(buckets.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// toRunHistoryRow — pure function
+// ---------------------------------------------------------------------------
+
+describe('toRunHistoryRow', () => {
+  const BASE_RUN_ID = 'f47ac10b-58cc-4372-a567-0e02b2c3d479';
+  const BASE_RAN_AT_ISO = '2024-06-15T12:00:00.000Z';
+
+  it('maps a fully-populated raw row to RunHistoryRow shape correctly', () => {
+    const raw = {
+      run_id: BASE_RUN_ID,
+      ran_at: BASE_RAN_AT_ISO,
+      pr_number: 42,
+      pr_title: 'Fix the thing',
+      pr_repo_id: 'repo-uuid-123',
+      tokens_in: 1000,
+      tokens_out: 500,
+      cost_usd: 1.23,
+      findings_count: 3,
+      source: 'local',
+      status: 'done',
+      has_trace: true,
+    };
+    const row = toRunHistoryRow(raw);
+
+    expect(row.run_id).toBe(BASE_RUN_ID);
+    expect(row.ran_at).toBe(BASE_RAN_AT_ISO);
+    expect(row.pr_number).toBe(42);
+    expect(row.pr_title).toBe('Fix the thing');
+    expect(row.pr_repo_id).toBe('repo-uuid-123');
+    expect(row.tokens_in).toBe(1000);
+    expect(row.tokens_out).toBe(500);
+    expect(row.cost_usd).toBeCloseTo(1.23);
+    expect(row.findings_count).toBe(3);
+    expect(row.source).toBe('local');
+    expect(row.status).toBe('done');
+    expect(row.has_trace).toBe(true);
+  });
+
+  it('has_trace: true when the raw row signals a trace exists', () => {
+    const raw = {
+      run_id: BASE_RUN_ID,
+      ran_at: BASE_RAN_AT_ISO,
+      pr_number: null,
+      pr_title: null,
+      pr_repo_id: null,
+      tokens_in: null,
+      tokens_out: null,
+      cost_usd: null,
+      findings_count: null,
+      source: 'local',
+      status: 'done',
+      has_trace: true,
+    };
+    expect(toRunHistoryRow(raw).has_trace).toBe(true);
+  });
+
+  it('has_trace: false when no run_traces row is present (LEFT JOIN → NULL → false)', () => {
+    const raw = {
+      run_id: BASE_RUN_ID,
+      ran_at: BASE_RAN_AT_ISO,
+      pr_number: null,
+      pr_title: null,
+      pr_repo_id: null,
+      tokens_in: null,
+      tokens_out: null,
+      cost_usd: null,
+      findings_count: null,
+      source: 'ci',
+      status: 'done',
+      has_trace: false,
+    };
+    expect(toRunHistoryRow(raw).has_trace).toBe(false);
+  });
+
+  it('handles all nullable fields as null — none coerced to 0 or empty string', () => {
+    const raw = {
+      run_id: BASE_RUN_ID,
+      ran_at: BASE_RAN_AT_ISO,
+      pr_number: null,
+      pr_title: null,
+      pr_repo_id: null,
+      tokens_in: null,
+      tokens_out: null,
+      cost_usd: null,
+      findings_count: null,
+      source: 'ci',
+      status: 'failed',
+      has_trace: false,
+    };
+    const row = toRunHistoryRow(raw);
+
+    expect(row.pr_number).toBeNull();
+    expect(row.pr_title).toBeNull();
+    expect(row.pr_repo_id).toBeNull();
+    expect(row.tokens_in).toBeNull();
+    expect(row.tokens_out).toBeNull();
+    expect(row.cost_usd).toBeNull();
+    expect(row.findings_count).toBeNull();
+    // Verify none of the nullable fields coerced to 0 or empty string
+    const nullableFields = [row.pr_number, row.pr_title, row.pr_repo_id,
+      row.tokens_in, row.tokens_out, row.cost_usd, row.findings_count] as unknown[];
+    for (const v of nullableFields) {
+      expect(v).toBeNull();
+    }
+  });
+
+  it('ran_at normalised to ISO-8601 string regardless of postgres-js format variant', () => {
+    // postgres-js may return timestamps without the 'T' separator or with timezone offset
+    const raw = {
+      run_id: BASE_RUN_ID,
+      ran_at: '2024-06-15 12:00:00+00',  // postgres-style without 'T'
+      pr_number: null,
+      pr_title: null,
+      pr_repo_id: null,
+      tokens_in: null,
+      tokens_out: null,
+      cost_usd: null,
+      findings_count: null,
+      source: 'local',
+      status: 'done',
+      has_trace: false,
+    };
+    const row = toRunHistoryRow(raw);
+    // Must be a valid ISO string parseable back to the same timestamp
+    expect(row.ran_at).toBe('2024-06-15T12:00:00.000Z');
+    expect(new Date(row.ran_at).toISOString()).toBe('2024-06-15T12:00:00.000Z');
   });
 });
 

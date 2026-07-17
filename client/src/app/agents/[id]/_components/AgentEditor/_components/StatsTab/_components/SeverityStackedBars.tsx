@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * SeverityStackedBars — stacked bar chart, one bar per time bucket.
  *
@@ -14,6 +16,7 @@
  */
 
 import React from "react";
+import { useTranslations } from "next-intl";
 
 type Bucket = {
   label: string;
@@ -23,23 +26,34 @@ type Bucket = {
 };
 
 // Colour tokens matching StatsTab's existing severity pill convention.
-const SEV_SEGMENTS: Array<{
+// Labels are resolved from translations inside the component (they are
+// language-dependent), so only key + color are defined at module level.
+const SEV_SEGMENT_DEFS: Array<{
   key: "CRITICAL" | "WARNING" | "SUGGESTION";
   color: string;
-  label: string;
 }> = [
-  { key: "CRITICAL", color: "var(--crit)", label: "Critical" },
-  { key: "WARNING", color: "var(--warn)", label: "Warning" },
-  { key: "SUGGESTION", color: "var(--accent)", label: "Suggestion" },
+  { key: "CRITICAL", color: "var(--crit)" },
+  { key: "WARNING", color: "var(--warn)" },
+  { key: "SUGGESTION", color: "var(--accent)" },
 ];
 
 const BAR_HEIGHT = 80; // maximum bar height in px
 
 export function SeverityStackedBars({ buckets }: { buckets: Bucket[] }) {
+  const t = useTranslations("agents");
+
+  // Resolve translated labels for the three severity levels.
+  // Nesting inside the component ensures next-intl's hook contract is met.
+  const SEV_SEGMENTS = [
+    { ...SEV_SEGMENT_DEFS[0]!, label: t("stats.severity.critical") },
+    { ...SEV_SEGMENT_DEFS[1]!, label: t("stats.severity.warning") },
+    { ...SEV_SEGMENT_DEFS[2]!, label: t("stats.severity.suggestion") },
+  ];
+
   if (buckets.length === 0) {
     return (
       <p style={{ fontSize: 13, color: "var(--text-muted)", margin: 0 }}>
-        No severity data for this period.
+        {t("stats.severity.emptyState")}
       </p>
     );
   }
@@ -175,9 +189,9 @@ export function SeverityStackedBars({ buckets }: { buckets: Bucket[] }) {
           <thead>
             <tr>
               <th scope="col">Bucket</th>
-              <th scope="col">Critical</th>
-              <th scope="col">Warning</th>
-              <th scope="col">Suggestion</th>
+              {SEV_SEGMENTS.map(({ key, label }) => (
+                <th scope="col" key={key}>{label}</th>
+              ))}
             </tr>
           </thead>
           <tbody>

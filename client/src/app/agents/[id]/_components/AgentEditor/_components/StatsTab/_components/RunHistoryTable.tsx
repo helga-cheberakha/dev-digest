@@ -23,6 +23,7 @@
 
 import React from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import type { RunHistoryRow } from "@devdigest/shared";
 import { Badge } from "@devdigest/ui";
 import { formatTimeAgo } from "@/lib/time-ago";
@@ -84,6 +85,7 @@ export function RunHistoryTable({
   total: number;
   onPageChange: (page: number) => void;
 }) {
+  const t = useTranslations("agents");
   const totalPages = Math.ceil(total / limit) || 1;
   const hasPrev = page > 1;
   const hasNext = page < totalPages;
@@ -91,7 +93,7 @@ export function RunHistoryTable({
   if (rows.length === 0 && total === 0) {
     return (
       <p style={{ fontSize: 13, color: "var(--text-muted)", margin: 0 }}>
-        No runs recorded for this agent yet.
+        {t("stats.runHistoryTable.emptyState")}
       </p>
     );
   }
@@ -109,12 +111,12 @@ export function RunHistoryTable({
         >
           <thead>
             <tr style={{ borderBottom: "1px solid var(--border)" }}>
-              <th style={headerStyle}>Timestamp</th>
-              <th style={headerStyle}>PR</th>
-              <th style={headerStyle}>Tokens (in/out)</th>
-              <th style={headerStyle}>Cost</th>
-              <th style={{ ...headerStyle, textAlign: "right" }}>Findings</th>
-              <th style={headerStyle}>Source</th>
+              <th style={headerStyle}>{t("stats.runHistoryTable.colTimestamp")}</th>
+              <th style={headerStyle}>{t("stats.runHistoryTable.colPr")}</th>
+              <th style={headerStyle}>{t("stats.runHistoryTable.colTokens")}</th>
+              <th style={headerStyle}>{t("stats.runHistoryTable.colCost")}</th>
+              <th style={{ ...headerStyle, textAlign: "right" }}>{t("stats.runHistoryTable.colFindings")}</th>
+              <th style={headerStyle}>{t("stats.runHistoryTable.colSource")}</th>
               <th style={headerStyle} aria-label="Actions" />
             </tr>
           </thead>
@@ -201,11 +203,11 @@ export function RunHistoryTable({
                     }}
                     aria-label={
                       row.has_trace
-                        ? `View trace for run ${row.run_id}`
-                        : "No trace available for this run"
+                        ? t("stats.runHistoryTable.viewTraceFor", { runId: row.run_id })
+                        : t("stats.runHistoryTable.noTrace")
                     }
                   >
-                    View trace
+                    {t("stats.runHistoryTable.viewTrace")}
                   </button>
                 </td>
               </tr>
@@ -241,14 +243,14 @@ export function RunHistoryTable({
               opacity: hasPrev ? 1 : 0.5,
             }}
           >
-            ← Prev
+            {t("stats.runHistoryTable.prevPage")}
           </button>
 
           <span
             style={{ fontSize: 12, color: "var(--text-muted)" }}
             className="tnum"
           >
-            Page {page} of {totalPages}
+            {t("stats.runHistoryTable.pageOf", { page, totalPages })}
           </span>
 
           <button
@@ -267,7 +269,7 @@ export function RunHistoryTable({
               opacity: hasNext ? 1 : 0.5,
             }}
           >
-            Next →
+            {t("stats.runHistoryTable.nextPage")}
           </button>
         </div>
       )}

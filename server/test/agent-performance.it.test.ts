@@ -53,6 +53,9 @@ d('AgentPerformance routes — integration (real Postgres)', () => {
   let agentGammaId: string;   // zero in-window runs, one pre-window done run
   let agentWsBId: string;     // workspace-B agent for IDOR test
   let wsBId: string;
+  // Run IDs used by the GET /agents/:id/runs has_trace tests
+  let runA1Id: string;        // seeded with a run_traces row → has_trace: true
+  let runA2Id: string;        // no run_traces row → has_trace: false
 
   beforeAll(async () => {
     pg = await startPg();
@@ -133,6 +136,7 @@ d('AgentPerformance routes — integration (real Postgres)', () => {
         provider: 'openai',
       })
       .returning();
+    runA1Id = runA1!.id;
 
     // A2: done, null cost, in window
     const [runA2] = await db
@@ -149,6 +153,7 @@ d('AgentPerformance routes — integration (real Postgres)', () => {
         provider: 'openai',
       })
       .returning();
+    runA2Id = runA2!.id;
 
     // A3: failed in window — should be EXCLUDED from aggregateAgents (status != 'done')
     await db.insert(t.agentRuns).values({
@@ -171,6 +176,10 @@ d('AgentPerformance routes — integration (real Postgres)', () => {
       durationMs: 999,
       findingsCount: 99,
     });
+
+    // Seed a run_traces row for A1 so GET /agents/:id/runs returns has_trace=true for it.
+    // A2 intentionally has no trace row → has_trace=false in the response.
+    await db.insert(t.runTraces).values({ runId: runA1Id, trace: { seeded: true } });
 
     // ---- Insert agent_runs for Agent Beta ----
     // B1: done, priced, in window
@@ -729,6 +738,64 @@ d('AgentPerformance routes — integration (real Postgres)', () => {
       expect(betaRow).toBeDefined();
       expect(alphaRow!.trend.length).toBeGreaterThan(0);
       expect(betaRow!.trend.length).toBeGreaterThan(0);
+    } finally {
+      await app.close();
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // GET /agents/:id/runs — has_trace gate and window-scoping (Finding 1 coverage)
+  // ---------------------------------------------------------------------------
+
+  it('GET /agents/:id/runs: has_trace=true for run with a run_traces row, has_trace=false without; out-of-window run excluded', async () => {
+    // Seeded state for Agent Alpha:
+    //   A1  2024-06-10  done    → run_traces row seeded → has_trace: true
+    //   A2  2024-06-20  done    → no run_traces row     → has_trace: false
+    //   A3  2024-06-25  failed  → no run_traces row     → has_trace: false
+    //   A_out 2024-01-01 done   → OUTSIDE PERIOD_QUERY window → must be excluded
+    //
+    // runHistory() includes ALL statuses (AC-8/AC-10), orders newest first.
+    // Window filter is applied by ranAt >= fromTs AND ranAt <= toTs.
+    const config = loadConfig({ ...process.env, NODE_ENV: 'test' } as NodeJS.ProcessEnv);
+    const app = await buildApp({ config, db: pg.handle.db });
+
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/agents/${agentAlphaId}/runs?${PERIOD_QUERY}`,
+      });
+      expect(
+        res.statusCode,
+        `GET /agents/:id/runs returned ${res.statusCode}: ${res.body}`,
+      ).toBe(200);
+
+      const body = res.json<{
+        rows: Array<{ run_id: string; ran_at: string; has_trace: boolean; status: string | null }>;
+        total: number;
+        page: number;
+        limit: number;
+      }>();
+
+      // Window-scoping: A_out (2024-01-01) must NOT appear in the in-window response.
+      // Only A1, A2, A3 are inside 2024-06-01..2024-06-30 → total = 3.
+      expect(body.total).toBe(3);
+      expect(body.rows).toHaveLength(3);
+
+      const outOfWindowRow = body.rows.find((r) => r.ran_at.startsWith('2024-01'));
+      expect(
+        outOfWindowRow,
+        'A_out (2024-01-01) must be excluded by the window ranAt filter',
+      ).toBeUndefined();
+
+      // has_trace gate: A1 has a run_traces row seeded → has_trace: true
+      const rowA1 = body.rows.find((r) => r.run_id === runA1Id);
+      expect(rowA1, 'A1 run must appear in the in-window response').toBeDefined();
+      expect(rowA1!.has_trace).toBe(true);
+
+      // has_trace gate: A2 has NO run_traces row → has_trace: false
+      const rowA2 = body.rows.find((r) => r.run_id === runA2Id);
+      expect(rowA2, 'A2 run must appear in the in-window response').toBeDefined();
+      expect(rowA2!.has_trace).toBe(false);
     } finally {
       await app.close();
     }

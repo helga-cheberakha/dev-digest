@@ -4,7 +4,7 @@
  * CategoryDonut — donut chart of cost attribution by finding category.
  *
  * Wraps the existing vendor `Donut` component (Recharts PieChart ring).
- * Uses `segmentColor` from the agent-performance colours module so the same
+ * Uses `segmentColor` from the shared lib/colors module so the same
  * category label always maps to the same stable colour (djb2 hash → palette)
  * — the same approach used by CostBreakdown on the agent-performance dashboard.
  *
@@ -14,8 +14,9 @@
  */
 
 import React from "react";
+import { useTranslations } from "next-intl";
 import { Donut } from "@devdigest/ui";
-import { segmentColor } from "@/app/agent-performance/_components/colors";
+import { segmentColor } from "@/lib/colors";
 
 type CostByCategory = { category: string; cost_usd: number };
 
@@ -24,10 +25,12 @@ export function CategoryDonut({
 }: {
   costByCategory: CostByCategory[];
 }) {
+  const t = useTranslations("agents");
+
   if (costByCategory.length === 0) {
     return (
       <p style={{ fontSize: 13, color: "var(--text-muted)", margin: 0 }}>
-        No cost data by category for this period.
+        {t("stats.category.emptyState")}
       </p>
     );
   }

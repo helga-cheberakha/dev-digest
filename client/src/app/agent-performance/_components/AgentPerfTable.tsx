@@ -18,7 +18,7 @@ import React, { useState } from "react";
 import type { AgentPerfRow } from "@devdigest/shared";
 import { formatCost } from "@/lib/cost";
 import { formatTimeAgo } from "@/lib/time-ago";
-import { NO_DATA_GLYPH } from "./colors";
+import { NO_DATA_GLYPH } from "@/lib/colors";
 
 // ---------------------------------------------------------------------------
 // Types & constants

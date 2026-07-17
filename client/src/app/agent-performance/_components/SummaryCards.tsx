@@ -14,7 +14,7 @@ import React from "react";
 import type { AgentPerf } from "@devdigest/shared";
 import type { PerfWindow } from "@/lib/api";
 import { formatCost } from "@/lib/cost";
-import { NO_DATA_GLYPH } from "./colors";
+import { NO_DATA_GLYPH } from "@/lib/colors";
 
 // ---------------------------------------------------------------------------
 // Props
