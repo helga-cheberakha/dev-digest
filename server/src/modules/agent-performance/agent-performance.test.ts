@@ -388,4 +388,42 @@ describe('AgentPerformanceService.getPerformance', () => {
     expect(inactiveRow!.avg_cost_usd).toBeNull();
     expect(inactiveRow!.avg_latency_ms).toBeNull();
   });
+
+  it('zero-run placeholder: agent absent from aggregateAgents but present in allTimeLastRunAt → runs=0 and last_run_at populated (not null)', async () => {
+    // This test exercises path (2) in service.aggregate(): an agent that has
+    // ZERO done runs inside the selected window (so aggregateAgents returns no
+    // entry for it) but DOES have at least one all-time done run that predates
+    // the window — so allTimeLastRunAt returns a real timestamp for it.
+    //
+    // The zero-run placeholder branch constructs the AgentAgg literal directly
+    // and must splice in lastRunAt from the Map.  A future refactor that
+    // accidentally drops the `lastRunAt` assignment (e.g. forgets to include it
+    // in the literal) would make last_run_at null, which this test catches.
+    const agentA = makeAgent('a1', 'Active');
+    const agentB = makeAgent('a2', 'Historical'); // zero in-window runs, one pre-window run
+
+    const repoAggs: AgentAgg[] = [
+      makeAgg({ agentId: 'a1', agentName: '', runs: 3, totalCostUsd: 1.5 }),
+      // 'a2' is deliberately absent → zero-run placeholder branch in aggregate()
+    ];
+
+    const outOfWindowRunAt = new Date('2024-03-15T09:00:00.000Z');
+
+    const service = makeService([agentA, agentB], {
+      aggregateAgents: repoAggs,
+      allTimeLastRunAt: new Map([['a2', outOfWindowRunAt]]),
+    });
+
+    const result = await service.getPerformance('ws1', WINDOW);
+
+    const historicalRow = result.agents.find((r) => r.agent_name === 'Historical');
+    expect(historicalRow, 'Historical agent must appear in the response').toBeDefined();
+    // Numeric aggregates must reflect zero in-window activity
+    expect(historicalRow!.runs).toBe(0);
+    expect(historicalRow!.accept_rate).toBeNull();
+    expect(historicalRow!.avg_cost_usd).toBeNull();
+    // last_run_at must come from allTimeLastRunAt (the pre-window run), NOT null
+    expect(historicalRow!.last_run_at).not.toBeNull();
+    expect(historicalRow!.last_run_at).toBe('2024-03-15T09:00:00.000Z');
+  });
 });

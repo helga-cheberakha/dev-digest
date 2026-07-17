@@ -245,6 +245,7 @@ export function AgentPerfTable({ rows, onView }: AgentPerfTableProps) {
     borderBottom: "1px solid var(--border)",
     padding: "8px 0",
     gap: 0,
+    cursor: "pointer",
   };
 
   const cellStyle: React.CSSProperties = {
@@ -282,10 +283,15 @@ export function AgentPerfTable({ rows, onView }: AgentPerfTableProps) {
                 disclosure toggle and View button stop propagation so they
                 do not double-fire. */}
             <div style={rowStyle} role="row" onClick={() => onView(row.agent_id)}>
-              {/* Disclosure toggle */}
-              <div style={{ padding: "0 4px" }}>
+              {/* Disclosure toggle — onClick lives on the wrapper so that clicks
+                  landing in the padding area (just outside the button icon) are
+                  also captured and do not bubble up to the row's navigation handler. */}
+              <div
+                style={{ padding: "0 4px" }}
+                onClick={(e) => { e.stopPropagation(); toggleExpand(row.agent_id); }}
+                data-testid={`disclosure-wrapper-${row.agent_id}`}
+              >
                 <button
-                  onClick={(e) => { e.stopPropagation(); toggleExpand(row.agent_id); }}
                   aria-expanded={isExpanded}
                   aria-label={isExpanded ? "Collapse row" : "Expand row"}
                   style={{

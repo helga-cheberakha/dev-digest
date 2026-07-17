@@ -291,5 +291,24 @@ describe("AgentPerfTable", () => {
       // Toggle DID expand the row
       expect(toggleBtn).toHaveAttribute("aria-expanded", "true");
     });
+
+    it("clicking the disclosure wrapper div (padding area) does NOT fire onView", () => {
+      // Regression: before the fix the onClick lived only on the inner <button>,
+      // so a click in the 0 4px padding margin of the wrapper div would bypass
+      // stopPropagation and navigate instead of expanding.
+      const onView = vi.fn();
+      renderTable([ROW_HIGH], onView);
+
+      // Fire a click directly on the wrapper div, simulating a click that lands
+      // in the padding zone just outside the button icon.
+      const wrapper = screen.getByTestId("disclosure-wrapper-agent-high");
+      fireEvent.click(wrapper);
+
+      // The wrapper's own onClick should have expanded the row …
+      const collapseBtn = screen.getByRole("button", { name: /collapse row/i });
+      expect(collapseBtn).toHaveAttribute("aria-expanded", "true");
+      // … but onView must never have fired.
+      expect(onView).not.toHaveBeenCalled();
+    });
   });
 });

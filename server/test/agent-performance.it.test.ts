@@ -50,6 +50,7 @@ d('AgentPerformance routes — integration (real Postgres)', () => {
   let workspaceId: string;    // "default" workspace (workspace A)
   let agentAlphaId: string;
   let agentBetaId: string;
+  let agentGammaId: string;   // zero in-window runs, one pre-window done run
   let agentWsBId: string;     // workspace-B agent for IDOR test
   let wsBId: string;
 
@@ -194,6 +195,33 @@ d('AgentPerformance routes — integration (real Postgres)', () => {
       agentId: agentBetaId,
       status: 'running',
       ranAt: new Date('2024-06-28T12:00:00.000Z'),
+    });
+
+    // ---- Insert Agent Gamma: zero in-window runs, one done run before the window ----
+    // This seeds the zero-run placeholder branch in service.aggregate():
+    // aggregateAgents will return no entry for Gamma (no done runs in June 2024),
+    // but allTimeLastRunAt will return 2024-01-15 for it.
+    const [gammaAgent] = await db
+      .insert(t.agents)
+      .values({
+        workspaceId,
+        name: 'IT Agent Gamma',
+        provider: 'openai',
+        model: 'gpt-4o',
+        systemPrompt: 'Test agent gamma — pre-window run only.',
+      })
+      .returning();
+    agentGammaId = gammaAgent!.id;
+
+    // G_out: done run OUTSIDE the query window (2024-06-01..2024-06-30)
+    await db.insert(t.agentRuns).values({
+      workspaceId,
+      agentId: agentGammaId,
+      status: 'done',
+      ranAt: new Date('2024-01-15T12:00:00.000Z'),
+      costUsd: null,
+      durationMs: 120,
+      findingsCount: 4,
     });
 
     // ---- Insert reviews + findings for Alpha (A1 and A2) ----
@@ -575,6 +603,55 @@ d('AgentPerformance routes — integration (real Postgres)', () => {
       // A_out's costUsd=999 must not contaminate avg_cost_usd
       // avg_cost_usd = AVG(1.5) = 1.5 (only A1 has a price)
       expect(body.avg_cost_usd).toBeCloseTo(1.5, 10);
+    } finally {
+      await app.close();
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Zero-run placeholder branch: agent with no in-window runs but all-time run
+  // ---------------------------------------------------------------------------
+
+  it('zero-run placeholder: agent with no done runs in window but a pre-window done run → runs=0 and last_run_at from all-time history (not null)', async () => {
+    // Agent Gamma has exactly one done run: 2024-01-15, which is BEFORE the
+    // query window 2024-06-01..2024-06-30.
+    //
+    // In service.aggregate() this hits the zero-run placeholder branch (path 2):
+    //   - aggregateAgents() returns no row for Gamma (no in-window done runs)
+    //   - allTimeLastRunAt() returns 2024-01-15 for Gamma
+    //   → the placeholder literal must set lastRunAt from the Map, not null.
+    //
+    // Regression target: a refactor that forgets `lastRunAt` in the literal
+    // would make last_run_at null — which this test catches at real-Postgres
+    // resolution, where neither tsc nor a mocked-repo unit test would catch it.
+    const config = loadConfig({ ...process.env, NODE_ENV: 'test' } as NodeJS.ProcessEnv);
+    const app = await buildApp({ config, db: pg.handle.db });
+
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/agents/performance?${PERIOD_QUERY}`,
+      });
+      expect(res.statusCode, `GET /agents/performance returned ${res.statusCode}: ${res.body}`).toBe(200);
+
+      const body = res.json<{
+        agents: Array<{
+          agent_id: string;
+          runs: number;
+          last_run_at: string | null;
+        }>;
+      }>();
+
+      const gammaRow = body.agents.find((a) => a.agent_id === agentGammaId);
+      expect(gammaRow, 'Agent Gamma must appear in the response').toBeDefined();
+
+      // Gamma has ZERO done runs inside the window → the placeholder branch ran
+      expect(gammaRow!.runs).toBe(0);
+
+      // Gamma's pre-window done run (2024-01-15) must surface via allTimeLastRunAt,
+      // NOT be null just because it falls outside the selected window
+      expect(gammaRow!.last_run_at).not.toBeNull();
+      expect(gammaRow!.last_run_at).toBe('2024-01-15T12:00:00.000Z');
     } finally {
       await app.close();
     }
