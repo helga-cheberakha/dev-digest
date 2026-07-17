@@ -27,6 +27,7 @@ export const AgentColumnFinding = z.object({
   title: z.string(),
   file: z.string(),
   start_line: z.number().int(),
+  end_line: z.number().int(),
   kind: z.string().nullish(),
 });
 export type AgentColumnFinding = z.infer<typeof AgentColumnFinding>;

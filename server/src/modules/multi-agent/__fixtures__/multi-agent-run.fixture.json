@@ -27,6 +27,7 @@
           "title": "Possible null dereference on user.session",
           "file": "src/auth/handler.ts",
           "start_line": 42,
+          "end_line": 42,
           "kind": "finding"
         }
       ]
