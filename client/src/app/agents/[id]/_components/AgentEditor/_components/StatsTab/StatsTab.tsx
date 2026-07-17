@@ -13,7 +13,7 @@ import { useAgentStats, useAgentRuns } from "@/lib/hooks/agentPerformance";
 import { formatCost } from "@/lib/cost";
 import type { PerfWindow } from "@/lib/api";
 import type { StatPoint } from "@devdigest/shared";
-import RunTraceDrawer from "@/app/repos/[repoId]/pulls/[number]/_components/RunTraceDrawer";
+import RunTraceDrawer from "@/components/RunTraceDrawer";
 import { Sparkline } from "./_components/Sparkline";
 import { CostDelta } from "./_components/CostDelta";
 import { SeverityStackedBars } from "./_components/SeverityStackedBars";

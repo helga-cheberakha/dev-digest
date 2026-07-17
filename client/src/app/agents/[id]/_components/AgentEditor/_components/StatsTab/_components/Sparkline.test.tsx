@@ -107,4 +107,40 @@ describe("Sparkline — 2+ data points", () => {
       expect.stringContaining("flat"),
     );
   });
+
+  it("aria-label contains 'downward' for exactly 2 points [3, 1]", () => {
+    // 2 points is the minimal case for direction detection; last(1) < first(3) → downward.
+    render(
+      <Sparkline
+        points={[
+          { label: "2026-07-01", value: 3 },
+          { label: "2026-07-08", value: 1 },
+        ]}
+      />,
+    );
+
+    const svg = screen.getByRole("img");
+    expect(svg).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("downward"),
+    );
+  });
+
+  it("aria-label contains 'flat' for exactly 2 equal points [5, 5]", () => {
+    // 2 equal points is the minimal flat case; existing flat test uses 3 points.
+    render(
+      <Sparkline
+        points={[
+          { label: "2026-07-01", value: 5 },
+          { label: "2026-07-08", value: 5 },
+        ]}
+      />,
+    );
+
+    const svg = screen.getByRole("img");
+    expect(svg).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("flat"),
+    );
+  });
 });

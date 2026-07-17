@@ -60,6 +60,7 @@ export function PeriodPicker({ value, onChange }: PeriodPickerProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const focusFirstOptionRef = useRef(false);
+  const focusLastOptionRef = useRef(false);
 
   // ---------------------------------------------------------------------------
   // Close on outside mousedown
@@ -82,6 +83,9 @@ export function PeriodPicker({ value, onChange }: PeriodPickerProps) {
     if (open && focusFirstOptionRef.current) {
       focusFirstOptionRef.current = false;
       optionRefs.current[0]?.focus();
+    } else if (open && focusLastOptionRef.current) {
+      focusLastOptionRef.current = false;
+      optionRefs.current[optionRefs.current.length - 1]?.focus();
     }
   }, [open]);
 
@@ -129,6 +133,13 @@ export function PeriodPicker({ value, onChange }: PeriodPickerProps) {
       e.preventDefault();
       focusFirstOptionRef.current = true;
       openDropdown();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      focusLastOptionRef.current = true;
+      openDropdown();
+    } else if (e.key === "Escape" && open) {
+      e.preventDefault();
+      closeDropdown();
     }
   }
 

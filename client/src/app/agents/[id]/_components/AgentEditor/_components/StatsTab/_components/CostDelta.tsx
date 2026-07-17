@@ -32,8 +32,9 @@ export function CostDelta({
   const delta = current - previous;
   const absDelta = Math.abs(delta);
 
-  // Treat sub-floating-point noise as "no change"
-  if (absDelta < 1e-9) {
+  // Treat deltas that would round to "$0.00" as "no change" (avoids a
+  // misleading aria-label like "decreased by $0.00" for real sub-cent deltas)
+  if (absDelta < 0.001) {
     return (
       <span style={{ color: "var(--text-muted)" }} className="tnum">
         → {formatCost(0)} (0%)

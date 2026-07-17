@@ -111,6 +111,29 @@ describe("AgentPerfTable", () => {
       // formatCost(null) returns "—"
       expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
     });
+
+    it("all-null accept_rate rows render in original input order after sort is triggered", () => {
+      // When every row has accept_rate: null, all comparisons are equal.
+      // A stable sort must preserve the original input order: A before B before C.
+      const ROW_NULL_A = makeRow({ agent_id: "null-a", agent_name: "Null A", accept_rate: null });
+      const ROW_NULL_B = makeRow({ agent_id: "null-b", agent_name: "Null B", accept_rate: null });
+      const ROW_NULL_C = makeRow({ agent_id: "null-c", agent_name: "Null C", accept_rate: null });
+
+      renderTable([ROW_NULL_A, ROW_NULL_B, ROW_NULL_C]);
+
+      // Trigger a re-sort by clicking the Accept Rate header
+      const acceptHeader = screen.getByRole("button", { name: /sort by accept/i });
+      fireEvent.click(acceptHeader);
+
+      // All comparisons are equal → stable sort preserves original input order
+      const nameA = screen.getByText("Null A");
+      const nameB = screen.getByText("Null B");
+      const nameC = screen.getByText("Null C");
+
+      // A comes before B, B comes before C
+      expect(nameA.compareDocumentPosition(nameB) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(nameB.compareDocumentPosition(nameC) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
   });
 
   describe("client-side sorting (no network call)", () => {

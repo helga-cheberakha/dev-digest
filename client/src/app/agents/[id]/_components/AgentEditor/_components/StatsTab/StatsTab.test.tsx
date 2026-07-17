@@ -54,7 +54,7 @@ vi.mock("next/link", () => ({
 
 // RunTraceDrawer: mock the barrel (same path as the import in StatsTab.tsx)
 vi.mock(
-  "@/app/repos/[repoId]/pulls/[number]/_components/RunTraceDrawer",
+  "@/components/RunTraceDrawer",
   () => ({
     default: ({
       runId,
@@ -602,6 +602,20 @@ describe("StatsTab — RunHistoryTable pagination boundary behaviour", () => {
     // page=3, totalPages=3 → hasNext=false, hasPrev=true
     expect(screen.getByRole("button", { name: "Next page" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Previous page" })).toBeEnabled();
+  });
+
+  it("clicking Next three times does not advance past the last page (page indicator reads 'Page 3 of 3')", () => {
+    renderStatsTab();
+    // Three clicks: 1→2, 2→3, then a third attempt on the now-disabled Next button.
+    // React does not invoke onClick on disabled <button> elements, so the page
+    // must remain at 3 — the indicator must read "Page 3 of 3", not "Page 4 of 3".
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+    // Next must be disabled (cannot go to page 4)
+    expect(screen.getByRole("button", { name: "Next page" })).toBeDisabled();
+    // Page indicator must show the last page, not 4+
+    expect(screen.getByText("Page 3 of 3")).toBeInTheDocument();
   });
 });
 

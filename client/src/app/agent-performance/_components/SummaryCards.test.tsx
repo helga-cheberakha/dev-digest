@@ -83,6 +83,16 @@ describe("SummaryCards", () => {
     expect(screen.getByText("my-agent")).toBeInTheDocument();
   });
 
+  it("renders CircularScore svg badge when avg_accept_rate is non-null", () => {
+    const { container } = render(
+      <SummaryCards summary={makeSummary({ avg_accept_rate: 0.85 })} />,
+    );
+
+    // CircularScore is the only SVG rendered by SummaryCards and only appears
+    // when avg_accept_rate !== null (the null case already asserts no SVG above).
+    expect(container.querySelector("svg")).toBeInTheDocument();
+  });
+
   it("renders dash for null most_active_agent", () => {
     render(<SummaryCards summary={makeSummary({ most_active_agent: null })} />);
     const dashes = screen.getAllByText("—");

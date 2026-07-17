@@ -554,7 +554,7 @@ export class AgentPerformanceRepository {
         AND ar.agent_id     = ${agentId}::uuid
         AND ar.ran_at >= ${window.fromTs.toISOString()}::timestamptz
         AND ar.ran_at <= ${window.toTs.toISOString()}::timestamptz
-      ORDER BY ar.ran_at DESC
+      ORDER BY ar.ran_at DESC, ar.id DESC
       LIMIT  ${limit}
       OFFSET ${offset}
     `)) as unknown as RawRunHistoryRow[];

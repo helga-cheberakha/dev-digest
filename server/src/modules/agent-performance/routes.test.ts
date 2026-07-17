@@ -246,6 +246,22 @@ describe('GET /agents/performance', () => {
       await app.close();
     }
   });
+
+  it('returns 400 with error code invalid_period when from is not a valid date string', async () => {
+    const app = await makeTestApp();
+    try {
+      // validateWindowQuery: new Date('not-a-date') → isNaN → AppError(invalid_period, 400)
+      const res = await app.inject({
+        method: 'GET',
+        url: '/agents/performance?period=custom&from=not-a-date&to=2024-06-30',
+      });
+      expect(res.statusCode).toBe(400);
+      const body = res.json<{ error: { code: string; message: string } }>();
+      expect(body.error.code).toBe('invalid_period');
+    } finally {
+      await app.close();
+    }
+  });
 });
 
 // ─── GET /agents/:id/stats ────────────────────────────────────────────────────
