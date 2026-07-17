@@ -167,6 +167,32 @@ const RUNS_EMPTY = {
   total: 0,
 };
 
+/**
+ * Multi-page run list: total=60, limit=25 → totalPages=3.
+ * Used to test pagination boundary behaviour (page 1 of 3).
+ */
+const RUNS_MULTI_PAGE = {
+  rows: [
+    {
+      run_id: "run-page-test",
+      ran_at: "2026-07-10T10:00:00.000Z",
+      pr_number: null,
+      pr_title: null,
+      pr_repo_id: null,
+      tokens_in: 500,
+      tokens_out: 150,
+      cost_usd: 0.01,
+      findings_count: 1,
+      source: "local" as const,
+      status: "completed",
+      has_trace: false,
+    },
+  ],
+  page: 1,
+  limit: 25,
+  total: 60, // Math.ceil(60 / 25) = 3 pages
+};
+
 // ---------------------------------------------------------------------------
 // Render helper
 // ---------------------------------------------------------------------------
@@ -520,6 +546,61 @@ describe("StatsTab — trace drawer opens on row click", () => {
     expect(
       screen.queryByTestId("run-trace-drawer"),
     ).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pagination boundary tests (Finding 1 fix)
+// ---------------------------------------------------------------------------
+
+describe("StatsTab — RunHistoryTable pagination boundary behaviour", () => {
+  /**
+   * Both sub-suites need stats data with runs > 0 so the full StatsTab
+   * renders (not the zero-run "No runs in this period" branch).
+   * useAgentRuns returns RUNS_MULTI_PAGE (total: 60 → totalPages: 3).
+   */
+  beforeEach(() => {
+    vi.mocked(useAgentStats).mockReturnValue({
+      data: STATS_WITH_DATA,
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useAgentStats>);
+    vi.mocked(useAgentRuns).mockReturnValue({
+      data: RUNS_MULTI_PAGE,
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useAgentRuns>);
+  });
+
+  it("at page 1 (first page), Prev is disabled and Next is enabled", () => {
+    renderStatsTab();
+    // StatsTab state starts at page=1; totalPages=3 → pagination controls render.
+    const prevBtn = screen.getByRole("button", { name: "Previous page" });
+    const nextBtn = screen.getByRole("button", { name: "Next page" });
+    expect(prevBtn).toBeDisabled();
+    expect(nextBtn).toBeEnabled();
+  });
+
+  it("clicking Next advances to page 2 and calls useAgentRuns with page 2", () => {
+    renderStatsTab();
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+    // StatsTab calls useAgentRuns(agentId, window, page, limit) on re-render.
+    expect(vi.mocked(useAgentRuns)).toHaveBeenLastCalledWith(
+      "ag1",
+      expect.anything(),
+      2,
+      25,
+    );
+  });
+
+  it("at the last page (3 of 3), Next is disabled and Prev is enabled", () => {
+    renderStatsTab();
+    // Advance from page 1 → page 2 → page 3 via two Next clicks.
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+    // page=3, totalPages=3 → hasNext=false, hasPrev=true
+    expect(screen.getByRole("button", { name: "Next page" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Previous page" })).toBeEnabled();
   });
 });
 

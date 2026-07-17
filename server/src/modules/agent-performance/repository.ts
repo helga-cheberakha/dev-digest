@@ -386,6 +386,10 @@ export class AgentPerformanceRepository {
     agentId: string,
     prevWindow: { fromTs: Date; toTs: Date },
   ): Promise<number | null> {
+    // Upper bound is STRICT less-than (<) to avoid double-counting the boundary instant.
+    // previousWindow() sets toTs === current window's fromTs (same millisecond).
+    // The current window uses ran_at >= fromTs (inclusive), so a run AT fromTs belongs
+    // to the current window only — using `<` here makes the two windows disjoint.
     const rows = (await this.db.execute<AvgCostRow>(sql`
       SELECT
         AVG(cost_usd) FILTER (WHERE cost_usd IS NOT NULL)::float AS avg_cost_usd
@@ -394,7 +398,7 @@ export class AgentPerformanceRepository {
         AND agent_id     = ${agentId}::uuid
         AND status       = 'done'
         AND ran_at >= ${prevWindow.fromTs.toISOString()}::timestamptz
-        AND ran_at <= ${prevWindow.toTs.toISOString()}::timestamptz
+        AND ran_at <  ${prevWindow.toTs.toISOString()}::timestamptz
     `)) as unknown as AvgCostRow[];
 
     return rows[0]?.avg_cost_usd ?? null;

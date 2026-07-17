@@ -67,6 +67,43 @@ function SourceBadge({ source }: { source: "local" | "ci" }) {
 }
 
 // ---------------------------------------------------------------------------
+// Pagination button (local helper — only used in this file)
+// ---------------------------------------------------------------------------
+
+function PaginationButton({
+  disabled,
+  onClick,
+  label,
+  ariaLabel,
+}: {
+  disabled: boolean;
+  onClick: () => void;
+  label: string;
+  ariaLabel: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      style={{
+        padding: "4px 10px",
+        borderRadius: 5,
+        border: "1px solid var(--border)",
+        background: "var(--bg-elevated)",
+        color: disabled ? "var(--text-muted)" : "var(--text-primary)",
+        fontSize: 12,
+        fontWeight: 600,
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.5 : 1,
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -227,24 +264,12 @@ export function RunHistoryTable({
             justifyContent: "flex-end",
           }}
         >
-          <button
-            onClick={() => onPageChange(page - 1)}
+          <PaginationButton
             disabled={!hasPrev}
-            aria-label="Previous page"
-            style={{
-              padding: "4px 10px",
-              borderRadius: 5,
-              border: "1px solid var(--border)",
-              background: "var(--bg-elevated)",
-              color: hasPrev ? "var(--text-primary)" : "var(--text-muted)",
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: hasPrev ? "pointer" : "not-allowed",
-              opacity: hasPrev ? 1 : 0.5,
-            }}
-          >
-            {t("stats.runHistoryTable.prevPage")}
-          </button>
+            onClick={() => onPageChange(page - 1)}
+            label={t("stats.runHistoryTable.prevPage")}
+            ariaLabel="Previous page"
+          />
 
           <span
             style={{ fontSize: 12, color: "var(--text-muted)" }}
@@ -253,24 +278,12 @@ export function RunHistoryTable({
             {t("stats.runHistoryTable.pageOf", { page, totalPages })}
           </span>
 
-          <button
-            onClick={() => onPageChange(page + 1)}
+          <PaginationButton
             disabled={!hasNext}
-            aria-label="Next page"
-            style={{
-              padding: "4px 10px",
-              borderRadius: 5,
-              border: "1px solid var(--border)",
-              background: "var(--bg-elevated)",
-              color: hasNext ? "var(--text-primary)" : "var(--text-muted)",
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: hasNext ? "pointer" : "not-allowed",
-              opacity: hasNext ? 1 : 0.5,
-            }}
-          >
-            {t("stats.runHistoryTable.nextPage")}
-          </button>
+            onClick={() => onPageChange(page + 1)}
+            label={t("stats.runHistoryTable.nextPage")}
+            ariaLabel="Next page"
+          />
         </div>
       )}
     </div>

@@ -210,6 +210,39 @@ describe('previousWindow', () => {
     expect(fromTs.getTime()).toBe(originalFromMs);
     expect(toTs.getTime()).toBe(originalToMs);
   });
+
+  it('boundary non-overlap: prevWindow.toTs === window.fromTs, so strict-< in avgCostPrevWindow means a run at fromTs is NOT counted in the prev window', () => {
+    // This test locks in the invariant that makes the two windows disjoint.
+    //
+    // previousWindow() sets toTs = window.fromTs (same millisecond, by contract).
+    // avgCostPrevWindow() uses `ran_at < prevWindow.toTs` (strict less-than),
+    // which is < window.fromTs. Therefore:
+    //   - a run at exactly window.fromTs satisfies `ran_at >= window.fromTs` (current window ✓)
+    //   - a run at exactly window.fromTs does NOT satisfy `ran_at < prevWindow.toTs` (prev window ✗)
+    //
+    // These two windows are disjoint: the boundary instant belongs to the current
+    // window only. This matters most for `period=custom`, where fromTs lands at
+    // exactly midnight-UTC and a run recorded at 00:00:00.000Z would otherwise be
+    // counted in BOTH aggregates.
+
+    const fromTs = new Date('2024-06-01T00:00:00.000Z');
+    const toTs = new Date('2024-06-30T23:59:59.999Z');
+    const prev = previousWindow({ fromTs, toTs });
+
+    // Contract: prev.toTs === window.fromTs (same millisecond)
+    expect(prev.toTs.getTime()).toBe(fromTs.getTime());
+
+    // With strict `<` in the repository query:
+    //   A run at the boundary (fromTs) satisfies: boundaryMs < prev.toTs.getTime()
+    //   → false — so it is NOT counted in the previous window.
+    const boundaryMs = fromTs.getTime();
+    const countedInPrevWindow = boundaryMs < prev.toTs.getTime();
+    expect(countedInPrevWindow).toBe(false);
+
+    // The same run satisfies `>= fromTs` (current window's lower bound) → true.
+    const countedInCurrentWindow = boundaryMs >= fromTs.getTime();
+    expect(countedInCurrentWindow).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

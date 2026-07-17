@@ -709,6 +709,167 @@ d('AgentPerformance routes — integration (real Postgres)', () => {
     }
   });
 
+  // ---------------------------------------------------------------------------
+  // Finding 3: OFFSET/pagination correctness — disjoint pages, consistent total,
+  // ran_at DESC ordering across pages
+  // ---------------------------------------------------------------------------
+
+  describe('GET /agents/:id/runs — pagination offset/page disjointness', () => {
+    let paginationAgentId: string;
+    // Capture run IDs in seeding order (newest → oldest: P4, P3, P2, P1)
+    let runP1Id: string;
+    let runP2Id: string;
+    let runP3Id: string;
+    let runP4Id: string;
+
+    beforeAll(async () => {
+      // Seed a dedicated agent + 4 in-window runs so that limit=2 produces 2 full pages.
+      // Using the shared `workspaceId` and `pg.handle.db` from the outer beforeAll.
+      const db = pg.handle.db;
+
+      const [paginationAgent] = await db
+        .insert(t.agents)
+        .values({
+          workspaceId,
+          name: 'IT Agent Pagination',
+          provider: 'openai',
+          model: 'gpt-4o',
+          systemPrompt: 'Dedicated pagination test agent.',
+        })
+        .returning();
+      paginationAgentId = paginationAgent!.id;
+
+      // P1 (oldest), P2, P3, P4 (newest) — all done, in-window, different ranAt
+      const [rP1] = await db
+        .insert(t.agentRuns)
+        .values({
+          workspaceId,
+          agentId: paginationAgentId,
+          status: 'done',
+          ranAt: new Date('2024-06-05T08:00:00.000Z'),
+          findingsCount: 1,
+        })
+        .returning();
+      runP1Id = rP1!.id;
+
+      const [rP2] = await db
+        .insert(t.agentRuns)
+        .values({
+          workspaceId,
+          agentId: paginationAgentId,
+          status: 'done',
+          ranAt: new Date('2024-06-10T08:00:00.000Z'),
+          findingsCount: 2,
+        })
+        .returning();
+      runP2Id = rP2!.id;
+
+      const [rP3] = await db
+        .insert(t.agentRuns)
+        .values({
+          workspaceId,
+          agentId: paginationAgentId,
+          status: 'failed',
+          ranAt: new Date('2024-06-15T08:00:00.000Z'),
+          findingsCount: 3,
+        })
+        .returning();
+      runP3Id = rP3!.id;
+
+      const [rP4] = await db
+        .insert(t.agentRuns)
+        .values({
+          workspaceId,
+          agentId: paginationAgentId,
+          status: 'done',
+          ranAt: new Date('2024-06-20T08:00:00.000Z'),
+          findingsCount: 4,
+        })
+        .returning();
+      runP4Id = rP4!.id;
+    });
+
+    it('pages are disjoint (no run appears on both pages), total is identical across pages, combined rows are ordered ran_at DESC', async () => {
+      // runHistory includes ALL statuses — 4 rows in window (P1..P4).
+      // limit=2 → page 1: P4 + P3 (newest); page 2: P2 + P1 (oldest).
+      const config = loadConfig({ ...process.env, NODE_ENV: 'test' } as NodeJS.ProcessEnv);
+      const app = await buildApp({ config, db: pg.handle.db });
+
+      try {
+        const page1Res = await app.inject({
+          method: 'GET',
+          url: `/agents/${paginationAgentId}/runs?${PERIOD_QUERY}&limit=2&page=1`,
+        });
+        expect(
+          page1Res.statusCode,
+          `page 1 returned ${page1Res.statusCode}: ${page1Res.body}`,
+        ).toBe(200);
+
+        const page2Res = await app.inject({
+          method: 'GET',
+          url: `/agents/${paginationAgentId}/runs?${PERIOD_QUERY}&limit=2&page=2`,
+        });
+        expect(
+          page2Res.statusCode,
+          `page 2 returned ${page2Res.statusCode}: ${page2Res.body}`,
+        ).toBe(200);
+
+        const p1 = page1Res.json<{
+          rows: Array<{ run_id: string; ran_at: string }>;
+          total: number;
+          page: number;
+          limit: number;
+        }>();
+        const p2 = page2Res.json<{
+          rows: Array<{ run_id: string; ran_at: string }>;
+          total: number;
+          page: number;
+          limit: number;
+        }>();
+
+        // total is 4 across all 4 seeded runs — must be identical on both pages
+        expect(p1.total).toBe(4);
+        expect(p2.total).toBe(4);
+
+        // Both pages must return exactly 2 rows (page 1 is full; page 2 is also full)
+        expect(p1.rows).toHaveLength(2);
+        expect(p2.rows).toHaveLength(2);
+
+        // Disjointness: no run_id appears on both pages
+        const p1Ids = new Set(p1.rows.map((r) => r.run_id));
+        const p2Ids = new Set(p2.rows.map((r) => r.run_id));
+        for (const id of p2Ids) {
+          expect(p1Ids.has(id)).toBe(false);
+        }
+
+        // No row is skipped: union of both pages = all 4 seeded run IDs
+        const allSeededIds = new Set([runP1Id, runP2Id, runP3Id, runP4Id]);
+        const unionIds = new Set([...p1Ids, ...p2Ids]);
+        expect(unionIds.size).toBe(4);
+        for (const id of allSeededIds) {
+          expect(unionIds.has(id)).toBe(true);
+        }
+
+        // Combined order is ran_at DESC end-to-end:
+        // page 1 holds the 2 newest (P4 then P3), page 2 holds P2 then P1.
+        const combinedRows = [...p1.rows, ...p2.rows];
+        expect(combinedRows[0]!.run_id).toBe(runP4Id);
+        expect(combinedRows[1]!.run_id).toBe(runP3Id);
+        expect(combinedRows[2]!.run_id).toBe(runP2Id);
+        expect(combinedRows[3]!.run_id).toBe(runP1Id);
+
+        // Verify monotone descent: each ran_at <= the previous
+        for (let i = 1; i < combinedRows.length; i++) {
+          const prev = new Date(combinedRows[i - 1]!.ran_at).getTime();
+          const curr = new Date(combinedRows[i]!.ran_at).getTime();
+          expect(curr).toBeLessThanOrEqual(prev);
+        }
+      } finally {
+        await app.close();
+      }
+    });
+  });
+
   it('array-binding (ARRAY[...]::uuid[]) works against real Postgres for recentRunSeries', async () => {
     // This test validates the INSIGHTS 2026-07-16 postgres-js fix implicitly:
     // recentRunSeries() is called with [agentAlphaId, agentBetaId] when the
