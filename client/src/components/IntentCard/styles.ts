@@ -150,6 +150,11 @@ export const s = {
     background: "var(--bg-elevated)",
     color: "var(--text-secondary)",
     cursor: "pointer",
+    maxWidth: "100%",
+    textAlign: "left",
+    whiteSpace: "normal",
+    overflowWrap: "anywhere",
+    wordBreak: "break-all",
   } satisfies CSSProperties,
   riskExplanation: {
     fontSize: 13,
