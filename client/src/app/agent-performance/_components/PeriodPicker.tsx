@@ -30,6 +30,11 @@ function modeOf(w: PerfWindow): PeriodMode {
   return w.period as PeriodMode;
 }
 
+/** True for a well-formed YYYY-MM-DD date string (rejects e.g. "2026-13-01"). */
+function isValidDateString(s: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(new Date(s).getTime());
+}
+
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
@@ -174,8 +179,11 @@ export function PeriodPicker({ value, onChange }: PeriodPickerProps) {
     }
   }
 
+  const isCustomRangeValid =
+    isValidDateString(customFrom) && isValidDateString(customTo);
+
   function handleApply() {
-    if (customFrom && customTo) {
+    if (isCustomRangeValid) {
       closeDropdown();
       onChange({ period: "custom", from: customFrom, to: customTo });
     }
@@ -252,14 +260,14 @@ export function PeriodPicker({ value, onChange }: PeriodPickerProps) {
   const applyBtnStyle: React.CSSProperties = {
     width: "100%",
     padding: "6px",
-    background: customFrom && customTo ? "var(--accent)" : "var(--bg-hover)",
+    background: isCustomRangeValid ? "var(--accent)" : "var(--bg-hover)",
     border: "none",
     borderRadius: 5,
-    color: customFrom && customTo ? "var(--accent-text)" : "var(--text-muted)",
+    color: isCustomRangeValid ? "var(--accent-text)" : "var(--text-muted)",
     fontSize: 12,
     fontWeight: 600,
-    cursor: customFrom && customTo ? "pointer" : "not-allowed",
-    opacity: customFrom && customTo ? 1 : 0.5,
+    cursor: isCustomRangeValid ? "pointer" : "not-allowed",
+    opacity: isCustomRangeValid ? 1 : 0.5,
   };
 
   // ---------------------------------------------------------------------------
@@ -333,7 +341,7 @@ export function PeriodPicker({ value, onChange }: PeriodPickerProps) {
               <button
                 type="button"
                 onClick={handleApply}
-                disabled={!customFrom || !customTo}
+                disabled={!isCustomRangeValid}
                 style={applyBtnStyle}
               >
                 {t("periodPicker.apply")}

@@ -516,6 +516,52 @@ describe("AgentPerfTable", () => {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // formatLatency branch coverage
+  // -------------------------------------------------------------------------
+
+  describe("formatLatency sub-1s branch", () => {
+    it("renders '500ms' for avg_latency_ms: 500", () => {
+      renderTable([makeRow({ agent_id: "lat-500", avg_latency_ms: 500 })]);
+      expect(screen.getByText("500ms")).toBeInTheDocument();
+    });
+
+    it("renders '1.5s' for avg_latency_ms: 1500 (≥1000 branch)", () => {
+      renderTable([makeRow({ agent_id: "lat-1500", avg_latency_ms: 1500 })]);
+      expect(screen.getByText("1.5s")).toBeInTheDocument();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // AcceptRateCell glyph coloring
+  // -------------------------------------------------------------------------
+
+  describe("AcceptRateCell glyph by band", () => {
+    // Each test renders ONE row so there is no ambiguity from sibling rows.
+    // The sort-direction indicator on the "Accept" column header reads "Accept ↓"
+    // (default sort is accept_rate DESC) — asserting the full combined string
+    // "↑ 90%" / "~ 50%" / "↓ 20%" avoids any collision with that header text.
+    //
+    // getAllByText is used instead of getByText because both the AcceptRateCell
+    // <span> and its wrapper <div> (which has no other children) carry the exact
+    // same textContent, causing getByText to throw "Found multiple elements".
+
+    it("crit band (rate < 0.4): renders '↓ 20%' for accept_rate 0.2", () => {
+      renderTable([makeRow({ agent_id: "ar-crit", accept_rate: 0.2 })]);
+      expect(screen.getAllByText("↓ 20%")).not.toHaveLength(0);
+    });
+
+    it("ok band (rate >= 0.7): renders '↑ 90%' for accept_rate 0.9", () => {
+      renderTable([makeRow({ agent_id: "ar-ok", accept_rate: 0.9 })]);
+      expect(screen.getAllByText("↑ 90%")).not.toHaveLength(0);
+    });
+
+    it("warn band (0.4 <= rate < 0.7): renders '~ 50%' for accept_rate 0.5", () => {
+      renderTable([makeRow({ agent_id: "ar-warn", accept_rate: 0.5 })]);
+      expect(screen.getAllByText("~ 50%")).not.toHaveLength(0);
+    });
+  });
+
   describe("TrendBars — empty trend array", () => {
     const ROW_NO_TREND = makeRow({
       agent_id: "no-trend",

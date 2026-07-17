@@ -48,10 +48,18 @@ vi.mock("@/components/app-shell", () => ({
 // Only Skeleton is used by AgentPerformanceView itself. Listing it here avoids the
 // "Element type is invalid" crash described in INSIGHTS.md (2026-07-11) when the
 // factory omits any import the subtree actually needs.
+//
+// CircularScore and Donut are listed here so the REAL SummaryCards and
+// CostBreakdown (used in the integration smoke test below) don't crash when
+// they import those exports from @devdigest/ui.
 vi.mock("@devdigest/ui", () => ({
   Skeleton: ({ height }: { height: number }) => (
     <div data-testid="skeleton" aria-hidden="true" style={{ height }} />
   ),
+  CircularScore: ({ score }: { score: number }) => (
+    <div data-testid="circular-score">{score}</div>
+  ),
+  Donut: () => <div data-testid="donut" />,
 }));
 
 // Stub the three presentational components — they are tested independently in T5.
@@ -483,6 +491,74 @@ describe("AgentPerformanceView", () => {
       expect(screen.queryByLabelText(/from/i)).not.toBeInTheDocument();
       expect(screen.queryByLabelText(/to/i)).not.toBeInTheDocument();
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // Integration smoke test — real child components, no stubs for the three
+  // presentational children (SummaryCards, AgentPerfTable, CostBreakdown).
+  // -------------------------------------------------------------------------
+
+  describe("integration smoke test (real children)", () => {
+    /**
+     * Strategy: vi.doUnmock the three child modules then call vi.resetModules()
+     * so that a fresh dynamic import of AgentPerformanceView resolves its own
+     * imports of SummaryCards/AgentPerfTable/CostBreakdown against the real
+     * (unmocked) files.
+     *
+     * Why the hook mock still works: "@/lib/hooks/agentPerformance" is a
+     * STATIC import of this test file, so vi.resetModules() leaves it in the
+     * module cache.  The same vi.fn() reference that mockHook() sets is the one
+     * the fresh AgentPerformanceView will call at render time.
+     *
+     * Why NextIntlClientProvider still works: "next-intl" is also in this test
+     * file's static import graph, so it is NOT cleared.  The freshly-loaded
+     * AgentPerformanceView resolves its "next-intl" import to the same cached
+     * instance, keeping the React context key consistent.
+     */
+    it(
+      "renders real AgentPerfTable agent name and SummaryCards run count without crashing",
+      async () => {
+        // ① Set up hook return value BEFORE resetting modules (the hook module
+        //   is in the static import graph and will not be cleared).
+        mockHook({ data: makePerf(), isLoading: false, isError: false });
+
+        // ② Unmark the three child stubs so their next import loads the real files.
+        vi.doUnmock("./SummaryCards");
+        vi.doUnmock("./AgentPerfTable");
+        vi.doUnmock("./CostBreakdown");
+
+        // ③ Clear Vitest's module cache so AgentPerformanceView is re-evaluated
+        //   and its child imports resolve against the doUnmocked entries.
+        vi.resetModules();
+
+        // ④ Dynamically import a fresh AgentPerformanceView; its children are
+        //   now the real implementations.
+        const { AgentPerformanceView: RealView } = await import(
+          "./AgentPerformanceView"
+        );
+
+        render(
+          <NextIntlClientProvider
+            locale="en"
+            messages={{ agentPerformance: agentPerfMessages }}
+          >
+            <RealView />
+          </NextIntlClientProvider>,
+        );
+
+        // (a) Real AgentPerfTable renders the agent's actual name from fixture data.
+        //     makePerf() → agents[0].agent_name = "Agent agent-1"
+        expect(screen.getByText("Agent agent-1")).toBeInTheDocument();
+
+        // (b) Real SummaryCards renders the total-runs count from fixture data.
+        //     makePerf() → summary.runs = 10
+        expect(screen.getByText("10")).toBeInTheDocument();
+
+        // (c) No crash — the structural wrapper rendered by AgentPerformanceView
+        //     itself (not the child stub) is present.
+        expect(screen.getByTestId("perf-summary-cards")).toBeInTheDocument();
+      },
+    );
   });
 
   describe("PeriodPicker — resilience to invalid date input", () => {

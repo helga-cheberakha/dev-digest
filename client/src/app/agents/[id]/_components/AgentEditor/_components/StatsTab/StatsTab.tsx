@@ -141,19 +141,25 @@ function PeriodSelector({
     isCustom ? window.to : "",
   );
 
+  // Narrowed once so the effect deps below can reference plain identifiers
+  // instead of conditional expressions (window.from/to only exist on the
+  // "custom" variant of PerfWindow).
+  const windowFrom = isCustom ? window.from : undefined;
+  const windowTo = isCustom ? window.to : undefined;
+
   // Keep internal state in sync when the parent switches `window` away from
   // (or between) custom ranges out-of-band — e.g. a preset button elsewhere,
   // or a reset action — so stale dates/an open panel don't linger.
   useEffect(() => {
-    if (isCustom) {
-      setCustomOpen(true);
-      setCustomFrom(window.from);
-      setCustomTo(window.to);
-    } else {
-      setCustomOpen(false);
+    setCustomOpen(isCustom);
+  }, [isCustom]);
+
+  useEffect(() => {
+    if (windowFrom !== undefined && windowTo !== undefined) {
+      setCustomFrom(windowFrom);
+      setCustomTo(windowTo);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isCustom, isCustom ? window.from : null, isCustom ? window.to : null]);
+  }, [windowFrom, windowTo]);
 
   const presets: PresetPeriod[] = ["30d", "1d"];
   const showCustomInputs = isCustom || customOpen;
