@@ -13,7 +13,7 @@ import { Skeleton, ErrorState } from "@devdigest/ui";
 import { AppShell } from "../../../../../components/app-shell";
 import { RepoNotFound } from "../../../../../components/RepoNotFound";
 import ComposeReviewDrawer from "./_components/ComposeReviewDrawer";
-import RunTraceDrawer from "./_components/RunTraceDrawer";
+import RunTraceDrawer from "@/components/RunTraceDrawer";
 import WhyTimelineDrawer from "./_components/WhyTimelineDrawer";
 import { PrDetailHeader } from "./_components/PrDetailHeader";
 import { OverviewTab } from "./_components/OverviewTab";

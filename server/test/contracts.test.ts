@@ -16,6 +16,8 @@ import {
   Settings,
   Repo,
   PrDetail,
+  AgentStats,
+  AgentRunHistory,
 } from '@devdigest/shared';
 
 /**
@@ -188,6 +190,68 @@ describe('AI contracts parse fixtures', () => {
       log: [{ t: '00.00', kind: 'info', msg: 'started' }],
     });
     expect(trace.tool_calls).toHaveLength(1);
+  });
+
+  it('AgentStats round-trip (enriched shape with 3 new fields)', () => {
+    const stats = AgentStats.parse({
+      agent_id: 'a1',
+      agent_name: 'Security Reviewer',
+      runs: 10,
+      findings_total: 42,
+      accepted: 30,
+      dismissed: 8,
+      pending: 4,
+      accept_rate: 0.79,
+      dismiss_rate: 0.21,
+      avg_findings_per_run: 4.2,
+      total_cost_usd: 1.5,
+      avg_cost_usd: 0.15,
+      avg_latency_ms: 8200,
+      findings_by_severity: { CRITICAL: 5, WARNING: 20, SUGGESTION: 17 },
+      avg_cost_usd_prev: 0.12,
+      severity_by_bucket: [
+        { label: '2026-07-01', CRITICAL: 1, WARNING: 3, SUGGESTION: 4 },
+        { label: '2026-07-08', CRITICAL: 4, WARNING: 17, SUGGESTION: 13 },
+      ],
+      cost_by_category: [
+        { category: 'security', cost_usd: 0.8 },
+        { category: 'bug', cost_usd: 0.7 },
+      ],
+      trend: [
+        { label: '2026-07-01', value: 3 },
+        { label: '2026-07-08', value: 5 },
+      ],
+    });
+    expect(stats.avg_cost_usd_prev).toBe(0.12);
+    expect(stats.severity_by_bucket).toHaveLength(2);
+    expect(stats.cost_by_category[0]!.category).toBe('security');
+  });
+
+  it('AgentRunHistory round-trip (with one RunHistoryRow)', () => {
+    const history = AgentRunHistory.parse({
+      rows: [
+        {
+          run_id: 'run-uuid-1',
+          ran_at: '2026-07-17T10:00:00Z',
+          pr_number: 42,
+          pr_title: 'Add rate limiting',
+          pr_repo_id: 'repo-uuid-1',
+          tokens_in: 14820,
+          tokens_out: 1240,
+          cost_usd: 0.012,
+          findings_count: 3,
+          source: 'local',
+          status: 'done',
+          has_trace: true,
+        },
+      ],
+      page: 1,
+      limit: 20,
+      total: 1,
+    });
+    expect(history.rows).toHaveLength(1);
+    expect(history.rows[0]!.source).toBe('local');
+    expect(history.rows[0]!.has_trace).toBe(true);
   });
 });
 

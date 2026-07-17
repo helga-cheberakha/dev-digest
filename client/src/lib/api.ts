@@ -18,6 +18,9 @@ import type {
   CiInstallation,
   CiExport,
   CiExportInputBody,
+  AgentPerf,
+  AgentStats,
+  AgentRunHistory,
 } from "@devdigest/shared";
 
 export const API_BASE =
@@ -354,4 +357,78 @@ export async function promoteVersion(
   return api.put<Agent>(`/agents/${agentId}`, {
     system_prompt: snapshot.config.system_prompt,
   });
+}
+
+// ---- Agent Performance Dashboard ----
+
+/**
+ * The time window for performance and stats queries.
+ *
+ * - `{ period: '1d' }` — last 24 hours
+ * - `{ period: '30d' }` — last 30 days (default)
+ * - `{ period: 'custom', from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' }` — explicit range
+ */
+export type PerfWindow =
+  | { period: '1d' }
+  | { period: '30d' }
+  | { period: 'custom'; from: string; to: string };
+
+/**
+ * Serialize a PerfWindow to a query string, e.g. `?period=30d` or
+ * `?period=custom&from=2026-06-01&to=2026-07-01`.
+ */
+export function windowToQuery(window: PerfWindow): string {
+  if (window.period === 'custom') {
+    return `?period=custom&from=${encodeURIComponent(window.from)}&to=${encodeURIComponent(window.to)}`;
+  }
+  return `?period=${window.period}`;
+}
+
+/** Stable query-key factory for the agent performance cache. */
+export const agentPerfQueryKeys = {
+  performance: (window: PerfWindow) =>
+    ['agent-performance', windowToQuery(window)] as const,
+  stats: (agentId: string, window: PerfWindow) =>
+    ['agent-stats', agentId, windowToQuery(window)] as const,
+  runs: (agentId: string, window: PerfWindow, page: number, limit: number) =>
+    ['agent-runs', agentId, windowToQuery(window), page, limit] as const,
+} as const;
+
+/**
+ * Fetch the cross-agent performance dashboard.
+ *
+ * Hits `GET /agents/performance?period=<...>` (or `?period=custom&from=&to=`).
+ */
+export async function fetchAgentPerformance(window: PerfWindow): Promise<AgentPerf> {
+  return api.get<AgentPerf>(`/agents/performance${windowToQuery(window)}`);
+}
+
+/**
+ * Fetch per-agent quality stats for a single agent.
+ *
+ * Hits `GET /agents/:id/stats?period=<...>` (or `?period=custom&from=&to=`).
+ */
+export async function fetchAgentStats(
+  agentId: string,
+  window: PerfWindow,
+): Promise<AgentStats> {
+  return api.get<AgentStats>(`/agents/${agentId}/stats${windowToQuery(window)}`);
+}
+
+/**
+ * Fetch paginated run history for a single agent.
+ *
+ * Hits `GET /agents/:id/runs?period=<...>&page=<n>&limit=<n>`.
+ * `windowToQuery` already returns a `?`-prefixed string, so `page`/`limit`
+ * are appended with `&`.
+ */
+export async function fetchAgentRuns(
+  agentId: string,
+  window: PerfWindow,
+  page: number,
+  limit: number,
+): Promise<AgentRunHistory> {
+  return api.get<AgentRunHistory>(
+    `/agents/${agentId}/runs${windowToQuery(window)}&page=${page}&limit=${limit}`,
+  );
 }

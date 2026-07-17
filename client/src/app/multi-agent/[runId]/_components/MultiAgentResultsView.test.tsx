@@ -142,7 +142,7 @@ vi.mock("@devdigest/ui", () => ({
 
 // RunTraceDrawer — just tracks whether it was opened and with which runId
 vi.mock(
-  "@/app/repos/[repoId]/pulls/[number]/_components/RunTraceDrawer",
+  "@/components/RunTraceDrawer",
   () => ({
     default: ({
       runId,

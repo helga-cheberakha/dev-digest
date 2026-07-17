@@ -35,7 +35,7 @@ import { FindingCard } from "@/app/repos/[repoId]/pulls/[number]/_components/Fin
 import { useMultiAgentRun } from "@/lib/hooks/multiAgent";
 import { usePrReviews, useRunEvents, useFindingAction } from "@/lib/hooks/reviews";
 import { SafeMarkdown } from "@/components/SafeMarkdown";
-import RunTraceDrawer from "@/app/repos/[repoId]/pulls/[number]/_components/RunTraceDrawer";
+import RunTraceDrawer from "@/components/RunTraceDrawer";
 import { EvalCaseModal } from "@/components/EvalCaseModal";
 import { formatCost } from "@/lib/cost";
 import { draftEvalCaseFromFinding, evalQueryKeys, fetchEvalCases } from "@/lib/api";
