@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Severity } from './findings.js';
+import { FindingCategory, Severity } from './findings.js';
 
 /**
  * A5 — Observability / Multi-agent contracts (L07).
@@ -113,6 +113,19 @@ export const AgentStats = z.object({
     WARNING: z.number().int(),
     SUGGESTION: z.number().int(),
   }),
+  /** avg run cost over the immediately-preceding equal-length window; null when unpriced. */
+  avg_cost_usd_prev: z.number().nullable(),
+  /** severity breakdown by time bucket, ordered oldest→newest within the selected window. */
+  severity_by_bucket: z.array(
+    z.object({
+      label: z.string(),
+      CRITICAL: z.number().int(),
+      WARNING: z.number().int(),
+      SUGGESTION: z.number().int(),
+    }),
+  ),
+  /** cost attribution by finding category within the selected window. */
+  cost_by_category: z.array(z.object({ category: FindingCategory, cost_usd: z.number() })),
   /** recent runs for a small trend chart (oldest→newest). */
   trend: z.array(StatPoint),
 });
@@ -138,6 +151,36 @@ export const CuratorResult = z.object({
   dry_run: z.boolean(),
 });
 export type CuratorResult = z.infer<typeof CuratorResult>;
+
+// ---------------------------------------------------------------------------
+// Per-agent Run History (GET /agents/:id/runs)
+// ---------------------------------------------------------------------------
+
+/** One row returned by GET /agents/:id/runs (paginated run history table). */
+export const RunHistoryRow = z.object({
+  run_id: z.string(),
+  ran_at: z.string(),
+  pr_number: z.number().int().nullable(),
+  pr_title: z.string().nullable(),
+  pr_repo_id: z.string().nullable(),
+  tokens_in: z.number().int().nullable(),
+  tokens_out: z.number().int().nullable(),
+  cost_usd: z.number().nullable(),
+  findings_count: z.number().int().nullable(),
+  source: z.enum(['local', 'ci']),
+  status: z.string().nullable(),
+  has_trace: z.boolean(),
+});
+export type RunHistoryRow = z.infer<typeof RunHistoryRow>;
+
+/** Paginated response of GET /agents/:id/runs. */
+export const AgentRunHistory = z.object({
+  rows: z.array(RunHistoryRow),
+  page: z.number().int(),
+  limit: z.number().int(),
+  total: z.number().int(),
+});
+export type AgentRunHistory = z.infer<typeof AgentRunHistory>;
 
 // ---------------------------------------------------------------------------
 // Multi-Agent Run Request / Pre-run Estimates (T1 additions)
