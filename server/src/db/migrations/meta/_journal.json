@@ -197,6 +197,13 @@
       "when": 1784273790300,
       "tag": "0027_jittery_prism",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1784280831570,
+      "tag": "0028_brainy_tattoo",
+      "breakpoints": true
     }
   ]
 }

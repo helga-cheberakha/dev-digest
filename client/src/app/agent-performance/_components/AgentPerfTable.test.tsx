@@ -17,7 +17,7 @@
 
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, within } from "@testing-library/react";
 import type { AgentPerfRow } from "@devdigest/shared";
 import { AgentPerfTable } from "./AgentPerfTable";
 
@@ -294,6 +294,252 @@ describe("AgentPerfTable", () => {
       expect(collapseBtn).toHaveAttribute("aria-expanded", "true");
       // … but onView must never have fired.
       expect(onView).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Additional coverage added in code-review pass
+  // -------------------------------------------------------------------------
+
+  describe("empty state", () => {
+    it("renders 'No agent runs yet.' when rows array is empty", () => {
+      renderTable([]);
+      expect(screen.getByText("No agent runs yet.")).toBeInTheDocument();
+    });
+
+    it("does not render any row content when rows is empty", () => {
+      renderTable([]);
+      // No expand buttons — no rows
+      expect(screen.queryByRole("button", { name: /expand row/i })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("sort by Avg cost column", () => {
+    // Rows deliberately ordered so initial sort (accept_rate DESC) gives the
+    // opposite order to avg_cost_usd DESC — proves the sort actually changed.
+    const ROW_COST_HIGH = makeRow({
+      agent_id: "cost-high",
+      agent_name: "High Cost",
+      avg_cost_usd: 0.9,
+      accept_rate: 0.3, // low accept → comes second in default accept-rate sort
+    });
+    const ROW_COST_LOW = makeRow({
+      agent_id: "cost-low",
+      agent_name: "Low Cost",
+      avg_cost_usd: 0.1,
+      accept_rate: 0.8, // high accept → comes first in default accept-rate sort
+    });
+
+    it("clicking 'Avg cost' header shows the descending direction indicator", () => {
+      renderTable([ROW_COST_HIGH, ROW_COST_LOW]);
+
+      const header = screen.getByRole("button", { name: /sort by avg cost/i });
+      fireEvent.click(header);
+
+      // Active desc sort indicator should appear in the button text
+      expect(header).toHaveTextContent("↓");
+    });
+
+    it("clicking 'Avg cost' header reorders rows by avg_cost_usd DESC", () => {
+      renderTable([ROW_COST_HIGH, ROW_COST_LOW]);
+
+      // Default (accept_rate DESC): Low Cost (0.8) before High Cost (0.3)
+      const lowBeforeSort = screen.getByText("Low Cost");
+      const highBeforeSort = screen.getByText("High Cost");
+      expect(
+        lowBeforeSort.compareDocumentPosition(highBeforeSort) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+
+      // Click the Avg cost header
+      const header = screen.getByRole("button", { name: /sort by avg cost/i });
+      fireEvent.click(header);
+
+      // After sort (avg_cost_usd DESC): High Cost (0.9) before Low Cost (0.1)
+      const highAfterSort = screen.getByText("High Cost");
+      const lowAfterSort = screen.getByText("Low Cost");
+      expect(
+        highAfterSort.compareDocumentPosition(lowAfterSort) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it("clicking 'Avg cost' header a second time reverses to ascending order", () => {
+      renderTable([ROW_COST_HIGH, ROW_COST_LOW]);
+
+      const header = screen.getByRole("button", { name: /sort by avg cost/i });
+      fireEvent.click(header); // desc
+      fireEvent.click(header); // asc
+
+      // Ascending indicator
+      expect(header).toHaveTextContent("↑");
+
+      // Low Cost (0.1) before High Cost (0.9) in ascending order
+      const lowEl = screen.getByText("Low Cost");
+      const highEl = screen.getByText("High Cost");
+      expect(
+        lowEl.compareDocumentPosition(highEl) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+  });
+
+  describe("sort by Avg dur. column", () => {
+    const ROW_DUR_LONG = makeRow({
+      agent_id: "dur-long",
+      agent_name: "Long Dur",
+      avg_latency_ms: 8000,
+      accept_rate: 0.2, // low accept → comes second by default
+    });
+    const ROW_DUR_SHORT = makeRow({
+      agent_id: "dur-short",
+      agent_name: "Short Dur",
+      avg_latency_ms: 1000,
+      accept_rate: 0.9, // high accept → comes first by default
+    });
+
+    it("clicking 'Avg dur.' header shows the descending direction indicator", () => {
+      renderTable([ROW_DUR_LONG, ROW_DUR_SHORT]);
+
+      const header = screen.getByRole("button", { name: /sort by avg dur/i });
+      fireEvent.click(header);
+
+      expect(header).toHaveTextContent("↓");
+    });
+
+    it("clicking 'Avg dur.' header reorders rows by avg_latency_ms DESC", () => {
+      renderTable([ROW_DUR_LONG, ROW_DUR_SHORT]);
+
+      // Default: Short Dur (0.9 accept) before Long Dur (0.2 accept)
+      const shortBefore = screen.getByText("Short Dur");
+      const longBefore = screen.getByText("Long Dur");
+      expect(
+        shortBefore.compareDocumentPosition(longBefore) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+
+      const header = screen.getByRole("button", { name: /sort by avg dur/i });
+      fireEvent.click(header);
+
+      // After sort (avg_latency_ms DESC): Long Dur (8000ms) before Short Dur (1000ms)
+      const longAfter = screen.getByText("Long Dur");
+      const shortAfter = screen.getByText("Short Dur");
+      expect(
+        longAfter.compareDocumentPosition(shortAfter) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+  });
+
+  describe("sort by Last run column", () => {
+    const ROW_RECENT = makeRow({
+      agent_id: "run-recent",
+      agent_name: "Recent Run",
+      last_run_at: "2026-07-20T10:00:00Z",
+      accept_rate: 0.2, // low accept → comes second by default
+    });
+    const ROW_OLD = makeRow({
+      agent_id: "run-old",
+      agent_name: "Old Run",
+      last_run_at: "2026-07-01T10:00:00Z",
+      accept_rate: 0.9, // high accept → comes first by default
+    });
+
+    it("clicking 'Last run' header shows the descending direction indicator", () => {
+      renderTable([ROW_RECENT, ROW_OLD]);
+
+      const header = screen.getByRole("button", { name: /sort by last run/i });
+      fireEvent.click(header);
+
+      expect(header).toHaveTextContent("↓");
+    });
+
+    it("clicking 'Last run' header reorders rows by last_run_at DESC (most recent first)", () => {
+      renderTable([ROW_RECENT, ROW_OLD]);
+
+      // Default: Old Run (0.9 accept) before Recent Run (0.2 accept)
+      const oldBefore = screen.getByText("Old Run");
+      const recentBefore = screen.getByText("Recent Run");
+      expect(
+        oldBefore.compareDocumentPosition(recentBefore) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+
+      const header = screen.getByRole("button", { name: /sort by last run/i });
+      fireEvent.click(header);
+
+      // After sort (last_run_at DESC): Recent Run (2026-07-20) before Old Run (2026-07-01)
+      const recentAfter = screen.getByText("Recent Run");
+      const oldAfter = screen.getByText("Old Run");
+      expect(
+        recentAfter.compareDocumentPosition(oldAfter) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+  });
+
+  describe("model subtext", () => {
+    it("renders the model name below the agent name when row.model is set", () => {
+      renderTable([makeRow({ agent_id: "m", agent_name: "Model Agent", model: "gpt-4-turbo" })]);
+      expect(screen.getByText("gpt-4-turbo")).toBeInTheDocument();
+    });
+
+    it("does not render model subtext when row.model is null", () => {
+      renderTable([makeRow({ agent_id: "nm", agent_name: "No Model Agent", model: null })]);
+      // Agent name is visible…
+      expect(screen.getByText("No Model Agent")).toBeInTheDocument();
+      // …but no model-name element below it
+      // (getByText throws if multiple — queryByText returns null when absent)
+      expect(screen.queryByText("null")).not.toBeInTheDocument();
+    });
+
+    it("default model (claude-3-5-sonnet) is visible when model is set", () => {
+      // The existing makeRow default is "claude-3-5-sonnet"; verify the subtext renders.
+      renderTable([makeRow({ agent_id: "d", agent_name: "Default Model" })]);
+      expect(screen.getByText("claude-3-5-sonnet")).toBeInTheDocument();
+    });
+  });
+
+  describe("TrendBars — empty trend array", () => {
+    const ROW_NO_TREND = makeRow({
+      agent_id: "no-trend",
+      agent_name: "No Trend Agent",
+      trend: [],
+      // Keep other fields non-null so the "—" glyph in the trend panel
+      // is not ambiguous with other no-data cells.
+      avg_cost_usd: 0.1,
+      avg_latency_ms: 1000,
+      accept_rate: 0.8,
+      last_run_at: "2026-07-15T10:00:00Z",
+    });
+
+    it("renders the NO_DATA_GLYPH ('—') in the trend panel when trend is empty", () => {
+      renderTable([ROW_NO_TREND]);
+
+      // Expand the row to reveal the trend panel
+      const expandBtn = screen.getByRole("button", { name: /expand row/i });
+      fireEvent.click(expandBtn);
+
+      const trendPanel = screen.getByTestId("trend-no-trend");
+      // The TrendBars guard renders "—" (NO_DATA_GLYPH) when trend.length === 0
+      expect(within(trendPanel).getByText("—")).toBeInTheDocument();
+    });
+
+    it("does NOT render the sparkline div when trend is empty", () => {
+      renderTable([ROW_NO_TREND]);
+
+      const expandBtn = screen.getByRole("button", { name: /expand row/i });
+      fireEvent.click(expandBtn);
+
+      // No sparkline — no crash either
+      expect(screen.queryByLabelText("trend sparkline")).not.toBeInTheDocument();
+    });
+
+    it("does not crash when a row with trend:[] is expanded", () => {
+      // Guard regression: the vendor Sparkline has a ÷0 bug at length 1;
+      // TrendBars guards length===0 with a glyph fallback — verify no throw.
+      renderTable([ROW_NO_TREND]);
+
+      expect(() => {
+        const expandBtn = screen.getByRole("button", { name: /expand row/i });
+        fireEvent.click(expandBtn);
+      }).not.toThrow();
+
+      // Component is still mounted
+      expect(screen.getByTestId("trend-no-trend")).toBeInTheDocument();
     });
   });
 });

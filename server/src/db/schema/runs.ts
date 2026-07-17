@@ -53,6 +53,13 @@ export const agentRuns = pgTable(
      *  sort when status is unconstrained. This (agent_id, ran_at) index directly matches
      *  the actual filter+sort columns of the Run History paginated table. */
     agentRunsAgentIdRanAtIdx: index('agent_runs_agent_id_ran_at_idx').on(t.agentId, t.ranAt),
+    /** Serves agent-performance's allTimeLastRunAt: WHERE workspace_id = ? AND status = 'done'
+     *  GROUP BY agent_id, MAX(ran_at) — avoids a workspace-wide sequential scan. */
+    workspaceStatusRanAtIdx: index('agent_runs_workspace_id_status_ran_at_idx').on(
+      t.workspaceId,
+      t.status,
+      t.ranAt,
+    ),
   }),
 );
 

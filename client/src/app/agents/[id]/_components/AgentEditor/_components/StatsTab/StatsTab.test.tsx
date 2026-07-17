@@ -264,9 +264,10 @@ describe("StatsTab — seeded data renders correctly", () => {
   it("renders findings_by_severity counts via SeverityStackedBars hidden table", () => {
     renderStatsTab();
     // Values appear in the visually-hidden data table inside SeverityStackedBars.
-    // "12" also appears as the last trend-bar value, so use getAllByText.
-    const twelves = screen.getAllByText("12");
-    expect(twelves.length).toBeGreaterThanOrEqual(1);
+    // Scope "12" to the CRITICAL <td> cell specifically — getByRole('cell') targets
+    // only <td> elements, preventing a false pass from the last trend-bar value
+    // which also renders "12" as a <span> (not a table cell).
+    expect(screen.getByRole("cell", { name: "12" })).toBeInTheDocument();
     expect(screen.getByText("54")).toBeInTheDocument(); // WARNING
     expect(screen.getByText("61")).toBeInTheDocument(); // SUGGESTION
   });
@@ -693,5 +694,92 @@ describe("StatsTab — PeriodSelector custom range", () => {
       from: "2026-06-01",
       to: "2026-06-30",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PeriodSelector keyboard accessibility
+// PeriodSelector uses plain native <button> elements with no custom keyboard
+// handlers (confirmed by reading StatsTab.tsx — no onKeyDown listeners exist).
+// Native buttons are keyboard-accessible via Tab (to focus) and Enter/Space
+// (to activate). Tests below verify the controls are focusable and that their
+// click handlers fire correctly after focus, closing the real coverage gap.
+// ---------------------------------------------------------------------------
+
+describe("StatsTab — PeriodSelector keyboard accessibility (native button semantics)", () => {
+  beforeEach(() => {
+    vi.mocked(useAgentStats).mockReturnValue({
+      data: STATS_WITH_DATA,
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useAgentStats>);
+  });
+
+  it("'Last 24 h' preset button is focusable and activatable via keyboard", () => {
+    renderStatsTab();
+
+    const btn1d = screen.getByRole("button", { name: "Last 24 h" });
+
+    // Tab navigation lands focus on the button — verify it accepts focus
+    btn1d.focus();
+    expect(btn1d).toHaveFocus();
+
+    // Enter/Space on a focused native <button> triggers a click event in browsers.
+    // Replicate that synthetic click via fireEvent (userEvent not installed —
+    // client/INSIGHTS.md 2026-07-06).
+    fireEvent.click(btn1d);
+
+    // The click must update the window from the default "30d" to "1d"
+    expect(vi.mocked(useAgentStats)).toHaveBeenLastCalledWith(
+      "ag1",
+      expect.objectContaining({ period: "1d" }),
+    );
+  });
+
+  it("'Custom' button is focusable and opens date inputs when activated", () => {
+    const { container } = renderStatsTab();
+
+    const customBtn = screen.getByRole("button", { name: "Custom" });
+
+    customBtn.focus();
+    expect(customBtn).toHaveFocus();
+
+    fireEvent.click(customBtn);
+
+    // Activating Custom reveals two date inputs — verifies the button's handler
+    // runs correctly when triggered from a keyboard-focused state
+    expect(container.querySelectorAll('input[type="date"]')).toHaveLength(2);
+  });
+
+  it("Apply button is focusable and triggers onChange when both dates are filled", () => {
+    const { container } = renderStatsTab();
+
+    // Open custom panel
+    fireEvent.click(screen.getByRole("button", { name: "Custom" }));
+
+    const [fromInput, toInput] = Array.from(
+      container.querySelectorAll('input[type="date"]'),
+    );
+    fireEvent.change(fromInput!, { target: { value: "2026-07-01" } });
+    fireEvent.change(toInput!, { target: { value: "2026-07-15" } });
+
+    const applyBtn = screen.getByRole("button", { name: "Apply" });
+
+    // Apply button must be enabled and accept focus once both dates are filled
+    expect(applyBtn).not.toBeDisabled();
+    applyBtn.focus();
+    expect(applyBtn).toHaveFocus();
+
+    fireEvent.click(applyBtn);
+
+    // Activating Apply fires onChange with the custom window
+    expect(vi.mocked(useAgentStats)).toHaveBeenLastCalledWith(
+      "ag1",
+      expect.objectContaining({
+        period: "custom",
+        from: "2026-07-01",
+        to: "2026-07-15",
+      }),
+    );
   });
 });

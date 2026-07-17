@@ -180,6 +180,33 @@ describe('GET /agents/performance', () => {
     }
   });
 
+  it('returns 200 with period=1d (zero-run workspace produces all-null summary)', async () => {
+    const app = await makeTestApp();
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/agents/performance?period=1d',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json<{
+        summary: { runs: number; total_cost_usd: null; avg_accept_rate: null; most_active_agent: null };
+        agents: unknown[];
+        cost_by_agent: unknown[];
+        cost_by_model: unknown[];
+      }>();
+      expect(body.summary).toBeDefined();
+      expect(body.summary.runs).toBe(0);
+      expect(body.summary.total_cost_usd).toBeNull();
+      expect(body.summary.avg_accept_rate).toBeNull();
+      expect(body.summary.most_active_agent).toBeNull();
+      expect(body.agents).toEqual([]);
+      expect(body.cost_by_agent).toEqual([]);
+      expect(body.cost_by_model).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('returns 400 when period=custom and from/to are missing', async () => {
     const app = await makeTestApp();
     try {
@@ -280,6 +307,34 @@ describe('GET /agents/:id/stats', () => {
       await app.close();
     }
   });
+
+  it('returns 200 with 3 new enrichment fields for a known agent with period=1d', async () => {
+    const app = await makeTestAppWithAgent();
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/agents/${AGENT_ID}/stats?period=1d`,
+      });
+      expect(res.statusCode).toBe(200);
+
+      const body = res.json<{
+        agent_id: string;
+        avg_cost_usd_prev: unknown;
+        severity_by_bucket: unknown[];
+        cost_by_category: unknown[];
+      }>();
+
+      expect(body.agent_id).toBe(AGENT_ID);
+      expect('avg_cost_usd_prev' in body).toBe(true);
+      expect('severity_by_bucket' in body).toBe(true);
+      expect('cost_by_category' in body).toBe(true);
+      expect(body.avg_cost_usd_prev).toBeNull();
+      expect(Array.isArray(body.severity_by_bucket)).toBe(true);
+      expect(body.cost_by_category).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  });
 });
 
 // ─── GET /agents/:id/runs ─────────────────────────────────────────────────────
@@ -360,6 +415,26 @@ describe('GET /agents/:id/runs', () => {
         url: `/agents/${AGENT_ID}/runs?period=custom`,
       });
       expect(res.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('returns 200 with AgentRunHistory shape for period=1d', async () => {
+    const app = await makeTestAppWithAgent();
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/agents/${AGENT_ID}/runs?period=1d`,
+      });
+      expect(res.statusCode).toBe(200);
+
+      const body = res.json<{ rows: unknown[]; page: number; limit: number; total: number }>();
+      expect(Array.isArray(body.rows)).toBe(true);
+      expect(body.rows).toEqual([]);
+      expect(body.page).toBe(1);
+      expect(body.limit).toBe(25); // RUN_HISTORY_DEFAULT_LIMIT default
+      expect(body.total).toBe(0);
     } finally {
       await app.close();
     }

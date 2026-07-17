@@ -59,6 +59,7 @@ export function PeriodPicker({ value, onChange }: PeriodPickerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const focusFirstOptionRef = useRef(false);
 
   // ---------------------------------------------------------------------------
   // Close on outside mousedown
@@ -72,6 +73,17 @@ export function PeriodPicker({ value, onChange }: PeriodPickerProps) {
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, []);
+
+  // ---------------------------------------------------------------------------
+  // Focus the first option once the dropdown has actually committed to the DOM
+  // (a keyboard open sets focusFirstOptionRef before calling openDropdown()).
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (open && focusFirstOptionRef.current) {
+      focusFirstOptionRef.current = false;
+      optionRefs.current[0]?.focus();
+    }
+  }, [open]);
 
   // ---------------------------------------------------------------------------
   // Labels
@@ -115,11 +127,8 @@ export function PeriodPicker({ value, onChange }: PeriodPickerProps) {
   function handleTriggerKeyDown(e: React.KeyboardEvent<HTMLButtonElement>) {
     if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
       e.preventDefault();
+      focusFirstOptionRef.current = true;
       openDropdown();
-      // Focus the first option on next frame (after the dropdown renders)
-      requestAnimationFrame(() => {
-        optionRefs.current[0]?.focus();
-      });
     }
   }
 

@@ -27,6 +27,7 @@ import type { StatPoint } from '@devdigest/shared';
 import { AgentPerformanceService } from './service.js';
 import type { Container } from '../../platform/container.js';
 import type { AgentRow } from '../../db/rows.js';
+import { RUN_HISTORY_MAX_LIMIT } from './constants.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -76,6 +77,23 @@ function makeService(
     costByModel?: { model: string; value: number }[];
     /** Map of agentId → all-time last run Date (unwindowed). Default: empty map. */
     allTimeLastRunAt?: Map<string, Date>;
+    // --- new fields for getAgentStats ---
+    /** Return value for repo.avgCostPrevWindow(). Default: null (no priced prev-window runs). */
+    avgCostPrevWindow?: number | null;
+    /** Raw finding rows for repo.severityBucketRows(). Default: []. */
+    severityBucketRows?: { ran_at: string; severity: string }[];
+    /** Raw cost-by-category rows for repo.costByCategoryRows(). Default: []. */
+    costByCategoryRows?: {
+      category: string;
+      cost_usd: number;
+      category_finding_count: number;
+      run_finding_count: number;
+    }[];
+    // --- new fields for getAgentRuns ---
+    /** Raw run-history rows for repo.runHistory(). Default: []. */
+    runHistory?: unknown[];
+    /** Count result for repo.runHistoryCount(). Default: 0. */
+    runHistoryCount?: number;
   } = {},
 ): AgentPerformanceService {
   const mockContainer = {
@@ -102,6 +120,19 @@ function makeService(
     allTimeLastRunAt: vi
       .fn()
       .mockResolvedValue(repoOverrides.allTimeLastRunAt ?? new Map()),
+    // New methods for getAgentStats:
+    avgCostPrevWindow: vi
+      .fn()
+      .mockResolvedValue(repoOverrides.avgCostPrevWindow ?? null),
+    severityBucketRows: vi
+      .fn()
+      .mockResolvedValue(repoOverrides.severityBucketRows ?? []),
+    costByCategoryRows: vi
+      .fn()
+      .mockResolvedValue(repoOverrides.costByCategoryRows ?? []),
+    // New methods for getAgentRuns:
+    runHistory: vi.fn().mockResolvedValue(repoOverrides.runHistory ?? []),
+    runHistoryCount: vi.fn().mockResolvedValue(repoOverrides.runHistoryCount ?? 0),
   };
 
   return service;
@@ -818,5 +849,120 @@ describe('AgentPerformanceService.getPerformance', () => {
     // last_run_at must come from allTimeLastRunAt (the pre-window run), NOT null
     expect(historicalRow!.last_run_at).not.toBeNull();
     expect(historicalRow!.last_run_at).toBe('2024-03-15T09:00:00.000Z');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AgentPerformanceService.getAgentStats (mocked repository)
+// ---------------------------------------------------------------------------
+
+describe('AgentPerformanceService.getAgentStats', () => {
+  const agent = makeAgent('a1', 'Agent 1');
+
+  /**
+   * A timestamp safely inside WINDOW (12 hours after window start).
+   * WINDOW.toTs ≈ module-load time; using fromTs + offset avoids the
+   * tiny race where new Date() during the test falls after toTs.
+   */
+  const MID_WINDOW_ISO = new Date(WINDOW.fromTs.getTime() + 12 * 60 * 60 * 1000).toISOString();
+
+  it('avgCostUsdPrev from repo.avgCostPrevWindow is threaded to avg_cost_usd_prev', async () => {
+    const service = makeService([agent], { avgCostPrevWindow: 7.5 });
+    const result = await service.getAgentStats('ws1', 'a1', WINDOW);
+
+    expect(result.avg_cost_usd_prev).toBeCloseTo(7.5);
+  });
+
+  it('avg_cost_usd_prev is null when repo.avgCostPrevWindow returns null (no priced prev-window runs)', async () => {
+    const service = makeService([agent], { avgCostPrevWindow: null });
+    const result = await service.getAgentStats('ws1', 'a1', WINDOW);
+
+    expect(result.avg_cost_usd_prev).toBeNull();
+  });
+
+  it('severityBucketRows from repo are bucketed and appear in severity_by_bucket', async () => {
+    // Three findings at the midpoint of the 30-day window — one per severity.
+    // bucketSeverity() with a 30-day window and target=7 produces ~5 weekly
+    // buckets; all three rows land in bucket 0 (within the first 7-day slice).
+    const severityRows = [
+      { ran_at: MID_WINDOW_ISO, severity: 'CRITICAL' },
+      { ran_at: MID_WINDOW_ISO, severity: 'WARNING' },
+      { ran_at: MID_WINDOW_ISO, severity: 'SUGGESTION' },
+    ];
+    const service = makeService([agent], { severityBucketRows: severityRows });
+    const result = await service.getAgentStats('ws1', 'a1', WINDOW);
+
+    // severity_by_bucket must be a non-empty array (bucketer always produces ≥ 1 bucket)
+    expect(Array.isArray(result.severity_by_bucket)).toBe(true);
+    expect(result.severity_by_bucket.length).toBeGreaterThanOrEqual(1);
+
+    // Totals across all buckets must match the three input rows exactly.
+    const totalCritical = result.severity_by_bucket.reduce((s, b) => s + b.CRITICAL, 0);
+    const totalWarning = result.severity_by_bucket.reduce((s, b) => s + b.WARNING, 0);
+    const totalSuggestion = result.severity_by_bucket.reduce((s, b) => s + b.SUGGESTION, 0);
+    expect(totalCritical).toBe(1);
+    expect(totalWarning).toBe(1);
+    expect(totalSuggestion).toBe(1);
+  });
+
+  it('costByCategoryRows from repo are proportionally attributed and appear in cost_by_category', async () => {
+    // $12 run, 3 findings: 2 security + 1 bug.
+    // security: 2 × (12/3) = 8; bug: 1 × (12/3) = 4.
+    const categoryRows = [
+      { category: 'security', cost_usd: 12, category_finding_count: 2, run_finding_count: 3 },
+      { category: 'bug',      cost_usd: 12, category_finding_count: 1, run_finding_count: 3 },
+    ];
+    const service = makeService([agent], { costByCategoryRows: categoryRows });
+    const result = await service.getAgentStats('ws1', 'a1', WINDOW);
+
+    expect(result.cost_by_category).toHaveLength(2);
+    const security = result.cost_by_category.find((c) => c.category === 'security');
+    const bug = result.cost_by_category.find((c) => c.category === 'bug');
+    expect(security).toBeDefined();
+    expect(bug).toBeDefined();
+    expect(security!.cost_usd).toBeCloseTo(8, 5);
+    expect(bug!.cost_usd).toBeCloseTo(4, 5);
+    // Total attribution must equal the full run cost
+    expect(security!.cost_usd + bug!.cost_usd).toBeCloseTo(12, 5);
+  });
+
+  it('throws NotFoundError when the agent id is not found in the workspace', async () => {
+    // Empty agentsList → agentsRepo.getById() resolves to undefined → NotFoundError thrown.
+    const service = makeService([]);
+    await expect(service.getAgentStats('ws1', 'no-such-id', WINDOW)).rejects.toThrow(
+      'Agent not found',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AgentPerformanceService.getAgentRuns (mocked repository)
+// ---------------------------------------------------------------------------
+
+describe('AgentPerformanceService.getAgentRuns', () => {
+  const agent = makeAgent('a1', 'Agent 1');
+
+  it('limit above RUN_HISTORY_MAX_LIMIT is clamped to RUN_HISTORY_MAX_LIMIT (100)', async () => {
+    const service = makeService([agent]);
+    // Pass limit=999 — service must clamp it to RUN_HISTORY_MAX_LIMIT.
+    const result = await service.getAgentRuns('ws1', 'a1', WINDOW, 1, 999);
+
+    expect(result.limit).toBe(RUN_HISTORY_MAX_LIMIT);
+  });
+
+  it('limit below 1 is clamped to 1 (lower bound guard)', async () => {
+    const service = makeService([agent]);
+    const result = await service.getAgentRuns('ws1', 'a1', WINDOW, 1, 0);
+
+    expect(result.limit).toBe(1);
+  });
+
+  it('throws NotFoundError when the agent does not belong to the workspace', async () => {
+    // Empty agentsList → agentsRepo.getById() resolves to undefined → NotFoundError.
+    // Mirrors the same ownership-check contract as getAgentStats.
+    const service = makeService([]);
+    await expect(service.getAgentRuns('ws1', 'no-such-id', WINDOW, 1, 25)).rejects.toThrow(
+      'Agent not found',
+    );
   });
 });

@@ -32,3 +32,79 @@ describe("Sparkline", () => {
     expect(svg.querySelector("path")).not.toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// 2+ data points — path rendering and aria-label direction variants
+// ---------------------------------------------------------------------------
+
+describe("Sparkline — 2+ data points", () => {
+  it("renders a <path> (not a <line>) for an upward trend", () => {
+    render(
+      <Sparkline
+        points={[
+          { label: "2026-07-01", value: 3 },
+          { label: "2026-07-08", value: 7 },
+          { label: "2026-07-15", value: 12 },
+        ]}
+      />,
+    );
+
+    const svg = screen.getByRole("img", { name: /upward/i });
+    expect(svg).toBeInTheDocument();
+    // 2+ points must render a path, not the fallback dashed line
+    expect(svg.querySelector("path")).toBeInTheDocument();
+    expect(svg.querySelector("line")).not.toBeInTheDocument();
+  });
+
+  it("aria-label contains 'upward' when the last value exceeds the first", () => {
+    render(
+      <Sparkline
+        points={[
+          { label: "2026-07-01", value: 2 },
+          { label: "2026-07-08", value: 9 },
+        ]}
+      />,
+    );
+
+    const svg = screen.getByRole("img");
+    expect(svg).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("upward"),
+    );
+  });
+
+  it("aria-label contains 'downward' when the last value is less than the first", () => {
+    render(
+      <Sparkline
+        points={[
+          { label: "2026-07-01", value: 10 },
+          { label: "2026-07-08", value: 4 },
+        ]}
+      />,
+    );
+
+    const svg = screen.getByRole("img");
+    expect(svg).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("downward"),
+    );
+  });
+
+  it("aria-label contains 'flat' when all values are equal", () => {
+    render(
+      <Sparkline
+        points={[
+          { label: "2026-07-01", value: 5 },
+          { label: "2026-07-08", value: 5 },
+          { label: "2026-07-15", value: 5 },
+        ]}
+      />,
+    );
+
+    const svg = screen.getByRole("img");
+    expect(svg).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("flat"),
+    );
+  });
+});

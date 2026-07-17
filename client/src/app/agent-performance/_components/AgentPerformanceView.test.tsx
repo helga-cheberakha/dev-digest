@@ -385,4 +385,155 @@ describe("AgentPerformanceView", () => {
       fetchSpy.mockRestore();
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Additional coverage added in code-review pass
+  // -------------------------------------------------------------------------
+
+  describe("PeriodPicker — Apply button disabled state", () => {
+    it("Apply button is disabled when only the From date is filled", () => {
+      mockHook({ data: makePerf(), isLoading: false, isError: false });
+      renderView();
+
+      // Open dropdown and select Custom range
+      fireEvent.click(screen.getByRole("button", { name: /30 days/i }));
+      fireEvent.click(screen.getByRole("option", { name: /custom range/i }));
+
+      // Fill only the From date
+      const fromEl = screen.getByLabelText(/from/i);
+      fireEvent.change(fromEl, { target: { value: "2026-07-01" } });
+
+      // To is still empty — Apply must be disabled
+      const applyBtn = screen.getByRole("button", { name: /apply/i });
+      expect(applyBtn).toBeDisabled();
+    });
+
+    it("Apply button is disabled when only the To date is filled", () => {
+      mockHook({ data: makePerf(), isLoading: false, isError: false });
+      renderView();
+
+      fireEvent.click(screen.getByRole("button", { name: /30 days/i }));
+      fireEvent.click(screen.getByRole("option", { name: /custom range/i }));
+
+      // Fill only the To date
+      const toEl = screen.getByLabelText(/to/i);
+      fireEvent.change(toEl, { target: { value: "2026-07-17" } });
+
+      // From is still empty — Apply must be disabled
+      const applyBtn = screen.getByRole("button", { name: /apply/i });
+      expect(applyBtn).toBeDisabled();
+    });
+
+    it("Apply button is enabled only when BOTH From and To are filled", () => {
+      mockHook({ data: makePerf(), isLoading: false, isError: false });
+      renderView();
+
+      fireEvent.click(screen.getByRole("button", { name: /30 days/i }));
+      fireEvent.click(screen.getByRole("option", { name: /custom range/i }));
+
+      const fromEl = screen.getByLabelText(/from/i);
+      const toEl = screen.getByLabelText(/to/i);
+
+      // Disabled with only From filled
+      fireEvent.change(fromEl, { target: { value: "2026-07-01" } });
+      expect(screen.getByRole("button", { name: /apply/i })).toBeDisabled();
+
+      // Enabled once both are filled
+      fireEvent.change(toEl, { target: { value: "2026-07-17" } });
+      expect(screen.getByRole("button", { name: /apply/i })).not.toBeDisabled();
+    });
+  });
+
+  describe("PeriodPicker — discarding unsaved custom dates by selecting a preset", () => {
+    it("selecting a preset after filling custom dates (without Apply) fires onChange with the preset", () => {
+      mockHook({ data: makePerf(), isLoading: false, isError: false });
+      renderView();
+
+      // Open dropdown and select Custom range
+      fireEvent.click(screen.getByRole("button", { name: /30 days/i }));
+      fireEvent.click(screen.getByRole("option", { name: /custom range/i }));
+
+      // Fill both dates but do NOT click Apply
+      fireEvent.change(screen.getByLabelText(/from/i), { target: { value: "2026-07-01" } });
+      fireEvent.change(screen.getByLabelText(/to/i), { target: { value: "2026-07-17" } });
+
+      // Select a preset instead — discards the unsaved custom values
+      fireEvent.click(screen.getByRole("option", { name: /1 day/i }));
+
+      // useAgentPerformance is called with the preset, not the custom range
+      expect(mockUseAgentPerformance).toHaveBeenLastCalledWith({ period: "1d" });
+    });
+
+    it("dropdown closes after selecting the preset (no custom window applied)", () => {
+      mockHook({ data: makePerf(), isLoading: false, isError: false });
+      renderView();
+
+      fireEvent.click(screen.getByRole("button", { name: /30 days/i }));
+      fireEvent.click(screen.getByRole("option", { name: /custom range/i }));
+
+      fireEvent.change(screen.getByLabelText(/from/i), { target: { value: "2026-07-01" } });
+      fireEvent.change(screen.getByLabelText(/to/i), { target: { value: "2026-07-17" } });
+
+      // Click a preset — dropdown should close
+      fireEvent.click(screen.getByRole("option", { name: /1 day/i }));
+
+      // Listbox is gone
+      expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+      // Date inputs are gone (only visible when Custom is the pendingMode)
+      expect(screen.queryByLabelText(/from/i)).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/to/i)).not.toBeInTheDocument();
+    });
+  });
+
+  describe("PeriodPicker — resilience to invalid date input", () => {
+    it("typing invalid/non-date text into the From input does not crash the component", () => {
+      mockHook({ data: makePerf(), isLoading: false, isError: false });
+      renderView();
+
+      fireEvent.click(screen.getByRole("button", { name: /30 days/i }));
+      fireEvent.click(screen.getByRole("option", { name: /custom range/i }));
+
+      const fromEl = screen.getByLabelText(/from/i);
+
+      // Should not throw
+      expect(() => {
+        fireEvent.change(fromEl, { target: { value: "not-a-date!!!" } });
+      }).not.toThrow();
+
+      // Component is still rendering — listbox and inputs are intact
+      expect(screen.getByRole("listbox")).toBeInTheDocument();
+      expect(screen.getByLabelText(/to/i)).toBeInTheDocument();
+    });
+
+    it("typing invalid text into the To input does not crash the component", () => {
+      mockHook({ data: makePerf(), isLoading: false, isError: false });
+      renderView();
+
+      fireEvent.click(screen.getByRole("button", { name: /30 days/i }));
+      fireEvent.click(screen.getByRole("option", { name: /custom range/i }));
+
+      const toEl = screen.getByLabelText(/to/i);
+
+      expect(() => {
+        fireEvent.change(toEl, { target: { value: "INVALID DATE <script>" } });
+      }).not.toThrow();
+
+      expect(screen.getByRole("listbox")).toBeInTheDocument();
+      expect(screen.getByLabelText(/from/i)).toBeInTheDocument();
+    });
+
+    it("Apply stays disabled when only the From input has invalid (truthy) text and To is empty", () => {
+      mockHook({ data: makePerf(), isLoading: false, isError: false });
+      renderView();
+
+      fireEvent.click(screen.getByRole("button", { name: /30 days/i }));
+      fireEvent.click(screen.getByRole("option", { name: /custom range/i }));
+
+      // Typing any non-empty string makes customFrom truthy, but To is still empty
+      fireEvent.change(screen.getByLabelText(/from/i), { target: { value: "not-a-date" } });
+
+      // Apply is still disabled because customTo is empty
+      expect(screen.getByRole("button", { name: /apply/i })).toBeDisabled();
+    });
+  });
 });
