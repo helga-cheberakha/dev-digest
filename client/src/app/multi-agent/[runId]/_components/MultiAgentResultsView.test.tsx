@@ -270,6 +270,7 @@ const RUN: MultiAgentRun = {
           title: "Hardcoded secret",
           file: "src/config.ts",
           start_line: 10,
+          end_line: 12,
           kind: null,
         },
       ],

@@ -3,7 +3,7 @@ import type { AgentColumn, AgentEstimate, MultiAgentRun } from '@devdigest/share
 import { NotFoundError } from '../../platform/errors.js';
 import { ReviewRunExecutor, type Logger } from '../reviews/run-executor.js';
 import { MultiAgentRepository } from './repository.js';
-import { computeConflicts } from './conflicts.js';
+import { buildConflicts } from './conflicts.js';
 import type { AgentRow } from '../../db/rows.js';
 
 /**
@@ -126,12 +126,13 @@ export class MultiAgentService {
           title: f.title,
           file: f.file,
           start_line: f.startLine,
+          end_line: f.endLine,
           kind: f.kind,
         })),
       };
     });
 
-    const conflicts = computeConflicts(columns);
+    const conflicts = buildConflicts(columns);
 
     // total_cost_usd = SUM of non-null costs; null when ALL columns have null cost.
     const costValues = columns.map((c) => c.cost_usd).filter((v): v is number => v !== null);
