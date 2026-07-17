@@ -127,24 +127,38 @@ function PeriodSelector({
 }: {
   window: PerfWindow;
   onChange: (w: PerfWindow) => void;
-  labels: { "1d": string; "30d": string; custom: string };
+  labels: { "1d": string; "30d": string; custom: string; apply: string };
 }) {
+  const isCustom = window.period === "custom";
+  // Whether the custom date inputs are revealed — separate from `isCustom` so
+  // clicking "Custom" opens the inputs WITHOUT firing onChange; the query only
+  // fires once the user explicitly clicks Apply with both dates filled in.
+  const [customOpen, setCustomOpen] = useState(isCustom);
   const [customFrom, setCustomFrom] = useState(
-    window.period === "custom" ? window.from : "",
+    isCustom ? window.from : "",
   );
   const [customTo, setCustomTo] = useState(
-    window.period === "custom" ? window.to : "",
+    isCustom ? window.to : "",
   );
 
   const presets: PresetPeriod[] = ["30d", "1d"];
-  const isCustom = window.period === "custom";
+  const showCustomInputs = isCustom || customOpen;
+
+  function handleApply() {
+    if (customFrom && customTo) {
+      onChange({ period: "custom", from: customFrom, to: customTo });
+    }
+  }
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
       {presets.map((p) => (
         <button
           key={p}
-          onClick={() => onChange({ period: p })}
+          onClick={() => {
+            setCustomOpen(false);
+            onChange({ period: p });
+          }}
           style={{
             padding: "4px 10px",
             borderRadius: 5,
@@ -162,17 +176,13 @@ function PeriodSelector({
         </button>
       ))}
       <button
-        onClick={() => {
-          const from = customFrom || new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10);
-          const to = customTo || new Date().toISOString().slice(0, 10);
-          onChange({ period: "custom", from, to });
-        }}
+        onClick={() => setCustomOpen(true)}
         style={{
           padding: "4px 10px",
           borderRadius: 5,
           border: "1px solid var(--border)",
-          background: isCustom ? "var(--accent)" : "var(--bg-elevated)",
-          color: isCustom ? "#fff" : "var(--text-primary)",
+          background: showCustomInputs ? "var(--accent)" : "var(--bg-elevated)",
+          color: showCustomInputs ? "#fff" : "var(--text-primary)",
           fontSize: 12,
           fontWeight: 600,
           cursor: "pointer",
@@ -180,17 +190,12 @@ function PeriodSelector({
       >
         {labels.custom}
       </button>
-      {isCustom && (
+      {showCustomInputs && (
         <>
           <input
             type="date"
             value={customFrom}
-            onChange={(e) => {
-              setCustomFrom(e.target.value);
-              if (e.target.value && customTo) {
-                onChange({ period: "custom", from: e.target.value, to: customTo });
-              }
-            }}
+            onChange={(e) => setCustomFrom(e.target.value)}
             style={{
               fontSize: 12,
               padding: "4px 8px",
@@ -203,12 +208,7 @@ function PeriodSelector({
           <input
             type="date"
             value={customTo}
-            onChange={(e) => {
-              setCustomTo(e.target.value);
-              if (customFrom && e.target.value) {
-                onChange({ period: "custom", from: customFrom, to: e.target.value });
-              }
-            }}
+            onChange={(e) => setCustomTo(e.target.value)}
             style={{
               fontSize: 12,
               padding: "4px 8px",
@@ -218,6 +218,23 @@ function PeriodSelector({
               color: "var(--text-primary)",
             }}
           />
+          <button
+            onClick={handleApply}
+            disabled={!customFrom || !customTo}
+            style={{
+              padding: "4px 10px",
+              borderRadius: 5,
+              border: "1px solid var(--border)",
+              background: customFrom && customTo ? "var(--accent)" : "var(--bg-hover)",
+              color: customFrom && customTo ? "#fff" : "var(--text-muted)",
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: customFrom && customTo ? "pointer" : "not-allowed",
+              opacity: customFrom && customTo ? 1 : 0.5,
+            }}
+          >
+            {labels.apply}
+          </button>
         </>
       )}
     </div>
@@ -346,6 +363,7 @@ export function StatsTab({ agentId }: { agentId: string }) {
     "1d": t("stats.window.1d"),
     "30d": t("stats.window.30d"),
     custom: t("stats.window.custom"),
+    apply: t("stats.window.apply"),
   };
 
   const noDataGlyph = t("stats.noData");

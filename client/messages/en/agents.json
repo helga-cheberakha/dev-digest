@@ -135,7 +135,8 @@
     "window": {
       "1d": "Last 24 h",
       "30d": "Last 30 days",
-      "custom": "Custom"
+      "custom": "Custom",
+      "apply": "Apply"
     },
     "customFrom": "From",
     "customTo": "To",

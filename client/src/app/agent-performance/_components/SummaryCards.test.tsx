@@ -35,7 +35,9 @@ function makeSummary(
 
 describe("SummaryCards", () => {
   it("renders a dash for null avg_accept_rate (not '0%')", () => {
-    render(<SummaryCards summary={makeSummary({ avg_accept_rate: null })} />);
+    const { container } = render(
+      <SummaryCards summary={makeSummary({ avg_accept_rate: null })} />,
+    );
 
     // Must NOT show "0%" — null is not a zero accept rate
     expect(screen.queryByText("0%")).not.toBeInTheDocument();
@@ -43,6 +45,11 @@ describe("SummaryCards", () => {
     // Must show the no-data glyph at least once (for the accept rate card)
     const dashes = screen.getAllByText("—");
     expect(dashes.length).toBeGreaterThanOrEqual(1);
+
+    // The CircularScore badge is conditionally rendered only when
+    // avg_accept_rate !== null — it's the only <svg> in SummaryCards, so its
+    // absence here guards against a future refactor rendering it for null.
+    expect(container.querySelector("svg")).not.toBeInTheDocument();
   });
 
   it("renders a dash for null total_cost_usd (not '$0.00')", () => {

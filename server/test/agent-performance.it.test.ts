@@ -540,8 +540,8 @@ d('AgentPerformance routes — integration (real Postgres)', () => {
     let grepError = false;
     try {
       grepOutput = execSync(
-        String.raw`grep -rn "^\s*import.*\(LLMProvider\|run-executor\|runExecutor\)\|require.*\(LLMProvider\|run-executor\|runExecutor\)" server/src/modules/agent-performance/`,
-        { encoding: 'utf8', cwd: '/Users/helga/Sites/neoversity/dev-digest/dev-digest' },
+        String.raw`grep -rn "^\s*import.*\(LLMProvider\|run-executor\|runExecutor\)\|require.*\(LLMProvider\|run-executor\|runExecutor\)" src/modules/agent-performance/`,
+        { encoding: 'utf8' },
       );
     } catch {
       // grep exits 1 when no matches found — that's the success case for this test

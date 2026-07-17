@@ -71,21 +71,6 @@ function renderTable(
   return render(<AgentPerfTable rows={rows} onView={onView} />);
 }
 
-/** Return the text content of every agent-name cell, in DOM order. */
-function agentNamesInOrder(): string[] {
-  // All agent names are rendered with font-weight 500; query by role="row"
-  // and extract the first non-empty text in the agent column.
-  // Simpler: find by the unique agent_name strings we set.
-  return ["High Accept", "Low Accept", "Null Accept"].filter((name) => {
-    try {
-      screen.getByText(name);
-      return true;
-    } catch {
-      return false;
-    }
-  });
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

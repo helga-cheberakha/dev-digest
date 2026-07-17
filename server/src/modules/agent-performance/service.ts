@@ -47,25 +47,27 @@ export class AgentPerformanceService {
   private async aggregate(
     workspaceId: string,
     window: TimeWindow,
-    agentId?: string,
+    agentFilter?: { id: string; name: string },
   ): Promise<AgentAgg[]> {
+    const agentId = agentFilter?.id;
+
     // allTimeLastRunAt is NOT window-scoped: it returns the true all-time
     // most-recent done run per agent, so last_run_at is correct even when the
     // operator selects a narrow period that predates the agent's actual last run.
+    // When agentFilter is given (single-agent callers, e.g. getAgentStats), the
+    // caller already has the agent row — skip the workspace-wide agentsRepo.list()
+    // call entirely rather than fetching everyone just to filter down to one.
     const [repoAggs, allAgents, lastRunAtMap] = await Promise.all([
       this.repo.aggregateAgents(workspaceId, window, agentId),
-      this.container.agentsRepo.list(workspaceId),
+      agentFilter
+        ? Promise.resolve([{ id: agentFilter.id, name: agentFilter.name }])
+        : this.container.agentsRepo.list(workspaceId),
       this.repo.allTimeLastRunAt(workspaceId, agentId ? [agentId] : undefined),
     ]);
 
     const aggById = new Map(repoAggs.map((a) => [a.agentId, a]));
 
-    // Filter to the requested agent if given; otherwise use all workspace agents.
-    const relevantAgents = agentId
-      ? allAgents.filter((a) => a.id === agentId)
-      : allAgents;
-
-    return relevantAgents.map((agent): AgentAgg => {
+    return allAgents.map((agent): AgentAgg => {
       const lastRunAt = lastRunAtMap.get(agent.id) ?? null;
       const existing = aggById.get(agent.id);
       if (existing) {
@@ -215,7 +217,7 @@ export class AgentPerformanceService {
     const prevWin = previousWindow(window);
 
     const [aggs, seriesMap, avgCostUsdPrev, severityRows, categoryRows] = await Promise.all([
-      this.aggregate(workspaceId, window, agentId),
+      this.aggregate(workspaceId, window, { id: agentId, name: agent.name }),
       this.repo.recentRunSeries(workspaceId, [agentId], TREND_RUN_COUNT),
       this.repo.avgCostPrevWindow(workspaceId, agentId, prevWin),
       this.repo.severityBucketRows(workspaceId, agentId, window),

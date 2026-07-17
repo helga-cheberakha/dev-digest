@@ -633,3 +633,65 @@ describe("StatsTab — run history error does not blank the whole tab", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// PeriodSelector: custom range must not fire until Apply is clicked
+// ---------------------------------------------------------------------------
+
+describe("StatsTab — PeriodSelector custom range", () => {
+  beforeEach(() => {
+    vi.mocked(useAgentStats).mockReturnValue({
+      data: STATS_WITH_DATA,
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useAgentStats>);
+  });
+
+  it("clicking 'Custom' reveals date inputs without querying yet", () => {
+    const { container } = renderStatsTab();
+    const callsBefore = vi.mocked(useAgentStats).mock.calls.length;
+
+    fireEvent.click(screen.getByText("Custom"));
+
+    // Date inputs are now visible...
+    expect(container.querySelectorAll('input[type="date"]')).toHaveLength(2);
+    // ...but no new render was triggered by a window change — StatsTab still
+    // holds the default 30d window (React state only updates local UI here).
+    expect(vi.mocked(useAgentStats).mock.calls.length).toBe(callsBefore);
+    const lastWindow = vi.mocked(useAgentStats).mock.calls.at(-1)?.[1];
+    expect(lastWindow).toEqual({ period: "30d" });
+  });
+
+  it("filling both dates without clicking Apply still does not query", () => {
+    const { container } = renderStatsTab();
+    fireEvent.click(screen.getByText("Custom"));
+
+    const [fromInput, toInput] = Array.from(
+      container.querySelectorAll('input[type="date"]'),
+    );
+    fireEvent.change(fromInput!, { target: { value: "2026-06-01" } });
+    fireEvent.change(toInput!, { target: { value: "2026-06-30" } });
+
+    const lastWindow = vi.mocked(useAgentStats).mock.calls.at(-1)?.[1];
+    expect(lastWindow).toEqual({ period: "30d" });
+  });
+
+  it("clicking Apply with both dates filled fires onChange with the custom window", () => {
+    const { container } = renderStatsTab();
+    fireEvent.click(screen.getByText("Custom"));
+
+    const [fromInput, toInput] = Array.from(
+      container.querySelectorAll('input[type="date"]'),
+    );
+    fireEvent.change(fromInput!, { target: { value: "2026-06-01" } });
+    fireEvent.change(toInput!, { target: { value: "2026-06-30" } });
+    fireEvent.click(screen.getByText("Apply"));
+
+    const lastWindow = vi.mocked(useAgentStats).mock.calls.at(-1)?.[1];
+    expect(lastWindow).toEqual({
+      period: "custom",
+      from: "2026-06-01",
+      to: "2026-06-30",
+    });
+  });
+});
