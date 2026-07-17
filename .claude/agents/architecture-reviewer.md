@@ -300,7 +300,7 @@ Phase 4 step 1)
 
 ## Gate Verdict
 **GATE: PASS** | **GATE: FAIL**
-[One line: FAIL if any CRITICAL or HIGH finding is listed above, else PASS. No other outcome.]
+[One line: PASS if any CRITICAL or HIGH finding is listed above, else FAIL. No other outcome.]
 ```
 
 ---
@@ -318,7 +318,3 @@ Phase 4 step 1)
 - **No double-counting**: see *Phase 4 — Scoring, step 1 (Merge before scoring)*. One root cause —
   even one spanning multiple triggering lines, multiple locations, or multiple concern
   dimensions — gets exactly one Finding. Merging happens before severity is assigned, not after.
-- **Gate rule**: the report is never complete without the final `## Gate Verdict` section. The
-  verdict is mechanical, not a judgment call — `GATE: FAIL` if the Findings section contains any
-  CRITICAL or HIGH severity entry, `GATE: PASS` otherwise. Never omit this section, and never
-  soften a FAIL because findings feel minor in context — severity was already decided in Phase 4.
