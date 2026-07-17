@@ -20,6 +20,7 @@ import type {
   CiExportInputBody,
   AgentPerf,
   AgentStats,
+  AgentRunHistory,
 } from "@devdigest/shared";
 
 export const API_BASE =
@@ -389,6 +390,8 @@ export const agentPerfQueryKeys = {
     ['agent-performance', windowToQuery(window)] as const,
   stats: (agentId: string, window: PerfWindow) =>
     ['agent-stats', agentId, windowToQuery(window)] as const,
+  runs: (agentId: string, window: PerfWindow, page: number, limit: number) =>
+    ['agent-runs', agentId, windowToQuery(window), page, limit] as const,
 } as const;
 
 /**
@@ -410,4 +413,22 @@ export async function fetchAgentStats(
   window: PerfWindow,
 ): Promise<AgentStats> {
   return api.get<AgentStats>(`/agents/${agentId}/stats${windowToQuery(window)}`);
+}
+
+/**
+ * Fetch paginated run history for a single agent.
+ *
+ * Hits `GET /agents/:id/runs?period=<...>&page=<n>&limit=<n>`.
+ * `windowToQuery` already returns a `?`-prefixed string, so `page`/`limit`
+ * are appended with `&`.
+ */
+export async function fetchAgentRuns(
+  agentId: string,
+  window: PerfWindow,
+  page: number,
+  limit: number,
+): Promise<AgentRunHistory> {
+  return api.get<AgentRunHistory>(
+    `/agents/${agentId}/runs${windowToQuery(window)}&page=${page}&limit=${limit}`,
+  );
 }

@@ -23,6 +23,57 @@ import type { AgentAgg } from './helpers.js';
 // Raw row shapes from the DB (internal to this file)
 // ---------------------------------------------------------------------------
 
+// avgCostPrevWindow — AVG(doublePrecision)::float → JS number (or null)
+interface AvgCostRow extends Record<string, unknown> {
+  avg_cost_usd: number | null;
+}
+
+// severityBucketRows — raw per-finding rows; ran_at as string (timestamptz via db.execute())
+interface SeverityFindingRow extends Record<string, unknown> {
+  ran_at: string; // timestamptz → string; caller casts with new Date()
+  severity: string;
+}
+
+// costByCategoryRows — one row per (run, category) pair
+// cost_usd: doublePrecision → JS number (not a string)
+// category_finding_count/run_finding_count: COUNT/SUM cast ::int → JS number
+interface CostByCategoryDbRow extends Record<string, unknown> {
+  category: string;
+  cost_usd: number;
+  category_finding_count: number;
+  run_finding_count: number;
+}
+
+/**
+ * One row per agent run from the Run History query.
+ * Exported so T3 (helpers/service) can reference the exact shape.
+ *
+ * Notes on types returned by db.execute() / postgres-js:
+ *   - timestamptz columns → string (caller casts with `new Date(ran_at)`)
+ *   - doublePrecision (cost_usd) → JS number | null
+ *   - integer columns (tokens_in, tokens_out, findings_count) → JS number | null
+ *   - boolean expression (has_trace) → JS boolean
+ */
+export interface RawRunHistoryRow extends Record<string, unknown> {
+  run_id: string;
+  ran_at: string; // timestamptz → string
+  tokens_in: number | null;
+  tokens_out: number | null;
+  cost_usd: number | null; // doublePrecision → JS number
+  findings_count: number | null;
+  source: string; // 'local' | 'ci'
+  status: string | null;
+  pr_number: number | null; // from pull_requests.number
+  pr_title: string | null; // from pull_requests.title
+  pr_repo_id: string | null; // from pull_requests.repo_id
+  has_trace: boolean; // run_traces.run_id IS NOT NULL
+}
+
+// runHistoryCount — COUNT(*)::text → string, converted by Number()
+interface CountRow extends Record<string, unknown> {
+  count: string;
+}
+
 interface RunStatsRow extends Record<string, unknown> {
   agent_id: string;
   runs: string; // COUNT(*) → bigint string in postgres-js
@@ -315,5 +366,216 @@ export class AgentPerformanceRepository {
       model: r.model ?? '(unknown)',
       value: Number(r.value),
     }));
+  }
+
+  /**
+   * Average cost_usd over `done` runs in the given previous window for one agent.
+   *
+   * Uses `AVG(...) FILTER (WHERE cost_usd IS NOT NULL)` so unpriced runs are
+   * excluded from the denominator (same convention as the rest of this module).
+   * The `::float` cast ensures postgres-js returns a JS number, not a NUMERIC string.
+   *
+   * Returns null when there are no priced done runs in the window.
+   * The window boundaries are [fromTs, toTs] inclusive.
+   *
+   * NOTE: computing *what* the "previous window" means is T3's responsibility
+   * (`previousWindow()` helper). This method accepts a ready-made {fromTs, toTs}.
+   */
+  async avgCostPrevWindow(
+    workspaceId: string,
+    agentId: string,
+    prevWindow: { fromTs: Date; toTs: Date },
+  ): Promise<number | null> {
+    const rows = (await this.db.execute<AvgCostRow>(sql`
+      SELECT
+        AVG(cost_usd) FILTER (WHERE cost_usd IS NOT NULL)::float AS avg_cost_usd
+      FROM agent_runs
+      WHERE workspace_id = ${workspaceId}::uuid
+        AND agent_id     = ${agentId}::uuid
+        AND status       = 'done'
+        AND ran_at >= ${prevWindow.fromTs.toISOString()}::timestamptz
+        AND ran_at <= ${prevWindow.toTs.toISOString()}::timestamptz
+    `)) as unknown as AvgCostRow[];
+
+    return rows[0]?.avg_cost_usd ?? null;
+  }
+
+  /**
+   * Raw per-finding rows for bucketing into a severity-over-time series.
+   *
+   * Returns one row per finding from `done` runs in the window.
+   * Bucketing into weekly/adaptive time slots is done by the T3 pure helper
+   * (`bucketSeverityRows`) so that logic stays unit-testable without DB access.
+   *
+   * NOTE: `ran_at` is the agent run timestamp; postgres-js returns timestamptz
+   * columns as strings — T3 calls `new Date(row.ran_at)` to convert.
+   *
+   * Join: agent_runs ar → reviews r (r.run_id = ar.id AND r.agent_id = ar.agent_id)
+   *                      → findings f (f.review_id = r.id)
+   *
+   * ar.agent_id is explicitly qualified to avoid the "column reference is ambiguous"
+   * error when both agent_runs and reviews expose an agent_id column (INSIGHTS 2026-07-17).
+   */
+  async severityBucketRows(
+    workspaceId: string,
+    agentId: string,
+    window: { fromTs: Date; toTs: Date },
+  ): Promise<{ ran_at: string; severity: string }[]> {
+    return (await this.db.execute<SeverityFindingRow>(sql`
+      SELECT ar.ran_at, f.severity
+      FROM agent_runs ar
+      JOIN reviews r  ON r.run_id   = ar.id
+                     AND r.agent_id = ar.agent_id
+      JOIN findings f ON f.review_id = r.id
+      WHERE ar.workspace_id = ${workspaceId}::uuid
+        AND ar.agent_id     = ${agentId}::uuid
+        AND ar.status       = 'done'
+        AND ar.ran_at >= ${window.fromTs.toISOString()}::timestamptz
+        AND ar.ran_at <= ${window.toTs.toISOString()}::timestamptz
+    `)) as unknown as { ran_at: string; severity: string }[];
+  }
+
+  /**
+   * Raw per-(run, category) rows for computing cost_by_category.
+   *
+   * Returns one row per (agent_run, finding_category) pair, scoped to priced
+   * done runs in the window that have at least one finding (unpriced runs and
+   * zero-finding runs produce no rows and contribute nothing — AC-7).
+   *
+   * Exact field semantics (T3 depends on these names exactly):
+   *   category              — finding category ('bug'|'security'|'perf'|'style'|'test')
+   *   cost_usd              — the run's total cost in USD (repeated per-category row)
+   *   category_finding_count — count of findings of this category for this run
+   *   run_finding_count     — total finding count across ALL categories for this run
+   *                           (= SUM of category_finding_count over the same run_id)
+   *
+   * T3's `sumCostByCategory` uses these to compute, per category-row:
+   *   contribution = category_finding_count × (cost_usd / run_finding_count)
+   * then sums contributions by category.  This implements the decided formula:
+   *   cost_per_finding = run.cost_usd / run.total_findings;
+   *   sum cost_per_finding for each finding, grouped by finding.category.
+   *
+   * Implementation:
+   *   CTE groups by (ar.id, ar.cost_usd, f.category) → category_finding_count.
+   *   Window function SUM(...) OVER (PARTITION BY run_id) → run_finding_count.
+   *   Both counts are cast ::int; postgres-js returns INTEGER as JS number.
+   *   cost_usd is doublePrecision → JS number (no cast needed).
+   *
+   * ar.agent_id is qualified (INSIGHTS 2026-07-17 ambiguity guard).
+   */
+  async costByCategoryRows(
+    workspaceId: string,
+    agentId: string,
+    window: { fromTs: Date; toTs: Date },
+  ): Promise<
+    {
+      category: string;
+      cost_usd: number;
+      category_finding_count: number;
+      run_finding_count: number;
+    }[]
+  > {
+    return (await this.db.execute<CostByCategoryDbRow>(sql`
+      WITH per_run_category AS (
+        SELECT
+          ar.id            AS run_id,
+          ar.cost_usd,
+          f.category,
+          COUNT(f.id)::int AS category_finding_count
+        FROM agent_runs ar
+        JOIN reviews r  ON r.run_id   = ar.id
+                       AND r.agent_id = ar.agent_id
+        JOIN findings f ON f.review_id = r.id
+        WHERE ar.workspace_id = ${workspaceId}::uuid
+          AND ar.agent_id     = ${agentId}::uuid
+          AND ar.status       = 'done'
+          AND ar.cost_usd IS NOT NULL
+          AND ar.ran_at >= ${window.fromTs.toISOString()}::timestamptz
+          AND ar.ran_at <= ${window.toTs.toISOString()}::timestamptz
+        GROUP BY ar.id, ar.cost_usd, f.category
+      )
+      SELECT
+        category,
+        cost_usd,
+        category_finding_count,
+        (SUM(category_finding_count) OVER (PARTITION BY run_id))::int AS run_finding_count
+      FROM per_run_category
+    `)) as unknown as CostByCategoryDbRow[];
+  }
+
+  /**
+   * Paginated run history rows for one agent within the window.
+   *
+   * Deliberately does NOT filter by status='done' — Run History must include
+   * ALL statuses (pending/failed/cancelled runs too) per the spec (AC-8, AC-10).
+   * This is an intentional deviation from every other method in this repository,
+   * which all filter status='done'.
+   *
+   * Joins:
+   *   LEFT JOIN pull_requests pr  ON pr.id = ar.pr_id
+   *     → pr_number, pr_title, pr_repo_id (all null when pr_id is null or PR deleted)
+   *   LEFT JOIN run_traces rt ON rt.run_id = ar.id
+   *     → has_trace = (rt.run_id IS NOT NULL)
+   *
+   * Return shape: see exported RawRunHistoryRow interface above.
+   * timestamps (ran_at) returned as strings — caller converts with new Date().
+   *
+   * Ordered ran_at DESC (newest first) per AC-8.
+   */
+  async runHistory(
+    workspaceId: string,
+    agentId: string,
+    window: { fromTs: Date; toTs: Date },
+    limit: number,
+    offset: number,
+  ): Promise<RawRunHistoryRow[]> {
+    return (await this.db.execute<RawRunHistoryRow>(sql`
+      SELECT
+        ar.id              AS run_id,
+        ar.ran_at,
+        ar.tokens_in,
+        ar.tokens_out,
+        ar.cost_usd,
+        ar.findings_count,
+        ar.source,
+        ar.status,
+        pr.number          AS pr_number,
+        pr.title           AS pr_title,
+        pr.repo_id         AS pr_repo_id,
+        (rt.run_id IS NOT NULL) AS has_trace
+      FROM agent_runs ar
+      LEFT JOIN pull_requests pr ON pr.id = ar.pr_id
+      LEFT JOIN run_traces    rt ON rt.run_id = ar.id
+      WHERE ar.workspace_id = ${workspaceId}::uuid
+        AND ar.agent_id     = ${agentId}::uuid
+        AND ar.ran_at >= ${window.fromTs.toISOString()}::timestamptz
+        AND ar.ran_at <= ${window.toTs.toISOString()}::timestamptz
+      ORDER BY ar.ran_at DESC
+      LIMIT  ${limit}
+      OFFSET ${offset}
+    `)) as unknown as RawRunHistoryRow[];
+  }
+
+  /**
+   * Total count of agent runs in the window (all statuses, same filter as
+   * runHistory) for pagination metadata.
+   *
+   * COUNT(*)::text → postgres-js bigint string → converted with Number().
+   */
+  async runHistoryCount(
+    workspaceId: string,
+    agentId: string,
+    window: { fromTs: Date; toTs: Date },
+  ): Promise<number> {
+    const rows = (await this.db.execute<CountRow>(sql`
+      SELECT COUNT(*)::text AS count
+      FROM agent_runs
+      WHERE workspace_id = ${workspaceId}::uuid
+        AND agent_id     = ${agentId}::uuid
+        AND ran_at >= ${window.fromTs.toISOString()}::timestamptz
+        AND ran_at <= ${window.toTs.toISOString()}::timestamptz
+    `)) as unknown as CountRow[];
+
+    return Number(rows[0]?.count ?? '0');
   }
 }

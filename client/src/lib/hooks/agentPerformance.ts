@@ -1,10 +1,11 @@
 /* hooks/agentPerformance.ts — TanStack Query hooks for the Agent Performance dashboard. */
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import {
   fetchAgentPerformance,
   fetchAgentStats,
+  fetchAgentRuns,
   agentPerfQueryKeys,
 } from "../api";
 import type { PerfWindow } from "../api";
@@ -35,5 +36,27 @@ export function useAgentStats(agentId: string, window: PerfWindow) {
     queryFn: () => fetchAgentStats(agentId, window),
     enabled: !!agentId,
     staleTime: 60_000,
+  });
+}
+
+/**
+ * Paginated run history for a single agent (`GET /agents/:id/runs`).
+ *
+ * The query key embeds `agentId`, the serialized window, `page`, and `limit`
+ * so any change to the period picker or pagination triggers an independent refetch.
+ * `placeholderData: keepPreviousData` prevents a loading flash when paging through results.
+ */
+export function useAgentRuns(
+  agentId: string,
+  window: PerfWindow,
+  page: number,
+  limit: number,
+) {
+  return useQuery({
+    queryKey: agentPerfQueryKeys.runs(agentId, window, page, limit),
+    queryFn: () => fetchAgentRuns(agentId, window, page, limit),
+    enabled: !!agentId,
+    staleTime: 60_000,
+    placeholderData: keepPreviousData,
   });
 }
